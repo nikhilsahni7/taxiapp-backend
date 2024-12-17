@@ -1,0 +1,36 @@
+{
+  "name": "taxisure-backend",
+  "module": "server.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/server.ts",
+    "dev": "bun run --watch src/server.ts",
+    "build": "bun build src/server.ts --outdir dist --target node",
+    "lint": "bun run eslint src/**/*.ts",
+    "format": "bun run prettier --write src/**/*.ts",
+    "test": "bun run vitest"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/bun": "latest",
+    "@types/express": "^5.0.0",
+    "@types/jsonwebtoken": "^9.0.7"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.0.1",
+    "@types/cors": "^2.8.17",
+    "@types/multer": "^1.4.12",
+    "bcrypt": "^5.1.1",
+    "cloudinary": "^2.5.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "prisma": "^6.0.1",
+    "twilio": "^5.4.0"
+  }
+}

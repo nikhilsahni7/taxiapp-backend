@@ -1,0 +1,78 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserType {
+  USER
+  DRIVER
+  VENDOR
+  ADMIN
+}
+
+model User {
+  id            String          @id @default(uuid())
+  phone         String          @unique
+  email         String?         @unique
+  password      String
+  name          String?
+  userType      UserType
+  verified      Boolean         @default(false)
+  state         String?
+  city          String?
+  selfieUrl     String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  // Relations
+  userDetails    UserDetails?
+  driverDetails  DriverDetails?
+  vendorDetails  VendorDetails?
+}
+
+model UserDetails {
+  id     String @id @default(uuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id])
+}
+
+model DriverDetails {
+  id              String   @id @default(uuid())
+  userId          String   @unique
+  user            User     @relation(fields: [userId], references: [id])
+  aadharNumber    String?
+  panNumber       String?
+  dlNumber        String?
+  vehicleNumber   String?
+  vehicleName     String?
+  vehicleCategory String?
+  dlUrl           String?
+  permitUrls      String[]
+  carFrontUrl     String?
+  carBackUrl      String?
+}
+
+model VendorDetails {
+  id             String @id @default(uuid())
+  userId         String @unique
+  user           User   @relation(fields: [userId], references: [id])
+  businessName   String?
+  aadharNumber   String?
+  panNumber      String?
+  aadharFrontUrl String?
+  aadharBackUrl  String?
+  panUrl         String?
+}
+
+model OTP {
+  id        String   @id @default(uuid())
+  phone     String
+  code      String
+  verified  Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
