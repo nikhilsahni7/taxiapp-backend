@@ -232,6 +232,60 @@ router.post("/register/:type", verifyToken, uploadFields, async (req, res) => {
   }
 });
 
+router.post("/driver-sign-in", async (req, res) => {
+  try {
+    const { phone, password } = req.body;
+
+    // Input validation
+    if (!phone || !password) {
+      return res.status(400).json({ error: "Phone and password are required" });
+    }
+
+    // Find driver
+    const driver = await prisma.user.findFirst({
+      where: {
+        phone,
+        userType: "DRIVER",
+      },
+      include: {
+        driverDetails: true,
+      },
+    });
+
+    if (!driver || !driver.verified) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    // Check password
+    const isValidPassword = await bcrypt.compare(password, driver.password);
+    if (!isValidPassword) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    // Generate token
+    const token = jwt.sign(
+      {
+        userId: driver.id,
+        userType: driver.userType,
+      },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      driverId: driver.id,
+      name: driver.name,
+      phone: driver.phone,
+      verified: driver.verified,
+      vehicleDetails: driver.driverDetails,
+    });
+  } catch (error) {
+    console.error("Driver sign-in error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Logout
 router.post("/logout", verifyToken, (req, res) => {
   res.json({ message: "Logged out successfully" });

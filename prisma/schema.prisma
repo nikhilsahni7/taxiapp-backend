@@ -14,6 +14,15 @@ enum UserType {
   ADMIN
 }
 
+enum RideStatus {
+  SEARCHING
+  ACCEPTED
+  DRIVER_ARRIVED
+  RIDE_STARTED
+  RIDE_ENDED
+  CANCELLED
+}
+
 model User {
   id            String          @id @default(uuid())
   phone         String          @unique
@@ -32,6 +41,9 @@ model User {
   userDetails    UserDetails?
   driverDetails  DriverDetails?
   vendorDetails  VendorDetails?
+  ridesAsUser    Ride[]         @relation("UserRides")
+  ridesAsDriver  Ride[]         @relation("DriverRides")
+  driverStatus   DriverStatus?
 }
 
 model UserDetails {
@@ -54,6 +66,7 @@ model DriverDetails {
   permitUrls      String[]
   carFrontUrl     String?
   carBackUrl      String?
+  carCategory     String?
 }
 
 model VendorDetails {
@@ -75,4 +88,36 @@ model OTP {
   verified  Boolean  @default(false)
   expiresAt DateTime
   createdAt DateTime @default(now())
+}
+
+model Ride {
+  id             String     @id @default(uuid())
+  userId         String
+  driverId       String?
+  status         RideStatus
+  pickupLocation String
+  dropLocation   String
+  fare           Float?
+  distance       Float?
+  duration       Int?
+  tax            Float?
+  carCategory    String?
+  otp            String?
+  totalAmount    Float?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  user   User   @relation("UserRides", fields: [userId], references: [id])
+  driver User?  @relation("DriverRides", fields: [driverId], references: [id])
+}
+
+model DriverStatus {
+  id          String   @id @default(uuid())
+  driverId    String   @unique
+  isOnline    Boolean  @default(false)
+  locationLat Float?
+  locationLng Float?
+  socketId    String?
+  updatedAt   DateTime @updatedAt
+  driver      User     @relation(fields: [driverId], references: [id])
 }

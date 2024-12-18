@@ -1,0 +1,58 @@
+c. User Searches for a Ride
+
+Endpoint: POST /api/rides
+Headers: Authorization: Bearer <user_token>
+Body:
+{
+  "pickupLocation": "Connaught Place, Delhi",
+  "dropLocation": "DLF Cyber City, Gurgaon",
+  "carCategory": "sedan"
+}
+d. Driver Accepts the Ride
+
+Since the driver accepts via Socket.IO, simulate this by updating the ride:
+
+Endpoint: POST /socket.io/?EIO=4&transport=polling
+
+Data: Emit accept_ride event with rideId and driverId.
+
+ensure ride id and driver id and userid which is the user all this are well balanced and populated 
+
+e. Update Ride Status to DRIVER_ARRIVED
+
+Endpoint: PUT /api/rides/{rideId}/status
+Headers: Authorization: Bearer <driver_token>
+Body:
+{
+  "status": "DRIVER_ARRIVED"
+}
+f. Start the Ride After OTP Verification
+
+Endpoint: PUT /api/rides/{rideId}/status
+Headers: Authorization: Bearer <driver_token>
+Body:
+{
+  "status": "RIDE_STARTED",
+  "otp": "5555" // Use the actual OTP from the ride details
+}
+g. Driver Shares Location Updates
+
+Emit driver_location_update events via Socket.IO with latitude and longitude.
+h. End the Ride
+
+Endpoint: PUT /api/rides/{rideId}/status
+Headers: Authorization: Bearer <driver_token>
+Body:
+{
+  "status": "RIDE_ENDED"
+}
+i. Test Real-Time Updates
+
+Use a Socket.IO client with 
+ride_accepted
+ride_status_update
+
+
+for real time driver location i have already implemented the socket event "update_driver_availability", which gives real time location of driver and its status 
+now for delhi ncr you have to do is first users enters pickup drop and car category show the fare distance duration etc and then if selects one to book then search for nearby driver and send them the real time accept or cancel 
+and if driver accepts it should show user driver details -name ,phone number,vechileno etc and otp and how mcuch time driver will take to reach pickup and once driver reaches driver updates he rwached user will know user will give otp and ride start driver location is from start updating in real time will show houw much time is left and move in map to simulate thats it ypu have to do this first provdie the code for user part then will move to driver part as i have already mentioned driver location and status is getting in db in real time so there you have to add real time accept or reject rides thing and then driver goes to user and informs i have reached pickup user comes he wll get info provides otp driver enters ride start by driver then druver take payment and reach distantion ride ends thats it 
