@@ -29,6 +29,10 @@ app.use("/api/auth", authRouter);
 app.use("/api/users", userRouter);
 app.use("/api/rides", rideRouter);
 app.use("/api/drivers", driverRouter);
+
+app.use("/", (req, res) => {
+  res.send("Welcome to the taxiSure API");
+});
 io.on("connection", (socket: Socket) => {
   console.log("User connected:", socket.id);
 
