@@ -13,6 +13,10 @@ export const searchAvailableDrivers = async (
 ) => {
   const { lat, lng } = await geocodeAddress(pickupLocation);
 
+  console.log(
+    `Searching drivers near lat: ${lat}, lng: ${lng}, radius: ${radius}km`
+  );
+
   // Find drivers within the radius
   const drivers = await prisma.driverStatus.findMany({
     where: {

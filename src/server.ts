@@ -7,6 +7,7 @@ import { userRouter } from "./routes/user";
 import { rideRouter } from "./routes/ride";
 import { PrismaClient } from "@prisma/client";
 import { driverRouter } from "./routes/driver";
+import { RideStatus } from "@prisma/client";
 
 const app = express();
 const server = http.createServer(app);
@@ -66,27 +67,35 @@ io.on("connection", (socket: Socket) => {
   socket.on(
     "driver_location_update",
     async (data: {
-      rideId: string;
+      rideId?: string;
+      driverId: string;
       locationLat: number;
       locationLng: number;
     }) => {
-      const { rideId, locationLat, locationLng } = data;
+      const { rideId, locationLat, locationLng, driverId } = data;
       try {
-        // Find the ride with its associated user
-        const ride = await prisma.ride.findUnique({
-          where: { id: rideId },
-          select: { userId: true },
-        });
-
-        if (ride) {
-          // Emit location update only to the specific user who booked the ride
-          io.to(ride.userId).emit("driver_location", {
-            rideId,
-            locationLat,
-            locationLng,
+        if (rideId) {
+          // Find the ride and emit location to the user
+          const ride = await prisma.ride.findUnique({
+            where: { id: rideId },
+            select: { userId: true },
           });
+
+          if (ride) {
+            io.to(ride.userId).emit("driver_location", {
+              rideId,
+              locationLat,
+              locationLng,
+            });
+          } else {
+            console.log(`No ride found with ID: ${rideId}`);
+          }
         } else {
-          console.log(`No ride found with ID: ${rideId}`);
+          // Update driver's general location if not on a ride
+          await prisma.driverStatus.update({
+            where: { driverId },
+            data: { locationLat, locationLng },
+          });
         }
       } catch (error) {
         console.error("Error in driver location update:", error);
@@ -138,21 +147,98 @@ io.on("connection", (socket: Socket) => {
   );
 
   socket.on(
+    "update_ride_status",
+    async (data: { rideId: string; status: string }) => {
+      const { rideId, status } = data;
+
+      try {
+        // Map the string status to the RideStatus enum
+        let updatedStatus: RideStatus;
+
+        switch (status) {
+          case "SEARCHING":
+            updatedStatus = RideStatus.SEARCHING;
+            break;
+          case "ACCEPTED":
+            updatedStatus = RideStatus.ACCEPTED;
+            break;
+          case "DRIVER_ARRIVED":
+            updatedStatus = RideStatus.DRIVER_ARRIVED;
+            break;
+          case "RIDE_STARTED":
+            updatedStatus = RideStatus.RIDE_STARTED;
+            break;
+          case "RIDE_ENDED":
+            updatedStatus = RideStatus.RIDE_ENDED;
+            break;
+          case "CANCELLED":
+            updatedStatus = RideStatus.CANCELLED;
+            break;
+          default:
+            console.error("Invalid ride status:", status);
+            return;
+        }
+
+        const ride = await prisma.ride.update({
+          where: { id: rideId },
+          data: { status: updatedStatus },
+          include: { user: true, driver: true },
+        });
+
+        // Notify user and driver about the status update
+        if (ride.userId) {
+          io.to(ride.userId).emit("ride_status_update", {
+            rideId,
+            status: updatedStatus,
+          });
+        }
+
+        if (ride.driverId) {
+          io.to(ride.driverId).emit("ride_status_update", {
+            rideId,
+            status: updatedStatus,
+          });
+        }
+      } catch (error) {
+        console.error("Error updating ride status:", error);
+      }
+    }
+  );
+
+  socket.on(
     "accept_ride",
     async (data: { rideId: string; driverId: string }) => {
       const { rideId, driverId } = data;
-      // Update the ride with the driverId and status
+      // Update the ride in the database
       const ride = await prisma.ride.update({
         where: { id: rideId },
         data: { driverId, status: "ACCEPTED" },
         include: { user: true },
       });
 
-      // Notify the user that a driver has accepted the ride
-      io.to(ride.userId).emit("ride_accepted", {
-        rideId,
-        driver: await prisma.user.findUnique({ where: { id: driverId } }),
+      const driverStatus = await prisma.driverStatus.findUnique({
+        where: { driverId },
       });
+
+      console.log("Ride details:", ride);
+      console.log("Driver details:", driverStatus);
+
+      // Notify the user that the ride was accepted
+      io.to(ride.userId).emit("ride_status_update", {
+        rideId,
+        status: "ACCEPTED",
+        driverId,
+      });
+
+      // Notify the driver with ride details
+      if (driverStatus?.socketId) {
+        io.to(driverStatus.socketId).emit("ride_assigned", {
+          rideId,
+          rideDetails: ride,
+        });
+      }
+
+      console.log(`Ride ${rideId} accepted by driver ${driverId}`);
     }
   );
 

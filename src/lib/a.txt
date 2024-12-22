@@ -56,3 +56,678 @@ ride_status_update
 for real time driver location i have already implemented the socket event "update_driver_availability", which gives real time location of driver and its status 
 now for delhi ncr you have to do is first users enters pickup drop and car category show the fare distance duration etc and then if selects one to book then search for nearby driver and send them the real time accept or cancel 
 and if driver accepts it should show user driver details -name ,phone number,vechileno etc and otp and how mcuch time driver will take to reach pickup and once driver reaches driver updates he rwached user will know user will give otp and ride start driver location is from start updating in real time will show houw much time is left and move in map to simulate thats it ypu have to do this first provdie the code for user part then will move to driver part as i have already mentioned driver location and status is getting in db in real time so there you have to add real time accept or reject rides thing and then driver goes to user and informs i have reached pickup user comes he wll get info provides otp driver enters ride start by driver then druver take payment and reach distantion ride ends thats it 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import express, { Request, Response } from "express";
+import http from "http";
+import cors from "cors";
+import { Server, Socket } from "socket.io";
+import { authRouter } from "../routes/auth";
+import { userRouter } from "../routes/user";
+import { rideRouter } from "../routes/ride";
+import { PrismaClient, RideStatus, TransactionStatus, TransactionType, PaymentMode } from "@prisma/client";
+import { driverRouter } from "../routes/driver";
+import Razorpay from "razorpay";
+import { v4 as uuidv4 } from "uuid";
+import axios from "axios";
+
+import { searchAvailableDrivers } from "../lib/driverService";
+import { io } from "../server";
+
+const app = express();
+const server = http.createServer(app);
+const ioInstance = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true,
+    allowedHeaders: ["Content-Type"],
+  },
+});
+const prisma = new PrismaClient();
+
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true,
+    allowedHeaders: ["Content-Type"],
+  })
+);
+app.use(express.json());
+
+app.set("io", ioInstance);
+
+// Routes
+app.use("/api/auth", authRouter);
+app.use("/api/users", userRouter);
+app.use("/api/rides", rideRouter);
+app.use("/api/drivers", driverRouter);
+
+// Admin Routes
+import { adminRouter } from "./admin";
+app.use("/api/admin", adminRouter);
+
+app.use("/", (req, res) => {
+  res.send("Welcome to the taxiSure API");
+});
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID!,
+  key_secret: process.env.RAZORPAY_KEY_SECRET!,
+});
+
+export { ioInstance as io };
+
+// Socket.IO Connection
+ioInstance.on("connection", (socket: Socket) => {
+  console.log("User connected:", socket.id);
+
+  socket.on("join_room", (data: { userId: string }) => {
+    socket.join(data.userId);
+  });
+
+  socket.on("register_driver", async (data: { driverId: string }) => {
+    const { driverId } = data;
+    await prisma.driverStatus.upsert({
+      where: { driverId },
+      update: { socketId: socket.id, isOnline: true },
+      create: {
+        driverId,
+        socketId: socket.id,
+        isOnline: true,
+      },
+    });
+  });
+
+  socket.on(
+    "driver_location_update",
+    async (data: {
+      rideId?: string;
+      driverId: string;
+      locationLat: number;
+      locationLng: number;
+    }) => {
+      const { rideId, locationLat, locationLng, driverId } = data;
+      try {
+        if (rideId) {
+          const ride = await prisma.ride.findUnique({
+            where: { id: rideId },
+            select: { userId: true },
+          });
+
+          if (ride) {
+            ioInstance.to(ride.userId).emit("driver_location", {
+              rideId,
+              locationLat,
+              locationLng,
+            });
+          } else {
+            console.log(`No ride found with ID: ${rideId}`);
+          }
+        } else {
+          await prisma.driverStatus.update({
+            where: { driverId },
+            data: { locationLat, locationLng },
+          });
+        }
+      } catch (error) {
+        console.error("Error in driver location update:", error);
+      }
+    }
+  );
+
+  socket.on(
+    "update_driver_availability",
+    async (data: {
+      driverId: string;
+      locationLat: number;
+      locationLng: number;
+      isOnline: boolean;
+    }) => {
+      const { driverId, locationLat, locationLng, isOnline } = data;
+
+      try {
+        const updatedDriverStatus = await prisma.driverStatus.upsert({
+          where: { driverId },
+          update: {
+            locationLat,
+            locationLng,
+            isOnline,
+            updatedAt: new Date(),
+          },
+          create: {
+            driverId,
+            locationLat,
+            locationLng,
+            isOnline,
+          },
+        });
+
+        console.log("Driver status updated:", updatedDriverStatus);
+
+        ioInstance.emit(`driver_availability_changed_${driverId}`, {
+          driverId,
+          locationLat,
+          locationLng,
+          isOnline,
+        });
+      } catch (error) {
+        console.error("Error updating driver availability:", error);
+      }
+    }
+  );
+
+  socket.on(
+    "update_ride_status",
+    async (data: { rideId: string; status: string; paymentMode?: PaymentMode; otp?: string }) => {
+      const { rideId, status, paymentMode, otp } = data;
+
+      try {
+        let updatedStatus: RideStatus;
+
+        switch (status) {
+          case "SEARCHING":
+            updatedStatus = RideStatus.SEARCHING;
+            break;
+          case "ACCEPTED":
+            updatedStatus = RideStatus.ACCEPTED;
+            break;
+          case "DRIVER_ARRIVED":
+            updatedStatus = RideStatus.DRIVER_ARRIVED;
+            break;
+          case "RIDE_STARTED":
+            updatedStatus = RideStatus.RIDE_STARTED;
+            break;
+          case "RIDE_ENDED":
+            updatedStatus = RideStatus.RIDE_ENDED;
+            break;
+          case "CANCELLED":
+            updatedStatus = RideStatus.CANCELLED;
+            break;
+          case "PAYMENT_PENDING":
+            updatedStatus = RideStatus.PAYMENT_PENDING;
+            break;
+          case "PAYMENT_COMPLETED":
+            updatedStatus = RideStatus.PAYMENT_COMPLETED;
+            break;
+          default:
+            console.error("Invalid ride status:", status);
+            return;
+        }
+
+        const ride = await prisma.ride.update({
+          where: { id: rideId },
+          data: { status: updatedStatus },
+          include: { user: true, driver: true },
+        });
+
+        if (ride.userId) {
+          ioInstance.to(ride.userId).emit("ride_status_update", {
+            rideId,
+            status: updatedStatus,
+          });
+        }
+
+        if (ride.driverId) {
+          ioInstance.to(ride.driverId).emit("ride_status_update", {
+            rideId,
+            status: updatedStatus,
+          });
+        }
+
+        res.json(updatedRide);
+      } catch (error) {
+        console.error("Error updating ride status:", error);
+        res.status(500).json({ error: "Failed to update ride status" });
+      }
+    }
+  );
+
+  socket.on(
+    "accept_ride",
+    async (data: { rideId: string; driverId: string }) => {
+      const { rideId, driverId } = data;
+      const ride = await prisma.ride.update({
+        where: { id: rideId },
+        data: { driverId, status: RideStatus.ACCEPTED },
+        include: { user: true },
+      });
+
+      const driverStatus = await prisma.driverStatus.findUnique({
+        where: { driverId },
+      });
+
+      console.log("Ride details:", ride);
+      console.log("Driver details:", driverStatus);
+
+      ioInstance.to(ride.userId).emit("ride_status_update", {
+        rideId,
+        status: "ACCEPTED",
+        driverId,
+      });
+
+      if (driverStatus?.socketId) {
+        ioInstance.to(driverStatus.socketId).emit("ride_assigned", {
+          rideId,
+          rideDetails: ride,
+        });
+      }
+
+      console.log(`Ride ${rideId} accepted by driver ${driverId}`);
+    }
+  );
+
+  socket.on("disconnect", async () => {
+    console.log("User disconnected:", socket.id);
+    await prisma.driverStatus.updateMany({
+      where: { socketId: socket.id },
+      data: { isOnline: false, socketId: null },
+    });
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+// Payment and Wallet Integration
+
+export const initiatePayment = async (req: Request, res: Response) => {
+  const { rideId, amount, paymentMode } = req.body;
+
+  if (paymentMode === "RAZORPAY") {
+    try {
+      const order = await razorpay.orders.create({
+        amount: Math.round(amount * 100), // Amount in paise
+        currency: "INR",
+        receipt: uuidv4(),
+      });
+
+      await prisma.ride.update({
+        where: { id: rideId },
+        data: { razorpayOrderId: order.id, paymentMode: PaymentMode.RAZORPAY, paymentStatus: TransactionStatus.PENDING },
+      });
+
+      return res.status(200).json({ order });
+    } catch (error) {
+      console.error("Error initiating Razorpay payment:", error);
+      return res.status(500).json({ error: "Failed to initiate payment" });
+    }
+  }
+
+  res.status(400).json({ error: "Invalid payment mode" });
+};
+
+export const verifyPayment = async (req: Request, res: Response) => {
+  const { rideId, paymentId, orderId, signature } = req.body;
+
+  // Razorpay signature verification can be added here
+
+  try {
+    const ride = await prisma.ride.findUnique({ where: { id: rideId } });
+
+    if (!ride) {
+      return res.status(404).json({ error: "Ride not found" });
+    }
+
+    await prisma.transaction.create({
+      data: {
+        amount: ride.fare || 0,
+        type: TransactionType.RIDE_PAYMENT,
+        status: TransactionStatus.COMPLETED,
+        receiverId: ride.driverId!,
+        rideId: ride.id,
+        razorpayOrderId: orderId,
+        razorpayPaymentId: paymentId,
+        description: "Payment for ride completion",
+      },
+    });
+
+    await prisma.wallet.update({
+      where: { userId: ride.driverId! },
+      data: { balance: { increment: ride.fare || 0 } },
+    });
+
+    await prisma.ride.update({
+      where: { id: rideId },
+      data: { paymentStatus: TransactionStatus.COMPLETED },
+    });
+
+    const driverWallet = await prisma.wallet.findUnique({ where: { userId: ride.driverId! } });
+
+    ioInstance.emit(`wallet_update_${ride.driverId}`, { balance: driverWallet?.balance });
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    console.error("Error verifying payment:", error);
+    res.status(500).json({ error: "Payment verification failed" });
+  }
+};
+
+export const completeRide = async (req: Request, res: Response) => {
+  const { rideId, paymentMode } = req.body;
+
+  try {
+    const ride = await prisma.ride.findUnique({ where: { id: rideId } });
+
+    if (!ride) {
+      return res.status(404).json({ error: "Ride not found" });
+    }
+
+    if (paymentMode === "CASH") {
+      await prisma.ride.update({
+        where: { id: rideId },
+        data: { paymentStatus: TransactionStatus.COMPLETED, status: RideStatus.RIDE_ENDED },
+      });
+
+      ioInstance.to(ride.userId).emit("ride_status_update", { rideId, status: RideStatus.RIDE_ENDED });
+      ioInstance.to(ride.driverId || "").emit("ride_status_update", { rideId, status: RideStatus.RIDE_ENDED });
+
+      return res.status(200).json({ success: true, message: "Ride completed with cash payment." });
+    }
+
+    res.status(400).json({ error: "Invalid payment mode for completion" });
+  } catch (error) {
+    console.error("Error completing ride:", error);
+    res.status(500).json({ error: "Failed to complete ride" });
+  }
+};
+
+export const createRide = async (req: Request, res: Response) => {
+  const { pickupLocation, dropLocation, carCategory, paymentMode } = req.body;
+  if (!req.user) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const userId = req.user.userId;
+
+  try {
+    const distance = await calculateDistance(pickupLocation, dropLocation);
+    const duration = await calculateDuration(pickupLocation, dropLocation);
+    const totalFare = calculateFare(distance, carCategory);
+
+    const ride = await prisma.ride.create({
+      data: {
+        userId,
+        pickupLocation,
+        dropLocation,
+        carCategory,
+        fare: totalFare,
+        distance,
+        duration,
+        status: RideStatus.SEARCHING,
+        paymentMode: paymentMode || PaymentMode.CASH,
+        otp: generateOTP(),
+      },
+      include: {
+        driver: true,
+        user: {
+          select: { name: true, phone: true },
+        },
+      },
+    });
+
+    let radius = 3;
+    let drivers = await searchAvailableDrivers(pickupLocation, radius);
+
+    while (drivers.length === 0 && radius <= 15) {
+      radius += 2;
+      drivers = await searchAvailableDrivers(pickupLocation, radius);
+    }
+
+    if (drivers.length > 0) {
+      const io = req.app.get("io");
+      drivers.forEach((driver) => {
+        if (driver.socketId) {
+          io.to(driver.socketId).emit("ride_request", {
+            rideId: ride.id,
+            pickupLocation,
+            dropLocation,
+            fare: totalFare,
+            distance,
+            duration,
+            userId,
+            userName: ride.user.name,
+            userPhone: ride.user.phone,
+          });
+        }
+      });
+
+      console.log("Notified drivers:", drivers.map((d) => d.driverId));
+    } else {
+      await prisma.ride.update({
+        where: { id: ride.id },
+        data: { status: RideStatus.CANCELLED },
+      });
+      return res.status(200).json({ message: "No drivers available at the moment." });
+    }
+
+    res.status(201).json(ride);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to create ride" });
+  }
+};
+
+/**
+ * Generates a 4-digit OTP for ride verification.
+ */
+function generateOTP() {
+  return Math.floor(1000 + Math.random() * 9000).toString();
+}
+
+// Get ride details
+export const getRide = async (req: Request, res: Response) => {
+  const rideId = req.params.id;
+  console.log(`Received request to fetch ride details for ID: ${rideId}`);
+
+  if (!req.user) {
+    console.log("Unauthorized access attempt.");
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const { userId, userType } = req.user;
+  console.log(`Authenticated user ID: ${userId}, Type: ${userType}`);
+
+  try {
+    const ride = await prisma.ride.findFirst({
+      where: {
+        id: rideId,
+        OR: [
+          { userId },
+          userType === "DRIVER" ? { driverId: userId } : {},
+        ],
+      },
+      include: { driver: true, user: true },
+    });
+
+    if (!ride) {
+      console.log(`No ride found with ID: ${rideId} for user ID: ${userId}`);
+      return res.status(404).json({ error: "Ride not found" });
+    }
+
+    console.log(`Ride found: ${JSON.stringify(ride)}`);
+
+    const driverStatus = ride.driverId
+      ? await prisma.driverStatus.findUnique({
+          where: { driverId: ride.driverId },
+        })
+      : null;
+
+    res.json({ ride, driverStatus });
+  } catch (error) {
+    console.error("Error fetching ride details:", error);
+    res.status(500).json({ error: "Failed to retrieve ride details" });
+  }
+};
+
+// Update ride status
+export const updateRideStatus = async (req: Request, res: Response) => {
+  const rideId = req.params.id;
+  const { status, otp, paymentMode } = req.body;
+  const userId = req.user?.userId;
+  const userType = req.user?.userType;
+
+  try {
+    const ride = await prisma.ride.findUnique({
+      where: { id: rideId },
+    });
+
+    if (!ride) {
+      return res.status(404).json({ error: "Ride not found" });
+    }
+
+    // Validate user permissions
+    if (userType === "DRIVER") {
+      if (ride.driverId !== userId) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      if (!["DRIVER_ARRIVED", "RIDE_STARTED", "RIDE_ENDED"].includes(status)) {
+        return res.status(400).json({ error: "Invalid status for driver" });
+      }
+    } else if (userType === "USER") {
+      if (ride.userId !== userId) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      if (status !== "CANCELLED") {
+        return res.status(400).json({ error: "Invalid status for user" });
+      }
+    } else {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    // Handle OTP validation when starting the ride
+    if (status === "RIDE_STARTED") {
+      if (ride.otp !== otp) {
+        return res.status(400).json({ error: "Invalid OTP" });
+      }
+    }
+
+    // Handle ride completion and payment
+    if (status === "RIDE_ENDED") {
+      if (ride.paymentMode === PaymentMode.RAZORPAY) {
+        return initiatePayment(req, res);
+      } else if (ride.paymentMode === PaymentMode.CASH) {
+        return completeRide(req, res);
+      } else {
+        return res.status(400).json({ error: "Invalid payment mode" });
+      }
+    }
+
+    // Map string status to RideStatus enum
+    let updatedStatus: RideStatus;
+
+    switch (status) {
+      case "SEARCHING":
+        updatedStatus = RideStatus.SEARCHING;
+        break;
+      case "ACCEPTED":
+        updatedStatus = RideStatus.ACCEPTED;
+        break;
+      case "DRIVER_ARRIVED":
+        updatedStatus = RideStatus.DRIVER_ARRIVED;
+        break;
+      case "RIDE_STARTED":
+        updatedStatus = RideStatus.RIDE_STARTED;
+        break;
+      case "RIDE_ENDED":
+        updatedStatus = RideStatus.RIDE_ENDED;
+        break;
+      case "CANCELLED":
+        updatedStatus = RideStatus.CANCELLED;
+        break;
+      default:
+        return res.status(400).json({ error: "Invalid ride status" });
+    }
+    const updatedRide = await prisma.ride.update({
+      where: { id: rideId },
+      data: { status: updatedStatus },
+      include: { user: true, driver: true },
+    });
+
+    // Emit real-time update to user and driver
+    if (ride.userId) {
+      ioInstance.to(ride.userId).emit("ride_status_update", {
+        rideId,
+        status: updatedStatus,
+      });
+    }
+
+    if (ride.driverId) {
+      ioInstance.to(ride.driverId).emit("ride_status_update", {
+        rideId,
+        status: updatedStatus,
+      });
+    }
+
+    res.json(updatedRide);
+  } catch (error) {
+    console.error("Error updating ride status:", error);
+    res.status(500).json({ error: "Failed to update ride status" });
+  }
+};
+
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY!;
+
+export const calculateDistance = async (
+  pickup: string,
+  drop: string
+): Promise<number> => {
+  try {
+    const response = await axios.get(
+      `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(
+        pickup
+      )}&destinations=${encodeURIComponent(drop)}&key=${GOOGLE_MAPS_API_KEY}`
+    );
+    const distanceInMeters = response.data.rows[0].elements[0].distance.value;
+    return distanceInMeters / 1000; // Convert to kilometers
+  } catch (error) {
+    console.error("Error calculating distance:", error);
+    return 0;
+  }
+};
+
+export const calculateDuration = async (
+  pickup: string,
+  drop: string
+): Promise<number> => {
+  try {
+    const response = await axios.get(
+      `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(
+        pickup
+      )}&destinations=${encodeURIComponent(drop)}&key=${GOOGLE_MAPS_API_KEY}`
+    );
+    const durationInSeconds = response.data.rows[0].elements[0].duration.value;
+    return Math.ceil(durationInSeconds / 60); // Convert to minutes
+  } catch (error) {
+    console.error("Error calculating duration:", error);
+    return 0;
+  }
+};

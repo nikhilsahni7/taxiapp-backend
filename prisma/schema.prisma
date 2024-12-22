@@ -19,8 +19,29 @@ enum RideStatus {
   ACCEPTED
   DRIVER_ARRIVED
   RIDE_STARTED
+  PAYMENT_PENDING
+  PAYMENT_COMPLETED
+  PAYMENT_FAILED
   RIDE_ENDED
   CANCELLED
+}
+
+enum PaymentMode {
+  CASH
+  RAZORPAY
+}
+
+enum TransactionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum TransactionType {
+  RIDE_PAYMENT
+  WALLET_TOPUP
+  WITHDRAWAL
+  REFUND
 }
 
 model User {
@@ -39,13 +60,77 @@ model User {
 
   // Relations
   userDetails    UserDetails?
-  driverDetails  DriverDetails?
-  vendorDetails  VendorDetails?
-  ridesAsUser    Ride[]         @relation("UserRides")
-  ridesAsDriver  Ride[]         @relation("DriverRides")
-  driverStatus   DriverStatus?
+  driverDetails DriverDetails?
+  vendorDetails VendorDetails?
+  wallet        Wallet?
+  ridesAsUser   Ride[]         @relation("UserRides")
+  ridesAsDriver Ride[]         @relation("DriverRides")
+  driverStatus  DriverStatus?
+  
+  // Payment Relations
+  sentTransactions     Transaction[] @relation("SenderTransactions")
+  receivedTransactions Transaction[] @relation("ReceiverTransactions")
+  razorpayCustomerId   String?
 }
 
+model Wallet {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  balance   Float    @default(0)
+  currency  String   @default("INR")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Transaction {
+  id               String            @id @default(uuid())
+  amount           Float
+  currency         String            @default("INR")
+  type            TransactionType
+  status          TransactionStatus @default(PENDING)
+  senderId        String?
+  receiverId      String?
+  rideId          String?
+  razorpayOrderId String?
+  razorpayPaymentId String?
+  description     String?
+  metadata        Json?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  sender    User?  @relation("SenderTransactions", fields: [senderId], references: [id])
+  receiver  User?  @relation("ReceiverTransactions", fields: [receiverId], references: [id])
+  ride      Ride?  @relation(fields: [rideId], references: [id])
+}
+
+model Ride {
+  id             String         @id @default(uuid())
+  userId         String
+  driverId       String?
+  status         RideStatus
+  pickupLocation String
+  dropLocation   String
+  fare           Float?
+  distance       Float?
+  duration       Int?
+  tax            Float?
+  carCategory    String?
+  otp            String?
+  totalAmount    Float?
+  paymentMode    PaymentMode    @default(CASH)
+  paymentStatus  TransactionStatus @default(PENDING)
+  razorpayOrderId String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  user         User          @relation("UserRides", fields: [userId], references: [id])
+  driver       User?         @relation("DriverRides", fields: [driverId], references: [id])
+  transactions Transaction[]
+}
+
+// Existing models remain unchanged
 model UserDetails {
   id     String @id @default(uuid())
   userId String @unique
@@ -70,9 +155,9 @@ model DriverDetails {
 }
 
 model VendorDetails {
-  id             String @id @default(uuid())
-  userId         String @unique
-  user           User   @relation(fields: [userId], references: [id])
+  id             String  @id @default(uuid())
+  userId         String  @unique
+  user           User    @relation(fields: [userId], references: [id])
   businessName   String?
   aadharNumber   String?
   panNumber      String?
@@ -88,27 +173,6 @@ model OTP {
   verified  Boolean  @default(false)
   expiresAt DateTime
   createdAt DateTime @default(now())
-}
-
-model Ride {
-  id             String     @id @default(uuid())
-  userId         String
-  driverId       String?
-  status         RideStatus
-  pickupLocation String
-  dropLocation   String
-  fare           Float?
-  distance       Float?
-  duration       Int?
-  tax            Float?
-  carCategory    String?
-  otp            String?
-  totalAmount    Float?
-  createdAt      DateTime   @default(now())
-  updatedAt      DateTime   @updatedAt
-
-  user   User   @relation("UserRides", fields: [userId], references: [id])
-  driver User?  @relation("DriverRides", fields: [driverId], references: [id])
 }
 
 model DriverStatus {
