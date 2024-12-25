@@ -1,137 +1,440 @@
+// paymentController.ts
 import type { Request, Response } from "express";
-import { v4 as uuidv4 } from "uuid";
-
-import Razorpay from "razorpay";
 import {
   PrismaClient,
   RideStatus,
+  PaymentMode,
   TransactionStatus,
   TransactionType,
-  PaymentMode,
 } from "@prisma/client";
+import Razorpay from "razorpay";
 import { io } from "../server";
-const prisma = new PrismaClient();
 
+const prisma = new PrismaClient();
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID!,
-  key_secret: process.env.RAZORPAY_KEY_SECRET!,
+  key_secret: process.env.RAZORPAY_SECRET!,
 });
 
-export const initiatePayment = async (req: Request, res: Response) => {
-  const { rideId, amount, paymentMode } = req.body;
-
-  if (paymentMode === "RAZORPAY") {
-    try {
-      const order = await razorpay.orders.create({
-        amount: Math.round(amount * 100), // Amount in paise
-        currency: "INR",
-        receipt: uuidv4(),
-      });
-
-      await prisma.ride.update({
-        where: { id: rideId },
-        data: {
-          razorpayOrderId: order.id,
-          paymentMode: PaymentMode.RAZORPAY,
-          paymentStatus: TransactionStatus.PENDING,
-        },
-      });
-
-      return res.status(200).json({ order });
-    } catch (error) {
-      console.error("Error initiating Razorpay payment:", error);
-      return res.status(500).json({ error: "Failed to initiate payment" });
-    }
-  }
-
-  res.status(400).json({ error: "Invalid payment mode" });
-};
-
-export const verifyPayment = async (req: Request, res: Response) => {
-  const { rideId, paymentId, orderId, signature } = req.body;
-
-  // Razorpay signature verification can be added here
+// Handle ride completion and payment initiation
+export const handleRideEnd = async (req: Request, res: Response) => {
+  const { rideId } = req.params;
+  const { finalLocation } = req.body;
 
   try {
-    const ride = await prisma.ride.findUnique({ where: { id: rideId } });
-
-    if (!ride) {
-      return res.status(404).json({ error: "Ride not found" });
-    }
-
-    await prisma.transaction.create({
-      data: {
-        amount: ride.fare || 0,
-        type: TransactionType.RIDE_PAYMENT,
-        status: TransactionStatus.COMPLETED,
-        receiverId: ride.driverId!,
-        rideId: ride.id,
-        razorpayOrderId: orderId,
-        razorpayPaymentId: paymentId,
-        description: "Payment for ride completion",
+    // First check if ride exists and is in valid state
+    const ride = await prisma.ride.findFirst({
+      where: {
+        id: rideId,
+        status: RideStatus.RIDE_STARTED, // Only allow completion of started rides
+      },
+      include: {
+        user: true,
+        driver: true,
       },
     });
 
-    await prisma.wallet.update({
-      where: { userId: ride.driverId! },
-      data: { balance: { increment: ride.fare || 0 } },
-    });
+    if (!ride) {
+      return res.status(404).json({
+        error: "Ride not found or invalid status",
+        details: "Ride must be in RIDE_STARTED status to end it",
+      });
+    }
 
-    await prisma.ride.update({
+    // Calculate final amount including any extra charges
+    const finalAmount = calculateFinalAmount(ride);
+
+    // Update ride with final details
+    const updatedRide = await prisma.ride.update({
       where: { id: rideId },
-      data: { paymentStatus: TransactionStatus.COMPLETED },
+      data: {
+        dropLocation: finalLocation || ride.dropLocation,
+        totalAmount: finalAmount,
+        status:
+          ride.paymentMode === PaymentMode.CASH
+            ? RideStatus.RIDE_ENDED
+            : RideStatus.PAYMENT_PENDING,
+      },
+      include: {
+        user: true,
+        driver: true,
+      },
     });
 
-    const driverWallet = await prisma.wallet.findUnique({
-      where: { userId: ride.driverId! },
-    });
-    io.emit(`wallet_update_${ride.driverId}`, {
-      balance: driverWallet?.balance,
+    // Emit ride completion event to both user and driver
+    io.to(ride.userId).emit("ride_completed", {
+      rideId: ride.id,
+      finalLocation,
+      amount: finalAmount,
+      paymentMode: ride.paymentMode,
     });
 
-    res.status(200).json({ success: true });
+    if (ride.driverId) {
+      io.to(ride.driverId).emit("ride_completed", {
+        rideId: ride.id,
+        finalLocation,
+        amount: finalAmount,
+        paymentMode: ride.paymentMode,
+      });
+    }
+
+    // Handle based on payment mode
+    if (ride.paymentMode === PaymentMode.CASH) {
+      await handleCashPayment(updatedRide);
+
+      // Emit payment status for cash rides
+      io.to(ride.userId).emit("payment_status", {
+        rideId: ride.id,
+        status: "COMPLETED",
+        amount: finalAmount,
+      });
+
+      if (ride.driverId) {
+        io.to(ride.driverId).emit("payment_status", {
+          rideId: ride.id,
+          status: "COMPLETED",
+          amount: finalAmount,
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: "Ride completed successfully",
+        ride: updatedRide,
+      });
+    } else {
+      const paymentDetails = await initiateRazorpayPayment(updatedRide);
+
+      // Emit payment initiation for online payments
+      io.to(ride.userId).emit("payment_status", {
+        rideId: ride.id,
+        status: "PENDING",
+        amount: finalAmount,
+        paymentDetails,
+      });
+
+      if (ride.driverId) {
+        io.to(ride.driverId).emit("payment_status", {
+          rideId: ride.id,
+          status: "PENDING",
+          amount: finalAmount,
+          paymentDetails,
+        });
+      }
+
+      return res.json({
+        success: true,
+        message: "Payment initiated",
+        ride: updatedRide,
+        paymentDetails,
+      });
+    }
   } catch (error) {
-    console.error("Error verifying payment:", error);
-    res.status(500).json({ error: "Payment verification failed" });
+    console.error("Error completing ride:", error);
+    return res.status(500).json({
+      error: "Failed to complete ride",
+      details: error instanceof Error ? error.message : "Unknown error",
+    });
   }
 };
 
-export const completeRide = async (req: Request, res: Response) => {
-  const { rideId, paymentMode } = req.body;
+// Handle cash payment
+export const handleCashPayment = async (ride: any) => {
+  try {
+    // Create transaction record
+    const transaction = await prisma.transaction.create({
+      data: {
+        amount: ride.totalAmount,
+        type: TransactionType.RIDE_PAYMENT,
+        status: TransactionStatus.COMPLETED,
+        senderId: ride.userId,
+        receiverId: ride.driverId,
+        rideId: ride.id,
+        description: `Cash payment for ride ${ride.id}`,
+      },
+    });
+
+    // Update driver's wallet
+    await prisma.wallet.upsert({
+      where: { userId: ride.driverId },
+      update: {
+        balance: {
+          increment: ride.totalAmount,
+        },
+      },
+      create: {
+        userId: ride.driverId,
+        balance: ride.totalAmount,
+        currency: "INR",
+      },
+    });
+
+    // Emit completion events
+    io.to(ride.userId).emit("ride_completed", {
+      rideId: ride.id,
+      amount: ride.totalAmount,
+      status: "COMPLETED",
+    });
+
+    io.to(ride.driverId).emit("ride_completed", {
+      rideId: ride.id,
+      amount: ride.totalAmount,
+      status: "COMPLETED",
+    });
+
+    return transaction;
+  } catch (error) {
+    console.error("Error in cash payment:", error);
+    throw error;
+  }
+};
+
+// Initiate Razorpay payment
+export const initiateRazorpayPayment = async (ride: any) => {
+  try {
+    const order = await razorpay.orders.create({
+      amount: Math.round(ride.totalAmount * 100), // Amount in paise
+      currency: "INR",
+      receipt: `ride_${ride.id}`,
+      notes: {
+        rideId: ride.id,
+        userId: ride.userId,
+        driverId: ride.driverId,
+      },
+    });
+
+    // Create pending transaction
+    await prisma.transaction.create({
+      data: {
+        amount: ride.totalAmount,
+        type: TransactionType.RIDE_PAYMENT,
+        status: TransactionStatus.PENDING,
+        senderId: ride.userId,
+        receiverId: ride.driverId,
+        rideId: ride.id,
+        razorpayOrderId: order.id,
+        description: `Online payment for ride ${ride.id}`,
+      },
+    });
+
+    // Update ride with order ID
+    await prisma.ride.update({
+      where: { id: ride.id },
+      data: {
+        razorpayOrderId: order.id,
+      },
+    });
+
+    // Emit payment initiation event to user
+    io.to(ride.userId).emit("initiate_payment", {
+      rideId: ride.id,
+      orderId: order.id,
+      amount: ride.totalAmount,
+      key: process.env.RAZORPAY_KEY_ID,
+    });
+
+    return {
+      orderId: order.id,
+      amount: ride.totalAmount,
+    };
+  } catch (error) {
+    console.error("Error initiating Razorpay payment:", error);
+    throw error;
+  }
+};
+
+// Verify Razorpay payment
+export const verifyPayment = async (req: Request, res: Response) => {
+  const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
+    req.body;
 
   try {
-    const ride = await prisma.ride.findUnique({ where: { id: rideId } });
+    // Verify payment signature
+    const isValid = verifyPaymentSignature({
+      order_id: razorpay_order_id,
+      payment_id: razorpay_payment_id,
+      signature: razorpay_signature,
+    });
 
-    if (!ride) {
-      return res.status(404).json({ error: "Ride not found" });
+    if (!isValid) {
+      return res.status(400).json({ error: "Invalid payment signature" });
     }
 
-    if (paymentMode === "CASH") {
-      await prisma.ride.update({
-        where: { id: rideId },
+    // Process payment in transaction
+    const result = await prisma.$transaction(async (prisma) => {
+      // Find ride and transaction
+      const ride = await prisma.ride.findFirst({
+        where: { razorpayOrderId: razorpay_order_id },
+        include: { user: true, driver: true },
+      });
+
+      if (!ride) {
+        throw new Error("Ride not found");
+      }
+
+      // Update ride status
+      const updatedRide = await prisma.ride.update({
+        where: { id: ride.id },
         data: {
-          paymentStatus: TransactionStatus.COMPLETED,
           status: RideStatus.RIDE_ENDED,
+          paymentStatus: TransactionStatus.COMPLETED,
+        },
+        include: { user: true, driver: true },
+      });
+
+      // Update transaction
+      const updatedTransaction = await prisma.transaction.update({
+        where: { razorpayOrderId: razorpay_order_id },
+        data: {
+          status: TransactionStatus.COMPLETED,
+          razorpayPaymentId: razorpay_payment_id,
         },
       });
 
-      io.to(ride.userId).emit("ride_status_update", {
-        rideId,
-        status: RideStatus.RIDE_ENDED,
-      });
-      io.to(ride.driverId || "").emit("ride_status_update", {
-        rideId,
-        status: RideStatus.RIDE_ENDED,
+      // Update driver's wallet
+      const updatedWallet = await prisma.wallet.upsert({
+        where: { userId: ride.driverId! },
+        update: {
+          balance: {
+            increment: ride.totalAmount!,
+          },
+        },
+        create: {
+          userId: ride.driverId!,
+          balance: ride.totalAmount!,
+          currency: "INR",
+        },
       });
 
-      return res
-        .status(200)
-        .json({ success: true, message: "Ride completed with cash payment." });
-    }
+      return {
+        ride: updatedRide,
+        transaction: updatedTransaction,
+        wallet: updatedWallet,
+      };
+    });
 
-    res.status(400).json({ error: "Invalid payment mode for completion" });
+    // Emit completion events
+    io.to(result.ride.userId).emit("payment_completed", {
+      rideId: result.ride.id,
+      amount: result.ride.totalAmount,
+      paymentId: razorpay_payment_id,
+    });
+
+    io.to(result.ride.driverId!).emit("payment_completed", {
+      rideId: result.ride.id,
+      amount: result.ride.totalAmount,
+      paymentId: razorpay_payment_id,
+      walletBalance: result.wallet.balance,
+    });
+
+    return res.json({
+      success: true,
+      ride: result.ride,
+      transaction: result.transaction,
+    });
   } catch (error) {
-    console.error("Error completing ride:", error);
-    res.status(500).json({ error: "Failed to complete ride" });
+    console.error("Error in payment verification:", error);
+    return res.status(500).json({ error: "Failed to verify payment" });
   }
+};
+
+// Calculate final amount
+export const calculateFinalAmount = (ride: any): number => {
+  let finalAmount = ride.fare || 0;
+
+  if (ride.extraCharges) {
+    finalAmount += ride.extraCharges;
+  }
+
+  if (ride.tax) {
+    finalAmount += ride.tax;
+  }
+
+  return finalAmount;
+};
+
+// Socket event handlers
+export const setupPaymentSocketEvents = (socket: any) => {
+  socket.on(
+    "end_ride",
+    async (data: { rideId: string; finalLocation: string }) => {
+      try {
+        const ride = await prisma.ride.findUnique({
+          where: { id: data.rideId },
+          include: { user: true, driver: true },
+        });
+
+        if (!ride) {
+          socket.emit("error", { message: "Ride not found" });
+          return;
+        }
+
+        // Calculate final amount
+        const finalAmount = calculateFinalAmount(ride);
+
+        // Update ride status
+        const updatedRide = await prisma.ride.update({
+          where: { id: data.rideId },
+          data: {
+            dropLocation: data.finalLocation,
+            totalAmount: finalAmount,
+            status:
+              ride.paymentMode === PaymentMode.CASH
+                ? RideStatus.RIDE_ENDED
+                : RideStatus.PAYMENT_PENDING,
+          },
+        });
+
+        // Emit ride end event to user
+        socket.to(ride.userId).emit("ride_ended", {
+          rideId: ride.id,
+          finalLocation: data.finalLocation,
+          amount: finalAmount,
+          paymentMode: ride.paymentMode,
+        });
+
+        // Handle payment based on mode
+        if (ride.paymentMode === PaymentMode.CASH) {
+          await handleCashPayment(updatedRide);
+        } else {
+          await initiateRazorpayPayment(updatedRide);
+        }
+      } catch (error) {
+        console.error("Error in end_ride socket event:", error);
+        socket.emit("error", { message: "Failed to end ride" });
+      }
+    }
+  );
+
+  socket.on(
+    "payment_initiated",
+    (data: { rideId: string; orderId: string }) => {
+      socket.to(data.rideId).emit("payment_status", {
+        status: "INITIATED",
+        orderId: data.orderId,
+      });
+    }
+  );
+
+  socket.on("payment_failed", (data: { rideId: string; error: string }) => {
+    socket.to(data.rideId).emit("payment_status", {
+      status: "FAILED",
+      error: data.error,
+    });
+  });
+};
+
+// Helper function to verify Razorpay signature
+const verifyPaymentSignature = (params: {
+  order_id: string;
+  payment_id: string;
+  signature: string;
+}): boolean => {
+  const hmac = require("crypto").createHmac(
+    "sha256",
+    process.env.RAZORPAY_SECRET!
+  );
+  hmac.update(`${params.order_id}|${params.payment_id}`);
+  const generated_signature = hmac.digest("hex");
+  return generated_signature === params.signature;
 };

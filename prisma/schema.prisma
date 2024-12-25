@@ -93,8 +93,9 @@ model Transaction {
   senderId        String?
   receiverId      String?
   rideId          String?
-  razorpayOrderId String?
+  razorpayOrderId String?     @unique
   razorpayPaymentId String?
+
   description     String?
   metadata        Json?
   createdAt       DateTime         @default(now())
@@ -112,6 +113,8 @@ model Ride {
   status         RideStatus
   pickupLocation String
   dropLocation   String
+ pickupDistance Float?        // Distance from driver to pickup point
+  pickupDuration Int?         // Duration from driver to pickup point in minutes
   fare           Float?
   distance       Float?
   duration       Int?
@@ -119,6 +122,8 @@ model Ride {
   carCategory    String?
   otp            String?
   totalAmount    Float?
+  waitStartTime    DateTime?
+  extraCharges     Float     @default(0)
   paymentMode    PaymentMode    @default(CASH)
   paymentStatus  TransactionStatus @default(PENDING)
   razorpayOrderId String?
@@ -182,6 +187,9 @@ model DriverStatus {
   locationLat Float?
   locationLng Float?
   socketId    String?
+  lastLocationUpdate DateTime?
+  heading           Float?
+  speed            Float?
   updatedAt   DateTime @updatedAt
   driver      User     @relation(fields: [driverId], references: [id])
 }

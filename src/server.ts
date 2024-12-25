@@ -8,6 +8,13 @@ import { rideRouter } from "./routes/ride";
 import { PrismaClient } from "@prisma/client";
 import { driverRouter } from "./routes/driver";
 import { RideStatus } from "@prisma/client";
+import { paymentRouter } from "./routes/payment";
+import { walletRouter } from "./routes/wallet";
+import { setupPaymentSocketEvents } from "./controllers/paymentController";
+import {
+  calculateDistance,
+  calculateDuration,
+} from "./controllers/rideController";
 
 const app = express();
 const server = http.createServer(app);
@@ -40,6 +47,8 @@ app.use("/api/auth", authRouter);
 app.use("/api/users", userRouter);
 app.use("/api/rides", rideRouter);
 app.use("/api/drivers", driverRouter);
+app.use("/api/payments", paymentRouter);
+app.use("/api/wallets", walletRouter);
 
 app.use("/", (req, res) => {
   res.send("Welcome to the taxiSure API");
@@ -64,6 +73,8 @@ io.on("connection", (socket: Socket) => {
     });
   });
 
+  setupPaymentSocketEvents(socket);
+
   socket.on(
     "driver_location_update",
     async (data: {
@@ -71,38 +82,51 @@ io.on("connection", (socket: Socket) => {
       driverId: string;
       locationLat: number;
       locationLng: number;
+      heading?: number;
+      speed?: number;
     }) => {
-      const { rideId, locationLat, locationLng, driverId } = data;
+      const { rideId, locationLat, locationLng, driverId, heading, speed } =
+        data;
       try {
         if (rideId) {
-          // Find the ride and emit location to the user
           const ride = await prisma.ride.findUnique({
             where: { id: rideId },
-            select: { userId: true },
+            select: { userId: true, status: true },
           });
 
-          if (ride) {
+          if (ride && ride.status !== RideStatus.CANCELLED) {
             io.to(ride.userId).emit("driver_location", {
               rideId,
               locationLat,
               locationLng,
+              heading,
+              speed,
             });
-          } else {
-            console.log(`No ride found with ID: ${rideId}`);
           }
-        } else {
-          // Update driver's general location if not on a ride
-          await prisma.driverStatus.update({
-            where: { driverId },
-            data: { locationLat, locationLng },
-          });
         }
+
+        // Always update driver's location in database
+        await prisma.driverStatus.update({
+          where: { driverId },
+          data: {
+            locationLat,
+            locationLng,
+            lastLocationUpdate: new Date(),
+          },
+        });
       } catch (error) {
         console.error("Error in driver location update:", error);
       }
     }
   );
 
+  socket.on(
+    "driver_response",
+    async (data: { rideId: string; driverId: string; accepted: boolean }) => {
+      const { rideId, driverId, accepted } = data;
+      io.emit(`driver_response_${rideId}_${driverId}`, { accepted });
+    }
+  );
   socket.on(
     "update_driver_availability",
     async (data: {
@@ -209,36 +233,80 @@ io.on("connection", (socket: Socket) => {
     "accept_ride",
     async (data: { rideId: string; driverId: string }) => {
       const { rideId, driverId } = data;
-      // Update the ride in the database
-      const ride = await prisma.ride.update({
-        where: { id: rideId },
-        data: { driverId, status: "ACCEPTED" },
-        include: { user: true },
-      });
 
-      const driverStatus = await prisma.driverStatus.findUnique({
-        where: { driverId },
-      });
-
-      console.log("Ride details:", ride);
-      console.log("Driver details:", driverStatus);
-
-      // Notify the user that the ride was accepted
-      io.to(ride.userId).emit("ride_status_update", {
-        rideId,
-        status: "ACCEPTED",
-        driverId,
-      });
-
-      // Notify the driver with ride details
-      if (driverStatus?.socketId) {
-        io.to(driverStatus.socketId).emit("ride_assigned", {
-          rideId,
-          rideDetails: ride,
+      try {
+        // Get driver's current location
+        const driverStatus = await prisma.driverStatus.findUnique({
+          where: { driverId },
         });
-      }
 
-      console.log(`Ride ${rideId} accepted by driver ${driverId}`);
+        if (!driverStatus) {
+          console.error("Driver status not found");
+          return;
+        }
+
+        // Get ride details
+        const ride = await prisma.ride.findUnique({
+          where: { id: rideId },
+          select: { pickupLocation: true, status: true },
+        });
+
+        if (!ride || ride.status !== RideStatus.SEARCHING) {
+          console.error("Ride not found or already accepted");
+          return;
+        }
+
+        // Calculate pickup metrics
+        const pickupDistance = await calculateDistance(
+          `${driverStatus.locationLat},${driverStatus.locationLng}`,
+          ride.pickupLocation
+        );
+
+        const pickupDuration = await calculateDuration(
+          `${driverStatus.locationLat},${driverStatus.locationLng}`,
+          ride.pickupLocation
+        );
+
+        // Update the ride with driver and pickup metrics
+        const updatedRide = await prisma.ride.update({
+          where: {
+            id: rideId,
+            status: RideStatus.SEARCHING, // Only update if still searching
+          },
+          data: {
+            driverId,
+            status: RideStatus.ACCEPTED,
+            pickupDistance,
+            pickupDuration,
+          },
+          include: { user: true },
+        });
+
+        // Notify the user
+        io.to(updatedRide.userId).emit("ride_status_update", {
+          rideId,
+          status: "ACCEPTED",
+          driverId,
+          pickupDistance,
+          pickupDuration,
+        });
+
+        // Notify the driver
+        if (driverStatus.socketId) {
+          io.to(driverStatus.socketId).emit("ride_assigned", {
+            rideId,
+            rideDetails: {
+              ...updatedRide,
+              pickupDistance,
+              pickupDuration,
+            },
+          });
+        }
+
+        console.log(`Ride ${rideId} accepted by driver ${driverId}`);
+      } catch (error) {
+        console.error("Error in accept_ride:", error);
+      }
     }
   );
 

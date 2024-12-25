@@ -130,6 +130,7 @@ router.post("/update-status", async (req, res) => {
         locationLat: locationLat ?? undefined,
         locationLng: locationLng ?? undefined,
         updatedAt: new Date(),
+        lastLocationUpdate: new Date(),
       },
       create: {
         driverId,
