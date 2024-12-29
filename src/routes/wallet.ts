@@ -2,6 +2,10 @@
 import express from "express";
 import { PrismaClient } from "@prisma/client";
 import { verifyToken } from "../middlewares/auth";
+import {
+  initiateTopUp,
+  requestWithdrawal,
+} from "../controllers/walletController";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -57,5 +61,59 @@ router.get("/driver-wallet", verifyToken, async (req, res) => {
     res.status(500).json({ error: "Failed to fetch wallet details" });
   }
 });
+
+// Payment success webhook/callback
+router.post("/payment-success", verifyToken, async (req, res) => {
+  try {
+    const { orderId, paymentId, signature } = req.body;
+    const driverId = req.user?.userId;
+
+    // Find the pending transaction
+    const transaction = await prisma.transaction.findFirst({
+      where: {
+        razorpayOrderId: orderId,
+        status: "PENDING",
+        senderId: driverId,
+      },
+    });
+
+    if (!transaction) {
+      return res.status(404).json({ error: "Transaction not found" });
+    }
+
+    // Update transaction status
+    await prisma.$transaction([
+      // Update transaction
+      prisma.transaction.update({
+        where: { id: transaction.id },
+        data: {
+          status: "COMPLETED",
+          razorpayPaymentId: paymentId,
+          metadata: {
+            signature,
+            paymentId,
+          },
+        },
+      }),
+      // Update wallet balance
+      prisma.wallet.update({
+        where: { userId: driverId },
+        data: {
+          balance: {
+            increment: transaction.amount,
+          },
+        },
+      }),
+    ]);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error processing payment success:", error);
+    res.status(500).json({ error: "Failed to process payment" });
+  }
+});
+
+router.post("/topup", verifyToken, initiateTopUp);
+router.post("/withdraw", verifyToken, requestWithdrawal);
 
 export { router as walletRouter };

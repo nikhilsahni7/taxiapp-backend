@@ -5,16 +5,17 @@ import { Server, Socket } from "socket.io";
 import { authRouter } from "./routes/auth";
 import { userRouter } from "./routes/user";
 import { rideRouter } from "./routes/ride";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, RideStatus } from "@prisma/client";
 import { driverRouter } from "./routes/driver";
-import { RideStatus } from "@prisma/client";
 import { paymentRouter } from "./routes/payment";
 import { walletRouter } from "./routes/wallet";
+import { adminRouter } from "./routes/admin";
 import { setupPaymentSocketEvents } from "./controllers/paymentController";
 import {
   calculateDistance,
   calculateDuration,
 } from "./controllers/rideController";
+import { isRideRequestValid } from "./controllers/outstationController";
 
 const app = express();
 const server = http.createServer(app);
@@ -49,6 +50,7 @@ app.use("/api/rides", rideRouter);
 app.use("/api/drivers", driverRouter);
 app.use("/api/payments", paymentRouter);
 app.use("/api/wallets", walletRouter);
+app.use("/api/admin", adminRouter);
 
 app.use("/", (req, res) => {
   res.send("Welcome to the taxiSure API");
@@ -235,81 +237,167 @@ io.on("connection", (socket: Socket) => {
       const { rideId, driverId } = data;
 
       try {
-        // Get driver's current location
-        const driverStatus = await prisma.driverStatus.findUnique({
-          where: { driverId },
-        });
+        // Use a transaction with pessimistic locking
+        const result = await prisma.$transaction(async (prisma) => {
+          // First check if ride is still available
+          const existingRide = await prisma.ride.findFirst({
+            where: {
+              id: rideId,
+              status: RideStatus.SEARCHING,
+              driverId: null,
+            },
+            select: { status: true, pickupLocation: true },
+            orderBy: { createdAt: "asc" },
+            take: 1,
+          });
 
-        if (!driverStatus) {
-          console.error("Driver status not found");
-          return;
-        }
+          if (!existingRide) {
+            return {
+              success: false,
+              message: "Ride is no longer available",
+            };
+          }
 
-        // Get ride details
-        const ride = await prisma.ride.findUnique({
-          where: { id: rideId },
-          select: { pickupLocation: true, status: true },
-        });
+          // Get driver's current location
+          const driverStatus = await prisma.driverStatus.findUnique({
+            where: { driverId },
+          });
 
-        if (!ride || ride.status !== RideStatus.SEARCHING) {
-          console.error("Ride not found or already accepted");
-          return;
-        }
+          if (!driverStatus) {
+            return {
+              success: false,
+              message: "Driver status not found",
+            };
+          }
 
-        // Calculate pickup metrics
-        const pickupDistance = await calculateDistance(
-          `${driverStatus.locationLat},${driverStatus.locationLng}`,
-          ride.pickupLocation
-        );
+          // Calculate pickup metrics
+          const pickupDistance = await calculateDistance(
+            `${driverStatus.locationLat},${driverStatus.locationLng}`,
+            existingRide.pickupLocation
+          );
 
-        const pickupDuration = await calculateDuration(
-          `${driverStatus.locationLat},${driverStatus.locationLng}`,
-          ride.pickupLocation
-        );
+          const pickupDuration = await calculateDuration(
+            `${driverStatus.locationLat},${driverStatus.locationLng}`,
+            existingRide.pickupLocation
+          );
 
-        // Update the ride with driver and pickup metrics
-        const updatedRide = await prisma.ride.update({
-          where: {
-            id: rideId,
-            status: RideStatus.SEARCHING, // Only update if still searching
-          },
-          data: {
-            driverId,
-            status: RideStatus.ACCEPTED,
-            pickupDistance,
-            pickupDuration,
-          },
-          include: { user: true },
-        });
-
-        // Notify the user
-        io.to(updatedRide.userId).emit("ride_status_update", {
-          rideId,
-          status: "ACCEPTED",
-          driverId,
-          pickupDistance,
-          pickupDuration,
-        });
-
-        // Notify the driver
-        if (driverStatus.socketId) {
-          io.to(driverStatus.socketId).emit("ride_assigned", {
-            rideId,
-            rideDetails: {
-              ...updatedRide,
+          // Update ride status immediately to prevent race conditions
+          const updatedRide = await prisma.ride.update({
+            where: {
+              id: rideId,
+              status: RideStatus.SEARCHING,
+            },
+            data: {
+              status: RideStatus.ACCEPTED,
+              driverId: driverId,
               pickupDistance,
               pickupDuration,
             },
+            include: { user: true },
           });
+
+          // Broadcast to all connected clients that ride is no longer available
+          io.emit("ride_unavailable", { rideId });
+
+          return {
+            success: true,
+            ride: updatedRide,
+            pickupDistance,
+            pickupDuration,
+          };
+        });
+
+        if (!result.success || !result.ride) {
+          socket.emit("ride_acceptance_response", {
+            success: false,
+            message: result.message || "Ride not found",
+          });
+          return;
         }
 
-        console.log(`Ride ${rideId} accepted by driver ${driverId}`);
+        // Notify the user
+        io.to(result.ride.userId).emit("ride_status_update", {
+          rideId,
+          status: "ACCEPTED",
+          driverId,
+          pickupDistance: result.pickupDistance,
+          pickupDuration: result.pickupDuration,
+        });
+
+        // Send success response to driver
+        socket.emit("ride_acceptance_response", {
+          success: true,
+          message: "Ride accepted successfully",
+          ride: result.ride,
+        });
       } catch (error) {
         console.error("Error in accept_ride:", error);
+        socket.emit("ride_acceptance_response", {
+          success: false,
+          message: "Failed to accept ride",
+        });
       }
     }
   );
 
+  socket.on(
+    "accept_outstation_ride",
+    async (data: { rideId: string; driverId: string }) => {
+      try {
+        // Check if ride request is still valid
+        if (!(await isRideRequestValid(data.rideId))) {
+          socket.emit("outstation_ride_response", {
+            success: false,
+            message: "Ride request has expired or is no longer available",
+          });
+          return;
+        }
+
+        const updatedRide = await prisma.ride.update({
+          where: {
+            id: data.rideId,
+            status: RideStatus.SEARCHING,
+          },
+          data: {
+            driverId: data.driverId,
+            status: RideStatus.ACCEPTED,
+            isDriverAccepted: true,
+            driverAcceptedAt: new Date(),
+          },
+          include: {
+            driver: {
+              select: {
+                name: true,
+                phone: true,
+                driverDetails: true,
+              },
+            },
+          },
+        });
+
+        // Notify user
+        io.to(updatedRide.userId).emit("outstation_ride_accepted", {
+          rideId: updatedRide.id,
+          driver: updatedRide.driver,
+        });
+
+        // Notify other drivers
+        io.emit("outstation_ride_unavailable", { rideId: updatedRide.id });
+
+        socket.emit("outstation_ride_response", {
+          success: true,
+          message: "Ride accepted successfully",
+          ride: updatedRide,
+        });
+      } catch (error) {
+        console.error("Error accepting outstation ride:", error);
+        socket.emit("outstation_ride_response", {
+          success: false,
+          message: "Failed to accept ride",
+        });
+      }
+    }
+  );
   socket.on("disconnect", async () => {
     console.log("User disconnected:", socket.id);
     await prisma.driverStatus.updateMany({

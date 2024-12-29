@@ -7,6 +7,19 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+
+
+enum RideType {
+  LOCAL
+  OUTSTATION
+}
+
+enum OutstationTripType {
+  ONE_WAY
+  ROUND_TRIP
+}
+
+
 enum UserType {
   USER
   DRIVER
@@ -48,7 +61,7 @@ model User {
   id            String          @id @default(uuid())
   phone         String          @unique
   email         String?         @unique
-  password      String
+
   name          String?
   userType      UserType
   verified      Boolean         @default(false)
@@ -129,6 +142,11 @@ model Ride {
   razorpayOrderId String?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
+  rideType        RideType        @default(LOCAL)
+  outstationType  OutstationTripType?
+  isDriverAccepted Boolean        @default(false)
+  driverAcceptedAt DateTime?
+   requestExpiresAt DateTime?
 
   user         User          @relation("UserRides", fields: [userId], references: [id])
   driver       User?         @relation("DriverRides", fields: [driverId], references: [id])

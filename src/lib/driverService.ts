@@ -64,12 +64,7 @@ export const searchAvailableDrivers = async (
         ridesAsDriver: {
           none: {
             status: {
-              in: [
-                "ACCEPTED",
-                "DRIVER_ARRIVED",
-                "RIDE_STARTED",
-                "PAYMENT_PENDING",
-              ],
+              in: ["ACCEPTED", "DRIVER_ARRIVED", "RIDE_STARTED"],
             },
           },
         },

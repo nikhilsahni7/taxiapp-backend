@@ -51,10 +51,10 @@ router.post("/send-otp", async (req, res) => {
 // Verify OTP and Sign Up
 router.post("/verify-otp", async (req: Request, res: Response) => {
   try {
-    const { phone, otp, password } = req.body;
+    const { phone, otp } = req.body;
 
     // Validate input
-    if (!phone || !otp || !password) {
+    if (!phone || !otp) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -83,16 +83,12 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
       data: { verified: true },
     });
 
-    // Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
-
     // Create user with verified status
     const user = await prisma.user.create({
       data: {
         phone,
-        password: hashedPassword,
         userType: "USER",
-        verified: true, // Set verified status
+        verified: true,
       },
     });
 
@@ -115,21 +111,16 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
   }
 });
 
-// Sign In
+// Sign In (simplified to use phone number only)
 router.post("/sign-in", async (req: Request, res: Response) => {
   try {
-    const { phone, password } = req.body;
+    const { phone } = req.body;
 
     const user = await prisma.user.findUnique({ where: { phone } });
-
     if (!user || !user.verified) {
-      return res.status(400).json({ error: "Invalid credentials" });
-    }
-
-    const isMatch = await bcrypt.compare(password, user.password);
-
-    if (!isMatch) {
-      return res.status(400).json({ error: "Invalid credentials" });
+      return res
+        .status(400)
+        .json({ error: "Invalid phone number or user not verified" });
     }
 
     const token = jwt.sign(
@@ -232,16 +223,90 @@ router.post("/register/:type", verifyToken, uploadFields, async (req, res) => {
   }
 });
 
-router.post("/driver-sign-in", async (req, res) => {
+// Admin registration (one-time setup)
+router.post("/admin-register", async (req: Request, res: Response) => {
   try {
-    const { phone, password } = req.body;
+    const ADMIN_PHONE = "9999999999"; // Hardcoded admin phone
 
-    // Input validation
-    if (!phone || !password) {
-      return res.status(400).json({ error: "Phone and password are required" });
+    // Check if admin already exists
+    const existingAdmin = await prisma.user.findFirst({
+      where: {
+        phone: ADMIN_PHONE,
+        userType: "ADMIN",
+      },
+    });
+
+    if (existingAdmin) {
+      return res.status(400).json({ error: "Admin already exists" });
     }
 
-    // Find driver
+    // Create admin user
+    const admin = await prisma.user.create({
+      data: {
+        phone: ADMIN_PHONE,
+        userType: "ADMIN",
+        verified: true,
+        name: "Admin",
+      },
+    });
+
+    const token = jwt.sign(
+      { userId: admin.id, userType: admin.userType },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      message: "Admin registered successfully",
+      token,
+      adminId: admin.id,
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to register admin" });
+  }
+});
+
+// Admin sign-in with hardcoded phone
+router.post("/admin-sign-in", async (req: Request, res: Response) => {
+  try {
+    const ADMIN_PHONE = "9999999999"; // Same hardcoded phone
+
+    const admin = await prisma.user.findFirst({
+      where: {
+        phone: ADMIN_PHONE,
+        userType: "ADMIN",
+      },
+    });
+
+    if (!admin) {
+      return res.status(401).json({ error: "Admin not found" });
+    }
+
+    const token = jwt.sign(
+      { userId: admin.id, userType: admin.userType },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      adminId: admin.id,
+      message: "Admin signed in successfully",
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to sign in" });
+  }
+});
+
+// Driver sign-in (simplified)
+router.post("/driver-sign-in", async (req, res) => {
+  try {
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ error: "Phone number is required" });
+    }
+
     const driver = await prisma.user.findFirst({
       where: {
         phone,
@@ -253,16 +318,11 @@ router.post("/driver-sign-in", async (req, res) => {
     });
 
     if (!driver || !driver.verified) {
-      return res.status(401).json({ error: "Invalid credentials" });
+      return res
+        .status(401)
+        .json({ error: "Invalid phone number or driver not verified" });
     }
 
-    // Check password
-    const isValidPassword = await bcrypt.compare(password, driver.password);
-    if (!isValidPassword) {
-      return res.status(401).json({ error: "Invalid credentials" });
-    }
-
-    // Generate token
     const token = jwt.sign(
       {
         userId: driver.id,

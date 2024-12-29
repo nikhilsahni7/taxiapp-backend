@@ -12,9 +12,14 @@ import { io } from "../server";
 
 const prisma = new PrismaClient();
 const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID!,
-  key_secret: process.env.RAZORPAY_SECRET!,
+  key_id: "rzp_test_3e3y5c5TI1K7Lz",
+  key_secret: "2XzYAvwfuR1V6JXFK6ts6kU2",
 });
+
+// Add validation to ensure keys exist
+// if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_SECRET) {
+//   console.error("Razorpay credentials are not configured properly");
+// }
 
 // Handle ride completion and payment initiation
 export const handleRideEnd = async (req: Request, res: Response) => {
@@ -192,10 +197,14 @@ export const handleCashPayment = async (ride: any) => {
 // Initiate Razorpay payment
 export const initiateRazorpayPayment = async (ride: any) => {
   try {
+    const shortReceiptId = `r${Date.now().toString().slice(-8)}_${ride.id.slice(
+      -4
+    )}`;
+
     const order = await razorpay.orders.create({
       amount: Math.round(ride.totalAmount * 100), // Amount in paise
       currency: "INR",
-      receipt: `ride_${ride.id}`,
+      receipt: shortReceiptId,
       notes: {
         rideId: ride.id,
         userId: ride.userId,
@@ -425,16 +434,20 @@ export const setupPaymentSocketEvents = (socket: any) => {
 };
 
 // Helper function to verify Razorpay signature
+// Replace the existing verifyPaymentSignature function
 const verifyPaymentSignature = (params: {
   order_id: string;
   payment_id: string;
   signature: string;
 }): boolean => {
-  const hmac = require("crypto").createHmac(
-    "sha256",
-    process.env.RAZORPAY_SECRET!
-  );
-  hmac.update(`${params.order_id}|${params.payment_id}`);
-  const generated_signature = hmac.digest("hex");
-  return generated_signature === params.signature;
+  try {
+    const crypto = require("crypto");
+    const hmac = crypto.createHmac("sha256", "2XzYAvwfuR1V6JXFK6ts6kU2");
+    hmac.update(params.order_id + "|" + params.payment_id);
+    const generated_signature = hmac.digest("hex");
+    return generated_signature === params.signature;
+  } catch (error) {
+    console.error("Error in signature verification:", error);
+    return false;
+  }
 };
