@@ -60,15 +60,15 @@ export const searchAvailableDrivers = async (
         gte: lng - radius / (111 * Math.cos((lat * Math.PI) / 180)),
         lte: lng + radius / (111 * Math.cos((lat * Math.PI) / 180)),
       },
-      driver: {
-        ridesAsDriver: {
-          none: {
-            status: {
-              in: ["ACCEPTED", "DRIVER_ARRIVED", "RIDE_STARTED"],
-            },
-          },
-        },
-      },
+      // driver: {
+      //   ridesAsDriver: {
+      //     none: {
+      //       status: {
+      //         in: ["ACCEPTED", "DRIVER_ARRIVED", "RIDE_STARTED"],
+      //       },
+      //     },
+      //   },
+      // },
     },
     include: {
       driver: true,
