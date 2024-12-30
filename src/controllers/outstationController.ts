@@ -59,7 +59,6 @@ export const getOutstationFareEstimate = async (
 
 export const broadcastOutstationRide = async (ride: any) => {
   try {
-    // Get all online drivers
     const onlineDrivers = await prisma.driverStatus.findMany({
       where: {
         isOnline: true,
@@ -74,7 +73,6 @@ export const broadcastOutstationRide = async (ride: any) => {
       },
     });
 
-    // Filter drivers by vehicle category if needed
     const eligibleDrivers = onlineDrivers.filter(
       (driver) =>
         driver.driver.driverDetails?.vehicleCategory === ride.carCategory
@@ -82,6 +80,12 @@ export const broadcastOutstationRide = async (ride: any) => {
 
     // Broadcast to all eligible drivers
     for (const driver of eligibleDrivers) {
+      // Calculate pickup metrics for each driver
+      const pickupMetrics = await calculatePickupMetrics(
+        driver,
+        ride.pickupLocation
+      );
+
       io.to(driver.socketId!).emit("outstation_ride_request", {
         rideId: ride.id,
         pickupLocation: ride.pickupLocation,
@@ -94,6 +98,8 @@ export const broadcastOutstationRide = async (ride: any) => {
         userId: ride.userId,
         userName: ride.user.name,
         userPhone: ride.user.phone,
+        pickupDistance: pickupMetrics.pickupDistance,
+        pickupDuration: pickupMetrics.pickupDuration,
       });
     }
 
@@ -111,6 +117,22 @@ export const broadcastOutstationRide = async (ride: any) => {
     };
   }
 };
+
+// Add helper function for pickup metrics
+export async function calculatePickupMetrics(
+  driver: any,
+  pickupLocation: string
+) {
+  const pickupDistance = await calculateDistance(
+    `${driver.locationLat},${driver.locationLng}`,
+    pickupLocation
+  );
+  const pickupDuration = await calculateDuration(
+    `${driver.locationLat},${driver.locationLng}`,
+    pickupLocation
+  );
+  return { pickupDistance, pickupDuration };
+}
 
 export const createOutstationRide = async (req: Request, res: Response) => {
   const { pickupLocation, dropLocation, vehicleType, tripType, paymentMode } =
@@ -238,3 +260,105 @@ function calculateOutstationFare(
 
   return fare;
 }
+
+export const getOutstationRequests = async (req: Request, res: Response) => {
+  if (!req.user?.userId) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    console.log("Fetching outstation requests for driver:", req.user.userId);
+
+    // Get driver details to check vehicle category
+    const driver = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      include: {
+        driverDetails: true,
+      },
+    });
+
+    console.log("Driver details:", driver);
+
+    if (!driver?.driverDetails?.vehicleCategory) {
+      return res.status(400).json({
+        error: "Driver vehicle category not found",
+        driver: driver,
+      });
+    }
+
+    // Convert vehicle category to lowercase for comparison
+    const driverVehicleCategory =
+      driver.driverDetails.vehicleCategory.toLowerCase();
+
+    console.log("Searching for rides with criteria:", {
+      status: RideStatus.SEARCHING,
+      rideType: RideType.OUTSTATION,
+      carCategory: driverVehicleCategory,
+      requestExpiresAt: { gt: new Date() },
+    });
+
+    const requests = await prisma.ride.findMany({
+      where: {
+        status: RideStatus.SEARCHING,
+        rideType: RideType.OUTSTATION,
+        carCategory: driverVehicleCategory, // Use lowercase version
+        requestExpiresAt: {
+          gt: new Date(),
+        },
+      },
+      include: {
+        user: {
+          select: {
+            name: true,
+            phone: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    console.log("Found requests:", requests);
+
+    // Transform the requests
+    const transformedRequests = requests.map((request) => ({
+      rideId: request.id,
+      pickupLocation: request.pickupLocation,
+      dropLocation: request.dropLocation,
+      pickupAddress: request.pickupLocation,
+      dropAddress: request.dropLocation,
+      fare: request.fare || 0,
+      distance: request.distance || 0,
+      duration: request.duration || 0,
+      paymentMode: request.paymentMode,
+      userName: request.user.name,
+      userPhone: request.user.phone,
+      pickupDistance: request.pickupDistance || 0,
+      pickupDuration: request.pickupDuration || 0,
+      pickupTime: request.createdAt,
+      tripType: request.outstationType,
+      category: "outstation",
+    }));
+
+    res.json({
+      success: true,
+      requests: transformedRequests,
+      debug: {
+        driverVehicleCategory,
+        totalRequests: requests.length,
+        searchCriteria: {
+          status: RideStatus.SEARCHING,
+          rideType: RideType.OUTSTATION,
+          carCategory: driverVehicleCategory,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Error fetching outstation requests:", error);
+    res.status(500).json({
+      error: "Failed to fetch outstation requests",
+      details: error instanceof Error ? error.message : String(error),
+    });
+  }
+};

@@ -15,7 +15,10 @@ import {
   calculateDistance,
   calculateDuration,
 } from "./controllers/rideController";
-import { isRideRequestValid } from "./controllers/outstationController";
+import {
+  isRideRequestValid,
+  calculatePickupMetrics,
+} from "./controllers/outstationController";
 
 const app = express();
 const server = http.createServer(app);
@@ -353,6 +356,30 @@ io.on("connection", (socket: Socket) => {
           return;
         }
 
+        // Get driver's current location
+        const driverStatus = await prisma.driverStatus.findUnique({
+          where: { driverId: data.driverId },
+        });
+
+        if (!driverStatus) {
+          socket.emit("outstation_ride_response", {
+            success: false,
+            message: "Driver location not found",
+          });
+          return;
+        }
+
+        // Calculate pickup metrics
+        const pickupMetrics = await calculatePickupMetrics(
+          driverStatus,
+          (
+            await prisma.ride.findUnique({
+              where: { id: data.rideId },
+              select: { pickupLocation: true },
+            })
+          )?.pickupLocation || ""
+        );
+
         const updatedRide = await prisma.ride.update({
           where: {
             id: data.rideId,
@@ -363,6 +390,8 @@ io.on("connection", (socket: Socket) => {
             status: RideStatus.ACCEPTED,
             isDriverAccepted: true,
             driverAcceptedAt: new Date(),
+            pickupDistance: pickupMetrics.pickupDistance,
+            pickupDuration: pickupMetrics.pickupDuration,
           },
           include: {
             driver: {
@@ -379,6 +408,8 @@ io.on("connection", (socket: Socket) => {
         io.to(updatedRide.userId).emit("outstation_ride_accepted", {
           rideId: updatedRide.id,
           driver: updatedRide.driver,
+          pickupDistance: pickupMetrics.pickupDistance,
+          pickupDuration: pickupMetrics.pickupDuration,
         });
 
         // Notify other drivers

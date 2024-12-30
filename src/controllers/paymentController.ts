@@ -12,14 +12,13 @@ import { io } from "../server";
 
 const prisma = new PrismaClient();
 const razorpay = new Razorpay({
-  key_id: "rzp_test_3e3y5c5TI1K7Lz",
-  key_secret: "2XzYAvwfuR1V6JXFK6ts6kU2",
+  key_id: process.env.RAZORPAY_KEY_ID!,
+  key_secret: process.env.RAZORPAY_SECRET!,
 });
 
-// Add validation to ensure keys exist
-// if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_SECRET) {
-//   console.error("Razorpay credentials are not configured properly");
-// }
+if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_SECRET) {
+  console.error("Razorpay credentials are not configured properly");
+}
 
 // Handle ride completion and payment initiation
 export const handleRideEnd = async (req: Request, res: Response) => {
@@ -442,7 +441,7 @@ const verifyPaymentSignature = (params: {
 }): boolean => {
   try {
     const crypto = require("crypto");
-    const hmac = crypto.createHmac("sha256", "2XzYAvwfuR1V6JXFK6ts6kU2");
+    const hmac = crypto.createHmac("sha256", process.env.RAZORPAY_SECRET!);
     hmac.update(params.order_id + "|" + params.payment_id);
     const generated_signature = hmac.digest("hex");
     return generated_signature === params.signature;
