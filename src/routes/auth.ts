@@ -1,9 +1,16 @@
 import express from "express";
 import type { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
+
+interface AuthRequest extends Request {
+  user: {
+    userId: string;
+    userType: string;
+  };
+}
 import twilio from "twilio";
 import jwt from "jsonwebtoken";
-import bcrypt from "bcrypt";
+
 import { verifyToken } from "../middlewares/auth";
 import { uploadImage } from "../config/cloudinary";
 import multer from "multer";
@@ -19,7 +26,13 @@ const twilioClient = twilio(
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-const uploadFields = upload.fields([{ name: "selfiePath", maxCount: 1 }]);
+const uploadFields = upload.fields([
+  { name: "selfiePath", maxCount: 1 },
+  { name: "dlPath", maxCount: 1 },
+  { name: "permitImages", maxCount: 4 },
+  { name: "carFront", maxCount: 1 },
+  { name: "carBack", maxCount: 1 },
+]);
 
 // Send OTP
 router.post("/send-otp", async (req, res) => {
@@ -111,6 +124,75 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
   }
 });
 
+// Add this new route after the existing verify-otp route
+router.post("/verify-driver-otp", async (req: Request, res: Response) => {
+  try {
+    const { phone, otp } = req.body;
+
+    // Validate input
+    if (!phone || !otp) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Check if driver already exists
+    const existingDriver = await prisma.user.findUnique({
+      where: {
+        phone,
+        userType: "DRIVER",
+      },
+    });
+
+    if (existingDriver) {
+      return res.status(400).json({ error: "Driver already exists" });
+    }
+
+    const validOTP = await prisma.oTP.findFirst({
+      where: {
+        phone,
+        code: otp,
+        verified: false,
+        expiresAt: { gte: new Date() },
+      },
+    });
+
+    if (!validOTP) {
+      return res.status(400).json({ error: "Invalid or expired OTP" });
+    }
+
+    // Mark OTP as verified
+    await prisma.oTP.update({
+      where: { id: validOTP.id },
+      data: { verified: true },
+    });
+
+    // Create driver with verified status
+    const driver = await prisma.user.create({
+      data: {
+        phone,
+        userType: "DRIVER",
+        verified: true,
+      },
+    });
+
+    const token = jwt.sign(
+      { userId: driver.id, userType: driver.userType },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      userId: driver.id,
+      message: "Driver verified and created successfully",
+    });
+  } catch (error: any) {
+    console.error("Verify Driver OTP error:", error);
+    res.status(500).json({
+      error: error.message || "Failed to verify OTP",
+    });
+  }
+});
+
 // Sign In (simplified to use phone number only)
 router.post("/sign-in", async (req: Request, res: Response) => {
   try {
@@ -135,93 +217,114 @@ router.post("/sign-in", async (req: Request, res: Response) => {
   }
 });
 
-// Register user detailsC
-router.post("/register/:type", verifyToken, uploadFields, async (req, res) => {
-  try {
-    const { type } = req.params;
+router.post(
+  "/register/:type",
+  verifyToken,
+  uploadFields,
+  async (req: AuthRequest, res) => {
+    try {
+      const { type } = req.params;
+      const userId = req.user.userId;
+      const files = req.files as
+        | { [fieldname: string]: Express.Multer.File[] }
+        | undefined;
 
-    if (!req.user) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
+      // Common fields for both user types
+      const { name, email, state, city } = req.body;
 
-    if (!["DRIVER", "VENDOR", "USER"].includes(type.toUpperCase())) {
-      return res.status(400).json({ error: "Invalid user type" });
-    }
+      // Upload selfie for both user types
+      const selfieUrl = files?.["selfiePath"]?.[0]
+        ? await uploadImage(files["selfiePath"][0].buffer)
+        : null;
 
-    const userId = req.user.userId;
-    const { name, email, state, city } = req.body;
+      // Update base user information
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          name,
+          email,
+          state,
+          city,
+          selfieUrl,
+          userType: type.toUpperCase() as "USER" | "DRIVER" | "ADMIN",
+        },
+      });
 
-    // Log the received data for debugging
-    console.log("Received fields:", req.body);
-    console.log("Received files:", req.files);
+      if (type.toUpperCase() === "DRIVER") {
+        const {
+          aadharNumber,
+          panNumber,
+          dlNumber,
+          vehicleNumber,
+          vehicleName,
+          vehicleCategory,
+        } = req.body;
 
-    // Upload selfie from buffer
-    let selfieUrl = null;
-    if (
-      req.files &&
-      (req.files as { [fieldname: string]: Express.Multer.File[] })[
-        "selfiePath"
-      ]
-    ) {
-      const fileBuffer = (
-        req.files as { [fieldname: string]: Express.Multer.File[] }
-      )["selfiePath"][0].buffer;
-      selfieUrl = await uploadImage(fileBuffer);
-    }
+        const dlUrl = files?.["dlPath"]?.[0]
+          ? await uploadImage(files["dlPath"][0].buffer)
+          : null;
+        const carFrontUrl = files?.["carFront"]?.[0]
+          ? await uploadImage(files["carFront"][0].buffer)
+          : null;
+        const carBackUrl = files?.["carBack"]?.[0]
+          ? await uploadImage(files["carBack"][0].buffer)
+          : null;
 
-    // Update user information
-    await prisma.user.update({
-      where: { id: userId },
-      data: {
-        name,
-        email,
-        state,
-        city,
-        selfieUrl,
-      },
-    });
+        // Handle permit images
+        const permitUrls = files?.["permitImages"]
+          ? await Promise.all(
+              files["permitImages"].map((file) => uploadImage(file.buffer))
+            )
+          : [];
 
-    // Handle type-specific details with image uploads
-    const specificDetails = req.body.specificDetails || {};
-
-    switch (type.toUpperCase()) {
-      case "DRIVER":
-        const dlUrl = await uploadImage(specificDetails.dlPath);
-        specificDetails.dlUrl = dlUrl;
+        // Create driver details
         await prisma.driverDetails.create({
           data: {
             userId,
-            ...specificDetails,
+            aadharNumber,
+            panNumber,
+            dlNumber,
+            vehicleNumber,
+            vehicleName,
+            vehicleCategory,
+            dlUrl,
+            permitUrls,
+            carFrontUrl,
+            carBackUrl,
           },
         });
-        break;
-      case "VENDOR":
-        const aadharFrontUrl = await uploadImage(
-          specificDetails.aadharFrontPath
-        );
-        const aadharBackUrl = await uploadImage(specificDetails.aadharBackPath);
-        const panUrl = await uploadImage(specificDetails.panPath);
-        specificDetails.aadharFrontUrl = aadharFrontUrl;
-        specificDetails.aadharBackUrl = aadharBackUrl;
-        specificDetails.panUrl = panUrl;
-        await prisma.vendorDetails.create({
+      } else if (type.toUpperCase() === "USER") {
+        // Create user details
+        await prisma.userDetails.create({
           data: {
             userId,
-            ...specificDetails,
           },
         });
-        break;
-      default:
-        await prisma.userDetails.create({
-          data: { userId },
-        });
-    }
+      } else {
+        return res.status(400).json({ error: "Invalid user type" });
+      }
 
-    res.json({ message: "Registration completed successfully" });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to complete registration" });
+      // Generate new token with updated user type
+      const token = jwt.sign(
+        { userId, userType: type.toUpperCase() },
+        process.env.JWT_SECRET!,
+        { expiresIn: "7d" }
+      );
+
+      res.json({
+        message: `${type} registration completed successfully`,
+        token,
+        userId: userId,
+      });
+    } catch (error) {
+      console.error("Registration error:", error);
+      res.status(500).json({
+        error: "Failed to complete registration",
+        details: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
   }
-});
+);
 
 // Admin registration (one-time setup)
 router.post("/admin-register", async (req: Request, res: Response) => {

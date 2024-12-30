@@ -174,9 +174,11 @@ model DriverDetails {
   permitUrls      String[]
   carFrontUrl     String?
   carBackUrl      String?
+  carLeftUrl      String?
+  carRightUrl     String?
+  carInteriorUrl  String?
   carCategory     String?
 }
-
 model VendorDetails {
   id             String  @id @default(uuid())
   userId         String  @unique
