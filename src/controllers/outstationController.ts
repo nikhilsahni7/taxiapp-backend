@@ -293,6 +293,15 @@ export const verifyAdvancePayment = async (req: Request, res: Response) => {
           receiverId: updatedBooking.driverId!,
           razorpayOrderId: razorpay_order_id,
           razorpayPaymentId: razorpay_payment_id,
+          description: `Advance payment for outstation taxisure ride ${bookingId}`,
+          metadata: {
+            bookingId,
+            paymentMode: updatedBooking.paymentMode,
+
+            advanceAmount: updatedBooking.advanceAmount,
+            remainingAmount: updatedBooking.remainingAmount,
+            totalAmount: updatedBooking.totalAmount,
+          },
         },
       });
 

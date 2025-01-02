@@ -24,7 +24,7 @@ router.get("/driver-wallet", verifyToken, async (req, res) => {
       where: { userId: driverId },
     });
 
-    // Get transactions
+    // Get regular transactions
     const transactions = await prisma.transaction.findMany({
       where: {
         OR: [{ senderId: driverId }, { receiverId: driverId }],
@@ -36,6 +36,29 @@ router.get("/driver-wallet", verifyToken, async (req, res) => {
         ride: true,
       },
     });
+
+    // Get long distance transactions
+    const longDistanceTransactions =
+      await prisma.longDistanceTransaction.findMany({
+        where: {
+          OR: [{ senderId: driverId }, { receiverId: driverId }],
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        include: {
+          booking: {
+            select: {
+              pickupLocation: true,
+              dropLocation: true,
+              totalAmount: true,
+              serviceType: true,
+              tripType: true,
+              status: true,
+            },
+          },
+        },
+      });
 
     res.json({
       balance: wallet?.balance || 0,
@@ -54,6 +77,27 @@ router.get("/driver-wallet", verifyToken, async (req, res) => {
               fare: tx.ride.fare,
             }
           : null,
+      })),
+      longDistanceTransactions: longDistanceTransactions.map((tx) => ({
+        id: tx.id,
+        amount: tx.amount,
+        type: tx.type,
+        status: tx.status,
+        description: tx.description,
+        createdAt: tx.createdAt,
+        bookingDetails: tx.booking
+          ? {
+              pickup: tx.booking.pickupLocation,
+              drop: tx.booking.dropLocation,
+              totalAmount: tx.booking.totalAmount,
+              serviceType: tx.booking.serviceType,
+              tripType: tx.booking.tripType,
+              bookingStatus: tx.booking.status,
+            }
+          : null,
+        paymentId: tx.razorpayPaymentId,
+        orderId: tx.razorpayOrderId,
+        metadata: tx.metadata,
       })),
     });
   } catch (error) {
