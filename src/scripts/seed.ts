@@ -57,14 +57,12 @@ async function main() {
 
   // Create Drivers
   for (const driverData of drivers) {
-    const hashedPassword = await bcrypt.hash(driverData.password, 10);
-
     const user = await prisma.user.upsert({
       where: { email: driverData.email },
       update: {},
       create: {
         phone: driverData.phone,
-        password: hashedPassword,
+
         name: driverData.name,
         email: driverData.email,
         userType: UserType.DRIVER,
@@ -141,14 +139,12 @@ async function main() {
   ];
 
   for (const userData of users) {
-    const hashedPassword = await bcrypt.hash(userData.password, 10);
-
     await prisma.user.upsert({
       where: { email: userData.email },
       update: {},
       create: {
         phone: userData.phone,
-        password: hashedPassword,
+
         name: userData.name,
         email: userData.email,
         userType: UserType.USER,

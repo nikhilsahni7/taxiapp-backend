@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "LongDistanceBooking" ADD COLUMN     "dropLat" DOUBLE PRECISION,
+ADD COLUMN     "dropLng" DOUBLE PRECISION,
+ADD COLUMN     "pickupLat" DOUBLE PRECISION,
+ADD COLUMN     "pickupLng" DOUBLE PRECISION;

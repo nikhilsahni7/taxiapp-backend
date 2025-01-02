@@ -16,6 +16,10 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_SECRET!,
 });
 
+// # RAZORPAY_KEY_ID="rzp_live_hfAQTM2pl9qyV7"
+
+// # RAZORPAY_SECRET="eCARS6to6Gmj5g3TRH5RtSNn"
+
 if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_SECRET) {
   console.error("Razorpay credentials are not configured properly");
 }

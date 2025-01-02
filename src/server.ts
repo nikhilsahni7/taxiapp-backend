@@ -11,14 +11,11 @@ import { paymentRouter } from "./routes/payment";
 import { walletRouter } from "./routes/wallet";
 import { adminRouter } from "./routes/admin";
 import { setupPaymentSocketEvents } from "./controllers/paymentController";
+import { outstationRouter } from "./routes/outstationRoutes";
 import {
   calculateDistance,
   calculateDuration,
 } from "./controllers/rideController";
-import {
-  isRideRequestValid,
-  calculatePickupMetrics,
-} from "./controllers/outstationController";
 
 const app = express();
 const server = http.createServer(app);
@@ -54,6 +51,7 @@ app.use("/api/drivers", driverRouter);
 app.use("/api/payments", paymentRouter);
 app.use("/api/wallets", walletRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/outstation", outstationRouter);
 
 app.use("/", (req, res) => {
   res.send("Welcome to the taxiSure API");
@@ -343,98 +341,84 @@ io.on("connection", (socket: Socket) => {
     }
   );
 
+  // Outstation booking socket events
   socket.on(
-    "accept_outstation_ride",
-    async (data: { rideId: string; driverId: string }) => {
+    "join_outstation_booking",
+    (data: { bookingId: string; userId: string }) => {
+      console.log("join_outstation_booking", data);
+      socket.join(data.bookingId);
+      socket.join(data.userId);
+    }
+  );
+
+  // Driver location updates for outstation
+  socket.on(
+    "outstation_driver_location",
+    async (data: {
+      bookingId: string;
+      driverId: string;
+      locationLat: number;
+      locationLng: number;
+    }) => {
       try {
-        // Check if ride request is still valid
-        if (!(await isRideRequestValid(data.rideId))) {
-          socket.emit("outstation_ride_response", {
-            success: false,
-            message: "Ride request has expired or is no longer available",
-          });
-          return;
-        }
-
-        // Get driver's current location
-        const driverStatus = await prisma.driverStatus.findUnique({
-          where: { driverId: data.driverId },
+        const booking = await prisma.longDistanceBooking.findUnique({
+          where: { id: data.bookingId },
+          select: { userId: true, status: true },
         });
 
-        if (!driverStatus) {
-          socket.emit("outstation_ride_response", {
-            success: false,
-            message: "Driver location not found",
-          });
-          return;
-        }
-
-        // Calculate pickup metrics
-        const pickupMetrics = await calculatePickupMetrics(
-          driverStatus,
-          (
-            await prisma.ride.findUnique({
-              where: { id: data.rideId },
-              select: { pickupLocation: true },
-            })
-          )?.pickupLocation || ""
-        );
-
-        const updatedRide = await prisma.ride.update({
-          where: {
-            id: data.rideId,
-            status: RideStatus.SEARCHING,
-          },
-          data: {
-            driverId: data.driverId,
-            status: RideStatus.ACCEPTED,
-            isDriverAccepted: true,
-            driverAcceptedAt: new Date(),
-            pickupDistance: pickupMetrics.pickupDistance,
-            pickupDuration: pickupMetrics.pickupDuration,
-          },
-          include: {
-            driver: {
-              select: {
-                name: true,
-                phone: true,
-                driverDetails: true,
-              },
+        if (booking && booking.status !== "CANCELLED") {
+          io.to(booking.userId).emit("driver_location_update", {
+            bookingId: data.bookingId,
+            location: {
+              lat: data.locationLat,
+              lng: data.locationLng,
             },
-          },
-        });
-
-        // Notify user
-        io.to(updatedRide.userId).emit("outstation_ride_accepted", {
-          rideId: updatedRide.id,
-          driver: updatedRide.driver,
-          pickupDistance: pickupMetrics.pickupDistance,
-          pickupDuration: pickupMetrics.pickupDuration,
-        });
-
-        // Notify other drivers
-        io.emit("outstation_ride_unavailable", { rideId: updatedRide.id });
-
-        socket.emit("outstation_ride_response", {
-          success: true,
-          message: "Ride accepted successfully",
-          ride: updatedRide,
-        });
+          });
+        }
       } catch (error) {
-        console.error("Error accepting outstation ride:", error);
-        socket.emit("outstation_ride_response", {
-          success: false,
-          message: "Failed to accept ride",
-        });
+        console.error("Error in location update:", error);
       }
     }
   );
-  socket.on("disconnect", async () => {
-    console.log("User disconnected:", socket.id);
-    await prisma.driverStatus.updateMany({
-      where: { socketId: socket.id },
-      data: { isOnline: false, socketId: null },
-    });
+
+  // Payment related events
+  socket.on(
+    "outstation_payment_initiated",
+    (data: { bookingId: string; type: "ADVANCE" | "FINAL" }) => {
+      console.log("outstation_payment_initiated", data);
+      io.to(data.bookingId).emit("payment_initiated", {
+        bookingId: data.bookingId,
+        type: data.type,
+      });
+    }
+  );
+
+  // Ride completion events
+  socket.on(
+    "outstation_ride_completion_initiated",
+
+    (data: { bookingId: string }) => {
+      console.log("outstation_ride_completion_initiated", data);
+      io.to(data.bookingId).emit("ride_completion_initiated", {
+        bookingId: data.bookingId,
+      });
+    }
+  );
+
+  socket.on(
+    "outstation_ride_completed",
+    (data: { bookingId: string; paymentMode: string }) => {
+      console.log("outstation_ride_completed", data);
+      io.to(data.bookingId).emit("ride_completed", {
+        bookingId: data.bookingId,
+        paymentMode: data.paymentMode,
+      });
+    }
+  );
+
+  // Handle disconnection
+  socket.on("disconnect", () => {
+    console.log("Client disconnected:", socket.id);
   });
 });
 

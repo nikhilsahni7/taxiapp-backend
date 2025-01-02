@@ -57,6 +57,26 @@ enum TransactionType {
   REFUND
 }
 
+// New enums for long distance services
+enum LongDistanceServiceType {
+  OUTSTATION
+  HILL_STATION
+  ALL_INDIA_TOUR
+  CHARDHAM_YATRA
+}
+
+enum LongDistanceBookingStatus {
+  PENDING
+  DRIVER_ACCEPTED
+  ADVANCE_PAID
+  DRIVER_PICKUP_STARTED
+  DRIVER_ARRIVED
+  STARTED
+  PAYMENT_PENDING
+  COMPLETED
+  CANCELLED
+}
+
 model User {
   id            String          @id @default(uuid())
   phone         String          @unique
@@ -84,6 +104,12 @@ model User {
   sentTransactions     Transaction[] @relation("SenderTransactions")
   receivedTransactions Transaction[] @relation("ReceiverTransactions")
   razorpayCustomerId   String?
+
+  // Long Distance Bookings
+  longDistanceBookingsAsUser    LongDistanceBooking[] @relation("UserLongDistanceBookings")
+  longDistanceBookingsAsDriver  LongDistanceBooking[] @relation("DriverLongDistanceBookings")
+  sentLongDistanceTransactions     LongDistanceTransaction[] @relation("SenderLongDistanceTransactions")
+  receivedLongDistanceTransactions LongDistanceTransaction[] @relation("ReceiverLongDistanceTransactions")
 }
 
 model Wallet {
@@ -126,7 +152,7 @@ model Ride {
   status         RideStatus
   pickupLocation String
   dropLocation   String
- pickupDistance Float?        // Distance from driver to pickup point
+  pickupDistance Float?        // Distance from driver to pickup point
   pickupDuration Int?         // Duration from driver to pickup point in minutes
   fare           Float?
   distance       Float?
@@ -146,7 +172,7 @@ model Ride {
   outstationType  OutstationTripType?
   isDriverAccepted Boolean        @default(false)
   driverAcceptedAt DateTime?
-   requestExpiresAt DateTime?
+  requestExpiresAt DateTime?
 
   user         User          @relation("UserRides", fields: [userId], references: [id])
   driver       User?         @relation("DriverRides", fields: [driverId], references: [id])
@@ -212,4 +238,98 @@ model DriverStatus {
   speed            Float?
   updatedAt   DateTime @updatedAt
   driver      User     @relation(fields: [driverId], references: [id])
+}
+
+// New model for long distance bookings
+model LongDistanceBooking {
+  id              String                  @id @default(uuid())
+  userId          String
+  driverId        String?
+  serviceType     LongDistanceServiceType
+  pickupLocation      String
+  pickupLat          Float?
+  pickupLng          Float?
+  dropLocation       String?
+  dropLat            Float?
+  dropLng            Float?
+  vehicleCategory String
+  distance        Float?        // Total trip distance in kilometers
+  duration        Int?   
+  startDate       DateTime
+  endDate         DateTime
+  pickupTime      String
+  totalDays       Int
+  
+  // Distance and duration from driver to pickup
+  pickupDistance  Float?
+  pickupDuration  Int?         // in minutes
+  
+  // Payment related
+  baseAmount      Float
+  taxAmount       Float
+  totalAmount     Float
+  advanceAmount   Float        // 25% of total
+  remainingAmount Float        // 75% of total
+  
+  // Payment tracking
+  advancePaymentId      String?
+  finalPaymentId        String?
+  finalPaymentMode      PaymentMode? @default(CASH)
+  advancePaymentStatus  TransactionStatus @default(PENDING)
+  finalPaymentStatus    TransactionStatus @default(PENDING)
+  
+  status          LongDistanceBookingStatus @default(PENDING)
+  otp             String?
+  
+  // For outstation specific
+  tripType        OutstationTripType?
+  paymentMode      PaymentMode    @default(CASH) 
+  // Timestamps
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  driverAcceptedAt  DateTime?
+  advancePaidAt     DateTime?
+  driverArrivedAt   DateTime?
+  rideStartedAt     DateTime?
+  rideEndedAt       DateTime?
+  
+  // Relations
+  user            User          @relation("UserLongDistanceBookings", fields: [userId], references: [id])
+  driver          User?         @relation("DriverLongDistanceBookings", fields: [driverId], references: [id])
+  transactions    LongDistanceTransaction[]
+  
+  // Metadata
+  notes           String?
+  cancelReason    String?
+  metadata        Json?
+}
+
+// New transaction model for long distance bookings
+model LongDistanceTransaction {
+  id                String            @id @default(uuid())
+  bookingId         String
+  amount            Float
+  currency          String            @default("INR")
+  type             LongDistanceTransactionType
+  status           TransactionStatus  @default(PENDING)
+  senderId         String?
+  receiverId       String?
+  razorpayOrderId  String?           @unique
+  razorpayPaymentId String?
+  
+  description      String?
+  metadata         Json?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+
+  // Relations
+  booking          LongDistanceBooking @relation(fields: [bookingId], references: [id])
+  sender           User?       @relation("SenderLongDistanceTransactions", fields: [senderId], references: [id])
+  receiver         User?       @relation("ReceiverLongDistanceTransactions", fields: [receiverId], references: [id])
+}
+
+enum LongDistanceTransactionType {
+  BOOKING_ADVANCE
+  BOOKING_FINAL
+  REFUND
 }

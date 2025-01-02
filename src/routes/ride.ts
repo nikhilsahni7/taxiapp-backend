@@ -8,11 +8,7 @@ import {
   getFareEstimation,
 } from "../controllers/rideController";
 import { verifyToken } from "../middlewares/auth";
-import {
-  getOutstationFareEstimate,
-  createOutstationRide,
-  getOutstationRequests,
-} from "../controllers/outstationController";
+import { getOutstationFareEstimate } from "../controllers/outstationController";
 
 const router = express.Router();
 
@@ -25,7 +21,5 @@ router.post(
   verifyToken,
   getOutstationFareEstimate
 );
-router.post("/outstation", verifyToken, createOutstationRide);
-router.get("/outstation/requests", verifyToken, getOutstationRequests);
 
 export { router as rideRouter };
