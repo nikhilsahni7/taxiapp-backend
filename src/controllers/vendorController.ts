@@ -513,24 +513,19 @@ export const getVendorBookings = async (req: Request, res: Response) => {
     const where = {
       ...(req.user.userType === "VENDOR"
         ? {
-            // If vendor, show their own bookings
             vendorId: req.user.userId,
           }
         : req.user.userType === "DRIVER"
         ? {
-            // For drivers: show all pending bookings and their accepted ones
-            OR: [
-              { status: VendorBookingStatus.PENDING }, // All available bookings
-              {
-                AND: [
-                  { driverId: req.user.userId },
-                  { status: { not: VendorBookingStatus.PENDING } },
-                ],
-              }, // Their accepted bookings
-            ],
+            // For drivers: show only pending bookings if no status specified
+            ...(status
+              ? {
+                  status: status as VendorBookingStatus,
+                  driverId: req.user.userId,
+                }
+              : { status: VendorBookingStatus.PENDING }),
           }
         : {}),
-      ...(status ? { status: status as VendorBookingStatus } : {}),
     };
 
     const bookings = await prisma.vendorBooking.findMany({
