@@ -61,8 +61,8 @@ enum TransactionType {
 enum LongDistanceServiceType {
   OUTSTATION
   HILL_STATION
-  ALL_INDIA_TOUR
   CHARDHAM_YATRA
+  ALL_INDIA_TOUR
 }
 
 enum LongDistanceBookingStatus {
@@ -110,6 +110,12 @@ model User {
   longDistanceBookingsAsDriver  LongDistanceBooking[] @relation("DriverLongDistanceBookings")
   sentLongDistanceTransactions     LongDistanceTransaction[] @relation("SenderLongDistanceTransactions")
   receivedLongDistanceTransactions LongDistanceTransaction[] @relation("ReceiverLongDistanceTransactions")
+
+  // Vendor Bookings
+  vendorBookings          VendorBooking[] @relation("VendorBookings")
+  driverVendorBookings    VendorBooking[] @relation("DriverVendorBookings")
+  sentVendorTransactions     VendorBookingTransaction[] @relation("SentVendorTransactions")
+  receivedVendorTransactions VendorBookingTransaction[] @relation("ReceivedVendorTransactions")
 }
 
 model Wallet {
@@ -206,15 +212,20 @@ model DriverDetails {
   carCategory     String?
 }
 model VendorDetails {
-  id             String  @id @default(uuid())
-  userId         String  @unique
-  user           User    @relation(fields: [userId], references: [id])
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id])
   businessName   String?
+  address        String?
+  experience     String?
+  gstNumber      String?
   aadharNumber   String?
   panNumber      String?
   aadharFrontUrl String?
   aadharBackUrl  String?
   panUrl         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 
 model OTP {
@@ -268,8 +279,9 @@ model LongDistanceBooking {
   baseAmount      Float
   taxAmount       Float
   totalAmount     Float
-  advanceAmount   Float        // 25% of total
+  advanceAmount   Float        // 25% of total 
   remainingAmount Float        // 75% of total
+  commission      Float    @default(0)   // 12% of total
   
   // Payment tracking
   advancePaymentId      String?
@@ -282,7 +294,7 @@ model LongDistanceBooking {
   otp             String?
   
   // For outstation specific
-  tripType        OutstationTripType?
+  tripType        OutstationTripType? @default(ONE_WAY)
   paymentMode      PaymentMode    @default(CASH) 
   // Timestamps
   createdAt         DateTime  @default(now())
@@ -332,4 +344,91 @@ enum LongDistanceTransactionType {
   BOOKING_ADVANCE
   BOOKING_FINAL
   REFUND
+}
+
+// Add new models for vendor bookings
+model VendorBooking {
+  id              String                  @id @default(uuid())
+  vendorId        String
+  driverId        String?
+  serviceType     LongDistanceServiceType
+  pickupLocation  String
+  pickupLat       Float?
+  pickupLng       Float?
+  dropLocation    String
+  dropLat         Float?
+  dropLng         Float?
+  vehicleCategory String
+  distance        Float?
+  duration        Int?
+  startDate       DateTime
+  endDate         DateTime
+  pickupTime      String
+  totalDays       Int
+
+  // Pricing
+  appBasePrice    Float    // Our app's base price
+  vendorPrice     Float    // Vendor's total price
+  vendorCommission Float   // Vendor's commission (vendorPrice - appBasePrice)
+  appCommission   Float    // Our commission (12% of appBasePrice + 10% of vendorCommission)
+  driverPayout    Float    // Amount to be paid to driver
+  vendorPayout    Float    // Amount to be paid to vendor
+
+  // Payment tracking
+  driverCommissionPaid Boolean @default(false)
+  vendorPaidAt         DateTime?
+  
+  status          VendorBookingStatus @default(PENDING)
+  notes           String?
+
+  // Timestamps
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  driverAcceptedAt  DateTime?
+  rideStartedAt     DateTime?
+  rideEndedAt       DateTime?
+
+  // Relations
+  vendor           User     @relation("VendorBookings", fields: [vendorId], references: [id])
+  driver           User?    @relation("DriverVendorBookings", fields: [driverId], references: [id])
+  transactions     VendorBookingTransaction[]
+
+  tripType        OutstationTripType?
+
+  @@map("vendor_bookings")
+}
+
+model VendorBookingTransaction {
+  id                String    @id @default(uuid())
+  bookingId         String
+  amount            Float
+  type              VendorBookingTransactionType 
+  status            TransactionStatus @default(PENDING)
+  senderId          String
+  receiverId        String
+  description       String?
+  metadata          Json?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  booking           VendorBooking @relation(fields: [bookingId], references: [id])
+  sender            User    @relation("SentVendorTransactions", fields: [senderId], references: [id])
+  receiver          User    @relation("ReceivedVendorTransactions", fields: [receiverId], references: [id])
+
+  @@map("vendor_booking_transactions")
+}
+
+enum VendorBookingStatus {
+  PENDING
+  DRIVER_ACCEPTED
+  STARTED
+  COMPLETED
+}
+
+
+enum VendorBookingTransactionType {
+  DRIVER_COMMISSION
+  VENDOR_PAYOUT
+  APP_COMMISSION
+  DRIVER_PAYOUT
 }

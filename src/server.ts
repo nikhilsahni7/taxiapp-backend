@@ -12,6 +12,8 @@ import { walletRouter } from "./routes/wallet";
 import { adminRouter } from "./routes/admin";
 import { setupPaymentSocketEvents } from "./controllers/paymentController";
 import { outstationRouter } from "./routes/outstationRoutes";
+import { hillStationRouter } from "./routes/hillStationRoutes";
+import { vendorRouter } from "./routes/vendorRoutes";
 import {
   calculateDistance,
   calculateDuration,
@@ -37,7 +39,8 @@ app.use(
     allowedHeaders: ["Content-Type"],
   })
 );
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
+app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 app.set("io", io);
 
@@ -52,6 +55,8 @@ app.use("/api/payments", paymentRouter);
 app.use("/api/wallets", walletRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/outstation", outstationRouter);
+app.use("/api/hill-station", hillStationRouter);
+app.use("/api/vendor", vendorRouter);
 
 app.use("/", (req, res) => {
   res.send("Welcome to the taxiSure API");
@@ -412,6 +417,195 @@ io.on("connection", (socket: Socket) => {
       io.to(data.bookingId).emit("ride_completed", {
         bookingId: data.bookingId,
         paymentMode: data.paymentMode,
+      });
+    }
+  );
+
+  // Hill station booking socket events
+  socket.on(
+    "join_hill_station_booking",
+    (data: { bookingId: string; userId: string }) => {
+      console.log("join_hill_station_booking", data);
+      socket.join(data.bookingId);
+      socket.join(data.userId);
+    }
+  );
+
+  // Driver location updates for hill station
+  socket.on(
+    "hill_station_driver_location",
+    async (data: {
+      bookingId: string;
+      driverId: string;
+      locationLat: number;
+      locationLng: number;
+      heading?: number;
+      speed?: number;
+    }) => {
+      try {
+        const booking = await prisma.longDistanceBooking.findUnique({
+          where: {
+            id: data.bookingId,
+            serviceType: "HILL_STATION",
+          },
+          select: { userId: true, status: true },
+        });
+
+        if (booking && booking.status !== "CANCELLED") {
+          io.to(booking.userId).emit("driver_location_update", {
+            bookingId: data.bookingId,
+            location: {
+              lat: data.locationLat,
+              lng: data.locationLng,
+              heading: data.heading,
+              speed: data.speed,
+            },
+          });
+        }
+      } catch (error) {
+        console.error("Error in hill station location update:", error);
+      }
+    }
+  );
+
+  // Payment related events for hill station
+  socket.on(
+    "hill_station_payment_initiated",
+    (data: {
+      bookingId: string;
+      type: "ADVANCE" | "FINAL";
+      amount: number;
+    }) => {
+      console.log("hill_station_payment_initiated", data);
+      io.to(data.bookingId).emit("payment_initiated", {
+        bookingId: data.bookingId,
+        type: data.type,
+        amount: data.amount,
+      });
+    }
+  );
+
+  // Ride status events for hill station
+  socket.on(
+    "hill_station_driver_pickup_started",
+    (data: { bookingId: string; driverId: string; estimatedTime?: number }) => {
+      console.log("hill_station_driver_pickup_started", data);
+      io.to(data.bookingId).emit("driver_pickup_started", {
+        bookingId: data.bookingId,
+        driverId: data.driverId,
+        estimatedTime: data.estimatedTime,
+      });
+    }
+  );
+
+  socket.on(
+    "hill_station_driver_arrived",
+    (data: { bookingId: string; driverId: string }) => {
+      console.log("hill_station_driver_arrived", data);
+      io.to(data.bookingId).emit("driver_arrived", {
+        bookingId: data.bookingId,
+        driverId: data.driverId,
+      });
+    }
+  );
+
+  socket.on(
+    "hill_station_ride_started",
+    (data: { bookingId: string; driverId: string }) => {
+      console.log("hill_station_ride_started", data);
+      io.to(data.bookingId).emit("ride_started", {
+        bookingId: data.bookingId,
+        driverId: data.driverId,
+      });
+    }
+  );
+
+  // Ride completion events for hill station
+  socket.on(
+    "hill_station_ride_completion_initiated",
+    (data: {
+      bookingId: string;
+      remainingAmount: number;
+      driverDetails?: {
+        name: string;
+        phone: string;
+      };
+    }) => {
+      console.log("hill_station_ride_completion_initiated", data);
+      io.to(data.bookingId).emit("ride_completion_initiated", {
+        bookingId: data.bookingId,
+        remainingAmount: data.remainingAmount,
+        driverDetails: data.driverDetails,
+      });
+    }
+  );
+
+  socket.on(
+    "hill_station_ride_completed",
+    (data: {
+      bookingId: string;
+      paymentMode: string;
+      paymentStatus: string;
+      amount: number;
+      userDetails?: {
+        name: string;
+        phone: string;
+      };
+      driverDetails?: {
+        name: string;
+        phone: string;
+      };
+    }) => {
+      console.log("hill_station_ride_completed", data);
+      io.to(data.bookingId).emit("ride_completed", {
+        bookingId: data.bookingId,
+        paymentMode: data.paymentMode,
+        paymentStatus: data.paymentStatus,
+        amount: data.amount,
+        userDetails: data.userDetails,
+        driverDetails: data.driverDetails,
+      });
+    }
+  );
+
+  // Booking cancellation event
+  socket.on(
+    "hill_station_booking_cancelled",
+    (data: {
+      bookingId: string;
+      reason: string;
+      cancelledBy: string;
+      userId: string;
+      driverId?: string;
+    }) => {
+      console.log("hill_station_booking_cancelled", data);
+
+      // Notify both user and driver if exists
+      io.to(data.userId).emit("booking_cancelled", {
+        bookingId: data.bookingId,
+        reason: data.reason,
+        cancelledBy: data.cancelledBy,
+      });
+
+      if (data.driverId) {
+        io.to(data.driverId).emit("booking_cancelled", {
+          bookingId: data.bookingId,
+          reason: data.reason,
+          cancelledBy: data.cancelledBy,
+        });
+      }
+    }
+  );
+
+  // Error handling for hill station events
+  socket.on(
+    "hill_station_error",
+    (data: { bookingId: string; error: string; type: string }) => {
+      console.error("Hill station error:", data);
+      io.to(data.bookingId).emit("booking_error", {
+        bookingId: data.bookingId,
+        error: data.error,
+        type: data.type,
       });
     }
   );
