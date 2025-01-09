@@ -385,7 +385,7 @@ router.post("/vendor-sign-in", async (req: Request, res: Response) => {
 
     const token = jwt.sign(
       {
-        userId: vendor.id,""
+        userId: vendor.id,
         userType: vendor.userType,
       },
       process.env.JWT_SECRET!,
