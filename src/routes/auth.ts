@@ -193,6 +193,217 @@ router.post("/verify-driver-otp", async (req: Request, res: Response) => {
   }
 });
 
+// Verify OTP and create vendor
+router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
+  try {
+    const { phone, otp } = req.body;
+
+    // Validate input
+    if (!phone || !otp) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Check if vendor already exists
+    const existingVendor = await prisma.user.findUnique({
+      where: {
+        phone,
+        userType: "VENDOR",
+      },
+    });
+
+    if (existingVendor) {
+      return res.status(400).json({ error: "Vendor already exists" });
+    }
+
+    const validOTP = await prisma.oTP.findFirst({
+      where: {
+        phone,
+        code: otp,
+        verified: false,
+        expiresAt: { gte: new Date() },
+      },
+    });
+
+    if (!validOTP) {
+      return res.status(400).json({ error: "Invalid or expired OTP" });
+    }
+
+    // Mark OTP as verified
+    await prisma.oTP.update({
+      where: { id: validOTP.id },
+      data: { verified: true },
+    });
+
+    // Create vendor with verified status
+    const vendor = await prisma.user.create({
+      data: {
+        phone,
+        userType: "VENDOR",
+        verified: true,
+      },
+    });
+
+    const token = jwt.sign(
+      { userId: vendor.id, userType: vendor.userType },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      userId: vendor.id,
+      message: "Vendor verified and created successfully",
+    });
+  } catch (error: any) {
+    console.error("Verify Vendor OTP error:", error);
+    res.status(500).json({
+      error: error.message || "Failed to verify OTP",
+    });
+  }
+});
+
+// Vendor registration endpoint
+router.post(
+  "/vendor-register",
+  verifyToken,
+  upload.fields([
+    { name: "aadharFront", maxCount: 1 },
+    { name: "aadharBack", maxCount: 1 },
+    { name: "panCard", maxCount: 1 },
+  ]),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user.userId;
+      const files = req.files as
+        | { [fieldname: string]: Express.Multer.File[] }
+        | undefined;
+
+      const {
+        businessName,
+        address,
+        experience,
+        gstNumber,
+        aadharNumber,
+        panNumber,
+      } = req.body;
+
+      // Upload documents
+      const aadharFrontUrl = files?.["aadharFront"]?.[0]
+        ? await uploadImage(files["aadharFront"][0].buffer)
+        : null;
+      const aadharBackUrl = files?.["aadharBack"]?.[0]
+        ? await uploadImage(files["aadharBack"][0].buffer)
+        : null;
+      const panUrl = files?.["panCard"]?.[0]
+        ? await uploadImage(files["panCard"][0].buffer)
+        : null;
+
+      // Update user type to VENDOR
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          userType: "VENDOR",
+        },
+      });
+
+      // Create vendor details
+      await prisma.vendorDetails.create({
+        data: {
+          userId,
+          businessName,
+          address,
+          experience,
+          gstNumber,
+          aadharNumber,
+          panNumber,
+          aadharFrontUrl,
+          aadharBackUrl,
+          panUrl,
+        },
+      });
+
+      // Generate new token with updated user type
+      const token = jwt.sign(
+        { userId, userType: "VENDOR" },
+        process.env.JWT_SECRET!,
+        { expiresIn: "7d" }
+      );
+
+      const user = await prisma.user.findUnique({
+        where: {
+          id: userId,
+          userType: "VENDOR",
+        },
+        include: { vendorDetails: true },
+      });
+
+      res.json({
+        message: "Vendor registration completed successfully",
+        token,
+        userId,
+        userType: "VENDOR",
+        name: user?.name,
+        phone: user?.phone,
+        verified: user?.verified,
+      });
+    } catch (error) {
+      console.error("Vendor registration error:", error);
+      res.status(500).json({
+        error: "Failed to complete vendor registration",
+        details: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
+);
+
+// Vendor sign-in
+router.post("/vendor-sign-in", async (req: Request, res: Response) => {
+  try {
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ error: "Phone number is required" });
+    }
+
+    const vendor = await prisma.user.findFirst({
+      where: {
+        phone,
+        userType: "VENDOR",
+      },
+      include: {
+        vendorDetails: true,
+      },
+    });
+
+    if (!vendor || !vendor.verified) {
+      return res
+        .status(401)
+        .json({ error: "Invalid phone number or vendor not verified" });
+    }
+
+    const token = jwt.sign(
+      {
+        userId: vendor.id,
+        userType: vendor.userType,
+      },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      vendorId: vendor.id,
+      name: vendor.name,
+      phone: vendor.phone,
+      verified: vendor.verified,
+      vendorDetails: vendor.vendorDetails,
+    });
+  } catch (error) {
+    console.error("Vendor sign-in error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Sign In (simplified to use phone number only)
 router.post("/sign-in", async (req: Request, res: Response) => {
   try {
@@ -211,7 +422,14 @@ router.post("/sign-in", async (req: Request, res: Response) => {
       { expiresIn: "7d" }
     );
 
-    res.json({ token, userId: user.id });
+    res.json({
+      token,
+      userId: user.id,
+      userType: user.userType,
+      name: user.name,
+      phone: user.phone,
+      verified: user.verified,
+    });
   } catch (error) {
     res.status(500).json({ error: "Failed to sign in" });
   }
