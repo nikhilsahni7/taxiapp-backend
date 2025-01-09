@@ -228,4 +228,110 @@ router.get("/:id/rides", verifyToken, async (req: Request, res: Response) => {
   }
 });
 
+// Get vendor profile
+router.get(
+  "/vendor/profile",
+  verifyToken,
+  async (req: Request, res: Response) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      const userId = req.user.userId;
+
+      const vendor = await prisma.user.findUnique({
+        where: {
+          id: userId,
+          userType: "VENDOR",
+        },
+        include: {
+          vendorDetails: true,
+          vendorBookings: {
+            orderBy: { createdAt: "desc" },
+            take: 10, // Optional: limit recent bookings
+          },
+        },
+      });
+
+      if (!vendor) {
+        return res.status(404).json({ error: "Vendor not found" });
+      }
+
+      res.json(vendor);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch vendor profile" });
+    }
+  }
+);
+
+// Update vendor profile
+router.put(
+  "/vendor/profile",
+  verifyToken,
+  async (req: Request, res: Response) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      const userId = req.user.userId;
+
+      const {
+        name,
+        email,
+        state,
+        city,
+        vendorDetails: {
+          businessName,
+          address,
+          experience,
+          gstNumber,
+          aadharNumber,
+          panNumber,
+        },
+      } = req.body;
+
+      const updatedVendor = await prisma.user.update({
+        where: {
+          id: userId,
+          userType: "VENDOR",
+        },
+        data: {
+          name,
+          email,
+          state,
+          city,
+          vendorDetails: {
+            upsert: {
+              create: {
+                businessName,
+                address,
+                experience,
+                gstNumber,
+                aadharNumber,
+                panNumber,
+              },
+              update: {
+                businessName,
+                address,
+                experience,
+                gstNumber,
+                aadharNumber,
+                panNumber,
+              },
+            },
+          },
+        },
+        include: {
+          vendorDetails: true,
+        },
+      });
+
+      res.json(updatedVendor);
+    } catch (error) {
+      console.error("Error updating vendor:", error);
+      res.status(500).json({ error: "Failed to update vendor profile" });
+    }
+  }
+);
+
 export { router as userRouter };

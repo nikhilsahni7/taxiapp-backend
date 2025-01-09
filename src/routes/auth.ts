@@ -376,14 +376,16 @@ router.post("/vendor-sign-in", async (req: Request, res: Response) => {
     });
 
     if (!vendor || !vendor.verified) {
-      return res
-        .status(401)
-        .json({ error: "Invalid phone number or vendor not verified" });
+      return res.status(401).json({
+        error: "Invalid phone number or vendor not verified",
+        vendor: vendor,
+        vendorDetails: vendor?.vendorDetails,
+      });
     }
 
     const token = jwt.sign(
       {
-        userId: vendor.id,
+        userId: vendor.id,""
         userType: vendor.userType,
       },
       process.env.JWT_SECRET!,
