@@ -3,6 +3,10 @@ import express from "express";
 import { PrismaClient } from "@prisma/client";
 
 import { verifyToken } from "../middlewares/auth";
+import {
+  getDriverRideHistory,
+  getDriverCurrentRide,
+} from "../controllers/driverController";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -175,5 +179,11 @@ router.get("/current-status/:driverId", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch driver status" });
   }
 });
+
+// Get driver's ride history
+router.get("/:driverId/ride-history", getDriverRideHistory);
+
+// Get driver's current ride
+router.get("/:driverId/current-ride", getDriverCurrentRide);
 
 export { router as driverRouter };

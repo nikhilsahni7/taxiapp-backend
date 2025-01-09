@@ -62,6 +62,10 @@ export const handleRideEnd = async (req: Request, res: Response) => {
           ride.paymentMode === PaymentMode.CASH
             ? RideStatus.RIDE_ENDED
             : RideStatus.PAYMENT_PENDING,
+        paymentStatus:
+          ride.paymentMode === PaymentMode.CASH
+            ? TransactionStatus.COMPLETED
+            : TransactionStatus.PENDING,
       },
       include: {
         user: true,

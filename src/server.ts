@@ -14,6 +14,7 @@ import { setupPaymentSocketEvents } from "./controllers/paymentController";
 import { outstationRouter } from "./routes/outstationRoutes";
 import { hillStationRouter } from "./routes/hillStationRoutes";
 import { vendorRouter } from "./routes/vendorRoutes";
+import { allIndiaRoutes } from "./routes/allIndiaRoutes";
 import {
   calculateDistance,
   calculateDuration,
@@ -57,7 +58,7 @@ app.use("/api/admin", adminRouter);
 app.use("/api/outstation", outstationRouter);
 app.use("/api/hill-station", hillStationRouter);
 app.use("/api/vendor", vendorRouter);
-
+app.use("/api/all-india", allIndiaRoutes);
 app.use("/", (req, res) => {
   res.send("Welcome to the taxiSure API");
 });
@@ -606,6 +607,170 @@ io.on("connection", (socket: Socket) => {
         bookingId: data.bookingId,
         error: data.error,
         type: data.type,
+      });
+    }
+  );
+
+  // All India Tour booking socket events
+  socket.on(
+    "join_all_india_booking",
+    (data: { bookingId: string; userId: string }) => {
+      console.log("join_all_india_booking", data);
+      socket.join(data.bookingId);
+      socket.join(data.userId);
+    }
+  );
+
+  // Driver location updates for All India Tour
+  socket.on(
+    "all_india_driver_location",
+    async (data: {
+      bookingId: string;
+      driverId: string;
+      locationLat: number;
+      locationLng: number;
+      heading?: number;
+      speed?: number;
+    }) => {
+      try {
+        const booking = await prisma.longDistanceBooking.findUnique({
+          where: {
+            id: data.bookingId,
+            serviceType: "ALL_INDIA_TOUR",
+          },
+          select: { userId: true, status: true },
+        });
+
+        if (booking && booking.status !== "CANCELLED") {
+          io.to(booking.userId).emit("driver_location_update", {
+            bookingId: data.bookingId,
+            location: {
+              lat: data.locationLat,
+              lng: data.locationLng,
+              heading: data.heading,
+              speed: data.speed,
+            },
+          });
+        }
+      } catch (error) {
+        console.error("Error in All India location update:", error);
+      }
+    }
+  );
+
+  // Payment related events for All India Tour
+  socket.on(
+    "all_india_payment_initiated",
+    (data: {
+      bookingId: string;
+      type: "ADVANCE" | "FINAL";
+      amount: number;
+      driverDetails?: {
+        name: string;
+        phone: string;
+      };
+    }) => {
+      console.log("all_india_payment_initiated", data);
+      io.to(data.bookingId).emit("payment_initiated", {
+        bookingId: data.bookingId,
+        type: data.type,
+        amount: data.amount,
+        driverDetails: data.driverDetails,
+      });
+    }
+  );
+
+  // Ride completion events for All India Tour
+  socket.on(
+    "all_india_ride_completion_initiated",
+    (data: {
+      bookingId: string;
+      remainingAmount: number;
+      driverDetails?: {
+        name: string;
+        phone: string;
+      };
+    }) => {
+      console.log("all_india_ride_completion_initiated", data);
+      io.to(data.bookingId).emit("ride_completion_initiated", {
+        bookingId: data.bookingId,
+        remainingAmount: data.remainingAmount,
+        driverDetails: data.driverDetails,
+        serviceType: "ALL_INDIA_TOUR",
+      });
+    }
+  );
+
+  socket.on(
+    "all_india_ride_completed",
+    (data: {
+      bookingId: string;
+      paymentMode: string;
+      paymentStatus: string;
+      amount: number;
+      userDetails?: {
+        name: string;
+        phone: string;
+      };
+      driverDetails?: {
+        name: string;
+        phone: string;
+      };
+    }) => {
+      console.log("all_india_ride_completed", data);
+      io.to(data.bookingId).emit("ride_completed", {
+        bookingId: data.bookingId,
+        paymentMode: data.paymentMode,
+        paymentStatus: data.paymentStatus,
+        amount: data.amount,
+        userDetails: data.userDetails,
+        driverDetails: data.driverDetails,
+        serviceType: "ALL_INDIA_TOUR",
+      });
+    }
+  );
+
+  // Booking cancellation event for All India Tour
+  socket.on(
+    "all_india_booking_cancelled",
+    (data: {
+      bookingId: string;
+      reason: string;
+      cancelledBy: string;
+      userId: string;
+      driverId?: string;
+    }) => {
+      console.log("all_india_booking_cancelled", data);
+
+      // Notify both user and driver if exists
+      io.to(data.userId).emit("booking_cancelled", {
+        bookingId: data.bookingId,
+        reason: data.reason,
+        cancelledBy: data.cancelledBy,
+        serviceType: "ALL_INDIA_TOUR",
+      });
+
+      if (data.driverId) {
+        io.to(data.driverId).emit("booking_cancelled", {
+          bookingId: data.bookingId,
+          reason: data.reason,
+          cancelledBy: data.cancelledBy,
+          serviceType: "ALL_INDIA_TOUR",
+        });
+      }
+    }
+  );
+
+  // Error handling for All India Tour events
+  socket.on(
+    "all_india_error",
+    (data: { bookingId: string; error: string; type: string }) => {
+      console.error("All India Tour error:", data);
+      io.to(data.bookingId).emit("booking_error", {
+        bookingId: data.bookingId,
+        error: data.error,
+        type: data.type,
+        serviceType: "ALL_INDIA_TOUR",
       });
     }
   );

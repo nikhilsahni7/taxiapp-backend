@@ -308,6 +308,7 @@ export const verifyAdvancePayment = async (req: Request, res: Response) => {
         },
         data: {
           status: "ADVANCE_PAID",
+          advancePaymentStatus: "COMPLETED",
           advancePaidAt: new Date(),
           advancePaymentId: razorpay_payment_id,
         },

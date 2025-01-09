@@ -323,6 +323,7 @@ export const verifyDriverCommissionPayment = async (
           status: "DRIVER_ACCEPTED",
           driverId: req.user!.userId,
           driverAcceptedAt: new Date(),
+          driverCommissionPaid: true,
         },
       });
 
@@ -510,6 +511,16 @@ export const getVendorBookings = async (req: Request, res: Response) => {
   const { status, page = 1, limit = 10 } = req.query;
 
   try {
+    //For drivers, first get their vehicle category
+    let driverVehicleCategory;
+    if (req.user.userType === "DRIVER") {
+      const driverDetails = await prisma.driverDetails.findUnique({
+        where: { userId: req.user.userId },
+        select: { vehicleCategory: true },
+      });
+      driverVehicleCategory = driverDetails?.vehicleCategory;
+    }
+
     const where = {
       ...(req.user.userType === "VENDOR"
         ? {
@@ -518,12 +529,16 @@ export const getVendorBookings = async (req: Request, res: Response) => {
         : req.user.userType === "DRIVER"
         ? {
             // For drivers: show only pending bookings if no status specified
+            // AND match their vehicle category
             ...(status
               ? {
                   status: status as VendorBookingStatus,
                   driverId: req.user.userId,
                 }
-              : { status: VendorBookingStatus.PENDING }),
+              : {
+                  status: VendorBookingStatus.PENDING,
+                  vehicleCategory: driverVehicleCategory, // Only show bookings matching driver's vehicle
+                }),
           }
         : {}),
     };

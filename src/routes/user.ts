@@ -124,4 +124,108 @@ router.delete("/:id", verifyToken, async (req: Request, res: Response) => {
   }
 });
 
+// Get all rides for a user (local and long distance rides)
+router.get("/:id/rides", verifyToken, async (req: Request, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const userId = req.user.userId;
+
+    // Get local rides with full details
+    const localRides = await prisma.ride.findMany({
+      where: { userId },
+      include: {
+        driver: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            email: true,
+            driverDetails: {
+              select: {
+                vehicleName: true,
+                vehicleNumber: true,
+                vehicleCategory: true,
+              },
+            },
+            driverStatus: {
+              select: {
+                isOnline: true,
+                locationLat: true,
+                locationLng: true,
+              },
+            },
+          },
+        },
+        transactions: {
+          select: {
+            id: true,
+            amount: true,
+            status: true,
+            type: true,
+            razorpayOrderId: true,
+            razorpayPaymentId: true,
+            createdAt: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    // Get long distance rides with full details
+    const longDistanceRides = await prisma.longDistanceBooking.findMany({
+      where: { userId },
+      include: {
+        driver: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            email: true,
+            driverDetails: {
+              select: {
+                vehicleName: true,
+                vehicleNumber: true,
+                vehicleCategory: true,
+              },
+            },
+            driverStatus: {
+              select: {
+                isOnline: true,
+                locationLat: true,
+                locationLng: true,
+              },
+            },
+          },
+        },
+        transactions: {
+          select: {
+            id: true,
+            amount: true,
+            status: true,
+            type: true,
+            razorpayOrderId: true,
+            razorpayPaymentId: true,
+            createdAt: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    res.json({
+      localRides,
+      longDistanceRides,
+    });
+  } catch (error) {
+    console.error("Error fetching rides:", error);
+    res.status(500).json({ error: "Failed to fetch rides" });
+  }
+});
+
 export { router as userRouter };
