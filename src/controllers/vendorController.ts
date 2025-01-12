@@ -16,17 +16,17 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_SECRET!,
 });
 
-// Define service rates with proper types
-const SERVICE_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
+// Define the rates with proper type
+const VENDOR_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
   OUTSTATION: {
-    mini: { base: 11 },
-    sedan: { base: 14 },
-    ertiga: { base: 18 },
-    innova: { base: 24 },
-    tempo_12: { fixed: 7000, extra: 23 },
-    tempo_16: { fixed: 8000, extra: 26 },
-    tempo_20: { fixed: 9000, extra: 30 },
-    tempo_26: { fixed: 10000, extra: 35 },
+    mini: { base: 11, short: 14 },
+    sedan: { base: 14, short: 19 },
+    ertiga: { base: 18, short: 24 },
+    innova: { base: 24, short: 27 },
+    tempo_12: { fixed: 14000, extra: 23 },
+    tempo_16: { fixed: 16000, extra: 26 },
+    tempo_20: { fixed: 18000, extra: 30 },
+    tempo_26: { fixed: 20000, extra: 35 },
   },
   HILL_STATION: {
     mini: { base: 20 },
@@ -38,6 +38,16 @@ const SERVICE_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
     tempo_20: { fixed: 9000, extra: 30 },
     tempo_26: { fixed: 10000, extra: 35 },
   },
+  ALL_INDIA_TOUR: {
+    mini: { perDay: 3000, extraKm: 16 },
+    sedan: { perDay: 3500, extraKm: 19 },
+    ertiga: { perDay: 4800, extraKm: 21 },
+    innova: { perDay: 5600, extraKm: 22 },
+    tempo_12: { perDay: 7000, extraKm: 23 },
+    tempo_16: { perDay: 8000, extraKm: 26 },
+    tempo_20: { perDay: 9000, extraKm: 30 },
+    tempo_26: { perDay: 10000, extraKm: 35 },
+  },
   CHARDHAM_YATRA: {
     mini: { base: 25 },
     sedan: { base: 30 },
@@ -47,16 +57,6 @@ const SERVICE_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
     tempo_16: { fixed: 9000, extra: 28 },
     tempo_20: { fixed: 10000, extra: 32 },
     tempo_26: { fixed: 11000, extra: 37 },
-  },
-  ALL_INDIA_TOUR: {
-    mini: { base: 18 },
-    sedan: { base: 22 },
-    ertiga: { base: 25 },
-    innova: { base: 30 },
-    tempo_12: { fixed: 6000, extra: 20 },
-    tempo_16: { fixed: 7000, extra: 23 },
-    tempo_20: { fixed: 8000, extra: 27 },
-    tempo_26: { fixed: 9000, extra: 32 },
   },
 };
 
@@ -110,32 +110,32 @@ export const getVendorFareEstimate = async (req: Request, res: Response) => {
       { lat: dropLocation.lat, lng: dropLocation.lng }
     );
 
-    // Validate tempo vehicle restrictions
     if (vehicleType.startsWith("tempo_") && tripType !== "ROUND_TRIP") {
       return res.status(400).json({
         error: "Tempo vehicles are only available for round trips",
       });
     }
 
-    const appBasePrice = calculateAppBasePrice(
+    const baseFare = calculateAppBasePrice(
       distance,
       vehicleType,
       serviceType,
       tripType
     );
 
-    const vendorCommission = vendorPrice - appBasePrice;
-    const appCommissionFromBase = appBasePrice * 0.12;
-    const appCommissionFromVendor = vendorCommission * 0.1;
+    // Calculate commissions and payouts
+    const appCommissionFromBase = Math.round(baseFare * 0.12); // 12% commission
+    const vendorCommission = vendorPrice - baseFare;
+    const appCommissionFromVendor = Math.round(vendorCommission * 0.1); // 10% of vendor markup
     const totalAppCommission = appCommissionFromBase + appCommissionFromVendor;
-    const driverPayout = appBasePrice - appCommissionFromBase;
+    const driverPayout = baseFare - appCommissionFromBase;
     const vendorPayout = vendorCommission - appCommissionFromVendor;
 
     res.json({
       estimate: {
         distance,
         duration,
-        appBasePrice,
+        appBasePrice: baseFare,
         vendorPrice,
         vendorCommission,
         appCommission: totalAppCommission,
@@ -775,22 +775,38 @@ function calculateAppBasePrice(
   serviceType: LongDistanceServiceType,
   tripType: string
 ): number {
-  const rates = SERVICE_RATES[serviceType][vehicleType.toLowerCase()];
-
+  const rates = VENDOR_RATES[serviceType]?.[vehicleType.toLowerCase()];
   if (!rates) {
     throw new Error(`Invalid vehicle type or service type`);
   }
 
-  if ("fixed" in rates) {
-    // For tempo vehicles
-    let price = rates.fixed;
+  let baseFare = 0;
+  const normalizedVehicleType = vehicleType.toLowerCase();
+
+  if (serviceType === "ALL_INDIA_TOUR") {
+    baseFare = rates.perDay;
     if (distance > 250) {
       const extraKm = distance - 250;
-      price += extraKm * rates.extra;
+      baseFare += extraKm * rates.extraKm;
     }
-    return price;
+  } else if (normalizedVehicleType.startsWith("tempo_")) {
+    baseFare = rates.fixed;
+    if (distance > 250) {
+      const extraKm = distance - 250;
+      baseFare += extraKm * rates.extra;
+    }
   } else {
     // For cars
-    return distance * rates.base;
+    const ratePerKm =
+      serviceType === "OUTSTATION" && distance <= 150
+        ? rates.short
+        : rates.base;
+    baseFare = distance * ratePerKm;
+
+    if (tripType === "ROUND_TRIP") {
+      baseFare *= 2;
+    }
   }
+
+  return Math.round(baseFare);
 }

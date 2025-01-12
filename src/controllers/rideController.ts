@@ -653,6 +653,7 @@ export const calculateFare = (distance: number, category: string): number => {
         perKmRate = 20;
     }
   }
+  // ...
 
   let fare = baseFare + distance * perKmRate;
   fare += getAdditionalCharges(distance, category);
