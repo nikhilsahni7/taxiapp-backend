@@ -250,6 +250,10 @@ router.post(
         | undefined;
 
       const {
+        name,
+        email,
+        state,
+        city,
         businessName,
         address,
         experience,
@@ -258,7 +262,19 @@ router.post(
         panNumber,
       } = req.body;
 
-      // Upload documents
+      // Validate required fields
+      if (
+        !businessName ||
+        !address ||
+        !experience ||
+        !gstNumber ||
+        !aadharNumber ||
+        !panNumber
+      ) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      // Upload documents to Cloudinary
       const aadharFrontUrl = files?.["aadharFront"]?.[0]
         ? await uploadImage(files["aadharFront"][0].buffer)
         : null;
@@ -269,16 +285,24 @@ router.post(
         ? await uploadImage(files["panCard"][0].buffer)
         : null;
 
-      // Update user type to VENDOR
+      if (!aadharFrontUrl || !aadharBackUrl || !panUrl) {
+        return res.status(400).json({ error: "All documents are required" });
+      }
+
+      // Update user profile
       await prisma.user.update({
         where: { id: userId },
         data: {
+          name,
+          email,
+          state,
+          city,
           userType: "VENDOR",
         },
       });
 
       // Create vendor details
-      await prisma.vendorDetails.create({
+      const vendorDetails = await prisma.vendorDetails.create({
         data: {
           userId,
           businessName,
@@ -293,6 +317,16 @@ router.post(
         },
       });
 
+      // Get updated user data
+      const updatedUser = await prisma.user.findUnique({
+        where: { id: userId },
+        include: { vendorDetails: true },
+      });
+
+      if (!updatedUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
       // Generate new token with updated user type
       const token = jwt.sign(
         { userId, userType: "VENDOR" },
@@ -300,22 +334,16 @@ router.post(
         { expiresIn: "7d" }
       );
 
-      const user = await prisma.user.findUnique({
-        where: {
-          id: userId,
-          userType: "VENDOR",
-        },
-        include: { vendorDetails: true },
-      });
-
       res.json({
         message: "Vendor registration completed successfully",
         token,
         userId,
-        userType: "VENDOR",
-        name: user?.name,
-        phone: user?.phone,
-        verified: user?.verified,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        phone: updatedUser.phone,
+        state: updatedUser.state,
+        city: updatedUser.city,
+        vendorDetails: updatedUser.vendorDetails,
       });
     } catch (error) {
       console.error("Vendor registration error:", error);
