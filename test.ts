@@ -1,41 +1,16 @@
-// // test.ts
-// import twilio from "twilio";
+const twilio = require("twilio");
 
-// const client = twilio(
-//   process.env.TWILIO_ACCOUNT_SID,
-//   process.env.TWILIO_AUTH_TOKEN
-// );
+// Your Twilio Account SID and Auth Token
+const accountSid = process.env.TWILIO_ACCOUNT_SID;
+const authToken = process.env.TWILIO_AUTH_TOKEN;
+const verifySid = process.env.TWILIO_VERIFY_SID;
+const client = new twilio(accountSid, authToken);
 
-// async function testTwilio() {
-//   try {
-//     const message = await client.messages.create({
-//       body: "Test message from my backend",
-//       from: process.env.TWILIO_PHONE_NUMBER,
-//       to: "+918800244926",
-//     });
-//     console.log("Test successful:", message.sid);
-//   } catch (error) {
-//     console.error("Test failed:", error);
-//   }
-// }
-
-// testTwilio();
-
-import * as crypto from "crypto";
-
-function generateRazorpaySignature(
-  orderId: string,
-  paymentId: string,
-  secret: string
-): string {
-  const message = `${orderId}|${paymentId}`;
-  return crypto.createHmac("sha256", secret).update(message).digest("hex");
-}
-
-// Example Usage
-const orderId = "order_PaDSLZK5ihMO71";
-const paymentId = "pay_JhsF12345abcdEF";
-const secret = process.env.RAZORPAY_KEY_SECRET!;
-
-const signature = generateRazorpaySignature(orderId, paymentId, secret);
-console.log("Generated Signature:", signature);
+client.verify.v2
+  .services(verifySid)
+  .verifications.create({
+    to: "+918800244926",
+    channel: "sms", // Channel type (SMS or voice)
+  })
+  .then((verification: { sid: string }) => console.log(verification.sid))
+  .catch((error: Error) => console.error("Error sending SMS:", error));

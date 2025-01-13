@@ -38,26 +38,18 @@ const uploadFields = upload.fields([
 router.post("/send-otp", async (req, res) => {
   try {
     const { phone } = req.body;
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-    // Save OTP to database
-    await prisma.oTP.create({
-      data: {
-        phone,
-        code: otp,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-      },
-    });
-
-    // Send OTP via Twilio
-    await twilioClient.messages.create({
-      body: `Your Verification code for TaxiSure is ${otp}`,
-      from: process.env.TWILIO_PHONE_NUMBER!,
-      to: phone,
-    });
+    // Send OTP via Twilio Verify Service
+    await twilioClient.verify.v2
+      .services(process.env.TWILIO_VERIFY_SID!)
+      .verifications.create({
+        to: phone,
+        channel: "sms",
+      });
 
     res.json({ message: "OTP sent successfully" });
   } catch (error) {
+    console.error("Send OTP error:", error);
     res.status(500).json({ error: "Failed to send OTP" });
   }
 });
@@ -77,24 +69,17 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "User already exists" });
     }
 
-    const validOTP = await prisma.oTP.findFirst({
-      where: {
-        phone,
+    // Verify OTP using Twilio Verify Service
+    const verification = await twilioClient.verify.v2
+      .services(process.env.TWILIO_VERIFY_SID!)
+      .verificationChecks.create({
+        to: phone,
         code: otp,
-        verified: false,
-        expiresAt: { gte: new Date() },
-      },
-    });
+      });
 
-    if (!validOTP) {
+    if (!verification.valid) {
       return res.status(400).json({ error: "Invalid or expired OTP" });
     }
-
-    // Mark OTP as verified
-    await prisma.oTP.update({
-      where: { id: validOTP.id },
-      data: { verified: true },
-    });
 
     // Create user with verified status
     const user = await prisma.user.create({
@@ -146,24 +131,17 @@ router.post("/verify-driver-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Driver already exists" });
     }
 
-    const validOTP = await prisma.oTP.findFirst({
-      where: {
-        phone,
+    // Verify OTP using Twilio Verify Service
+    const verification = await twilioClient.verify.v2
+      .services(process.env.TWILIO_VERIFY_SID!)
+      .verificationChecks.create({
+        to: phone,
         code: otp,
-        verified: false,
-        expiresAt: { gte: new Date() },
-      },
-    });
+      });
 
-    if (!validOTP) {
+    if (!verification.valid) {
       return res.status(400).json({ error: "Invalid or expired OTP" });
     }
-
-    // Mark OTP as verified
-    await prisma.oTP.update({
-      where: { id: validOTP.id },
-      data: { verified: true },
-    });
 
     // Create driver with verified status
     const driver = await prisma.user.create({
@@ -215,24 +193,17 @@ router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Vendor already exists" });
     }
 
-    const validOTP = await prisma.oTP.findFirst({
-      where: {
-        phone,
+    // Verify OTP using Twilio Verify Service
+    const verification = await twilioClient.verify.v2
+      .services(process.env.TWILIO_VERIFY_SID!)
+      .verificationChecks.create({
+        to: phone,
         code: otp,
-        verified: false,
-        expiresAt: { gte: new Date() },
-      },
-    });
+      });
 
-    if (!validOTP) {
+    if (!verification.valid) {
       return res.status(400).json({ error: "Invalid or expired OTP" });
     }
-
-    // Mark OTP as verified
-    await prisma.oTP.update({
-      where: { id: validOTP.id },
-      data: { verified: true },
-    });
 
     // Create vendor with verified status
     const vendor = await prisma.user.create({
