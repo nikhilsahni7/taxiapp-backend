@@ -19,14 +19,14 @@ interface Location {
 
 // Base rates for different vehicle categories for All India Tour
 const ALL_INDIA_RATES = {
-  mini: { perDay: 3000, extraKm: 16 },
-  sedan: { perDay: 3500, extraKm: 19 },
-  ertiga: { perDay: 4800, extraKm: 21 },
-  innova: { perDay: 5600, extraKm: 22 },
-  tempo_12: { perDay: 7000, extraKm: 23 },
-  tempo_16: { perDay: 8000, extraKm: 26 },
-  tempo_20: { perDay: 9000, extraKm: 30 },
-  tempo_26: { perDay: 10000, extraKm: 35 },
+  mini: { perDay: 6000, extraKm: 11 },
+  sedan: { perDay: 7000, extraKm: 14 },
+  ertiga: { perDay: 9600, extraKm: 18 },
+  innova: { perDay: 11200, extraKm: 24 },
+  tempo_12: { perDay: 14000, extraKm: 23 },
+  tempo_16: { perDay: 16000, extraKm: 26 },
+  tempo_20: { perDay: 18000, extraKm: 30 },
+  tempo_26: { perDay: 20000, extraKm: 35 },
 };
 
 export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
@@ -84,6 +84,9 @@ export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
     const extraDistanceFare = extraDistance * rates.extraKm;
 
     // Calculate total fare
+
+    //it will always in round trip-so we will multiply by 2
+
     const totalFare = baseFare + extraDistanceFare;
 
     // Calculate advance amount (25%) and remaining amount (75%)

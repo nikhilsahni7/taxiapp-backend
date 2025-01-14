@@ -33,20 +33,20 @@ const VENDOR_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
     sedan: { base: 27 },
     ertiga: { base: 30 },
     innova: { base: 35 },
-    tempo_12: { fixed: 7000, extra: 23 },
-    tempo_16: { fixed: 8000, extra: 26 },
-    tempo_20: { fixed: 9000, extra: 30 },
-    tempo_26: { fixed: 10000, extra: 35 },
+    tempo_12: { fixed: 14000, extra: 23 },
+    tempo_16: { fixed: 16000, extra: 26 },
+    tempo_20: { fixed: 18000, extra: 30 },
+    tempo_26: { fixed: 20000, extra: 35 },
   },
   ALL_INDIA_TOUR: {
-    mini: { perDay: 3000, extraKm: 16 },
-    sedan: { perDay: 3500, extraKm: 19 },
-    ertiga: { perDay: 4800, extraKm: 21 },
-    innova: { perDay: 5600, extraKm: 22 },
-    tempo_12: { perDay: 7000, extraKm: 23 },
-    tempo_16: { perDay: 8000, extraKm: 26 },
-    tempo_20: { perDay: 9000, extraKm: 30 },
-    tempo_26: { perDay: 10000, extraKm: 35 },
+    mini: { perDay: 3000, extraKm: 11 },
+    sedan: { perDay: 3500, extraKm: 14 },
+    ertiga: { perDay: 4800, extraKm: 18 },
+    innova: { perDay: 5600, extraKm: 24 },
+    tempo_12: { perDay: 14000, extraKm: 23 },
+    tempo_16: { perDay: 16000, extraKm: 26 },
+    tempo_20: { perDay: 18000, extraKm: 30 },
+    tempo_26: { perDay: 20000, extraKm: 35 },
   },
   CHARDHAM_YATRA: {
     mini: { base: 25 },
@@ -789,11 +789,18 @@ function calculateAppBasePrice(
       const extraKm = distance - 250;
       baseFare += extraKm * rates.extraKm;
     }
+    // Ensure round trip logic is applied
+    if (tripType === "ROUND_TRIP") {
+      baseFare *= 2;
+    }
   } else if (normalizedVehicleType.startsWith("tempo_")) {
     baseFare = rates.fixed;
     if (distance > 250) {
       const extraKm = distance - 250;
       baseFare += extraKm * rates.extra;
+    }
+    if (tripType === "ROUND_TRIP") {
+      baseFare *= 2;
     }
   } else {
     // For cars
