@@ -1,5 +1,9 @@
 import type { Request, Response } from "express";
-import { PrismaClient } from "@prisma/client";
+import {
+  LongDistanceBookingStatus,
+  PrismaClient,
+  RideStatus,
+} from "@prisma/client";
 import express from "express";
 
 import { verifyToken } from "../middlewares/auth";
@@ -330,6 +334,103 @@ router.put(
     } catch (error) {
       console.error("Error updating vendor:", error);
       res.status(500).json({ error: "Failed to update vendor profile" });
+    }
+  }
+);
+
+// Add this to your existing user router
+
+// Get recent rides for a user
+router.get(
+  "/:id/recent-rides",
+  verifyToken,
+  async (req: Request, res: Response) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      const userId = req.user.userId;
+
+      // Get recent local rides
+      const recentLocalRides = await prisma.ride.findMany({
+        where: {
+          userId,
+          OR: [
+            { status: RideStatus.PAYMENT_COMPLETED },
+            { status: RideStatus.RIDE_ENDED },
+          ],
+        },
+        include: {
+          driver: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+              driverDetails: {
+                select: {
+                  vehicleName: true,
+                  vehicleNumber: true,
+                },
+              },
+            },
+          },
+          transactions: {
+            select: {
+              amount: true,
+              status: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+        take: 10, // Limit to last 10 rides
+      });
+
+      // Get recent long distance rides
+      const recentLongDistanceRides = await prisma.longDistanceBooking.findMany(
+        {
+          where: {
+            userId,
+            OR: [{ status: LongDistanceBookingStatus.COMPLETED }],
+          },
+          include: {
+            driver: {
+              select: {
+                id: true,
+                name: true,
+                phone: true,
+                driverDetails: {
+                  select: {
+                    vehicleName: true,
+                    vehicleNumber: true,
+                  },
+                },
+              },
+            },
+            transactions: {
+              select: {
+                amount: true,
+                status: true,
+              },
+            },
+          },
+          orderBy: {
+            createdAt: "desc",
+          },
+          take: 10,
+        }
+      );
+
+      // Combine and sort rides by date
+      const allRecentRides = [...recentLocalRides, ...recentLongDistanceRides]
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, 10); // Get most recent 10 rides overall
+
+      res.json(allRecentRides);
+    } catch (error) {
+      console.error("Error fetching recent rides:", error);
+      res.status(500).json({ error: "Failed to fetch recent rides" });
     }
   }
 );

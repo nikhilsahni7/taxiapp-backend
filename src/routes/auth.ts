@@ -534,6 +534,11 @@ router.post(
         message: `${type} registration completed successfully`,
         token,
         userId: userId,
+        userType: type.toUpperCase(),
+        name: name,
+        email: email,
+        state: state,
+        city: city,
       });
     } catch (error) {
       console.error("Registration error:", error);
