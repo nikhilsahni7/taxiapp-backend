@@ -16,6 +16,8 @@ import {
 import { io } from "../server";
 import axios from "axios";
 
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY!;
+
 const prisma = new PrismaClient();
 const WAIT_TIME_THRESHOLD = 5; // minutes
 const EXTRA_CHARGE_PER_MINUTE = 2;
@@ -23,7 +25,258 @@ const DRIVER_REQUEST_TIMEOUT = 15000; // 30 seconds
 const MAX_SEARCH_RADIUS = 15; // kilometers
 const INITIAL_SEARCH_RADIUS = 3; // kilometers
 
-//  fare estimation endpoint for Delhi/ncr rides -frontend
+interface Location {
+  lat: number;
+  lng: number;
+}
+
+interface TaxAndCharges {
+  stateTax: number;
+  tollCharges: number;
+  airportCharges: number;
+  mcdCharges: number;
+}
+
+// Define valid car categories in lowercase
+type CarCategory = "mini" | "sedan" | "suv";
+
+// Type for state tax structure
+type StateTaxStructure = {
+  [K in CarCategory]: number;
+};
+
+// Constants for different charges with proper typing
+const CHARGES = {
+  MCD_CHARGE: 100,
+  AIRPORT_PARKING: 200,
+  STATE_TAX: {
+    DELHI_TO_HARYANA: {
+      mini: 100,
+      sedan: 100,
+      suv: 100,
+    } as StateTaxStructure,
+    DELHI_TO_UP: {
+      mini: 120,
+      sedan: 120,
+      suv: 200,
+    } as StateTaxStructure,
+  },
+  // Add reference for major airports
+  MAJOR_AIRPORTS: [
+    "Indira Gandhi International Airport",
+    "IGI Airport",
+    "Noida International Airport",
+    "Hindon Airport",
+  ],
+} as const;
+
+// Function to validate car category
+function isValidCategory(category: string): category is CarCategory {
+  return ["mini", "sedan", "suv"].includes(category.toLowerCase());
+}
+
+// Rest of the coordinate and location functions remain the same
+async function getCoordinates(address: string): Promise<Location> {
+  try {
+    const response = await axios.get(
+      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
+        address
+      )}&key=${process.env.GOOGLE_MAPS_API_KEY}`
+    );
+    const location = response.data.results[0].geometry.location;
+    return { lat: location.lat, lng: location.lng };
+  } catch (error) {
+    console.error("Error getting coordinates:", error);
+    throw new Error("Failed to get coordinates");
+  }
+}
+async function isNearAirport(location: Location): Promise<boolean> {
+  try {
+    const response = await axios.get(
+      `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${location.lat},${location.lng}&radius=2000&type=airport&keyword=airport&key=${process.env.GOOGLE_MAPS_API_KEY}`
+    );
+
+    // Check if any results exist and verify they are actually airports
+    if (response.data.results.length > 0) {
+      // Filter for major airports only by checking types and name
+      const majorAirports = response.data.results.filter((place: any) => {
+        const isAirport = place.types.includes("airport");
+        const name = place.name.toLowerCase();
+        // Check for major Delhi-NCR airports
+        return (
+          isAirport &&
+          (name.includes("indira gandhi") ||
+            name.includes("igi") ||
+            name.includes("noida international") ||
+            name.includes("hindon"))
+        );
+      });
+
+      return majorAirports.length > 0;
+    }
+    return false;
+  } catch (error) {
+    console.error("Error checking airport proximity:", error);
+    // In case of API error, default to false to avoid overcharging
+    return false;
+  }
+}
+async function getStateFromCoordinates(location: Location): Promise<string> {
+  try {
+    const response = await axios.get(
+      `https://maps.googleapis.com/maps/api/geocode/json?latlng=${location.lat},${location.lng}&key=${process.env.GOOGLE_MAPS_API_KEY}`
+    );
+
+    const addressComponents = response.data.results[0].address_components;
+    const state = addressComponents.find((component: any) =>
+      component.types.includes("administrative_area_level_1")
+    );
+
+    return state ? state.long_name : "";
+  } catch (error) {
+    console.error("Error getting state:", error);
+    return "";
+  }
+}
+
+// Calculate all applicable taxes and charges
+async function calculateTaxAndCharges(
+  pickupLocation: string,
+  dropLocation: string,
+  category: string
+): Promise<TaxAndCharges> {
+  const pickup = await getCoordinates(pickupLocation);
+  const drop = await getCoordinates(dropLocation);
+
+  const pickupState = await getStateFromCoordinates(pickup);
+  const dropState = await getStateFromCoordinates(drop);
+
+  // First check state taxes
+  let stateTax = 0;
+  let mcdCharges = 0;
+  let airportCharges = 0;
+
+  // Convert and validate category
+  const lowerCategory = category.toLowerCase();
+  if (!isValidCategory(lowerCategory)) {
+    console.warn(`Invalid category: ${category}, defaulting to no state tax`);
+    return {
+      stateTax: 0,
+      tollCharges: 0,
+      airportCharges: 0,
+      mcdCharges: 0,
+    };
+  }
+
+  // Calculate state tax with lowercase category
+  if (pickupState === "Delhi" && dropState === "Haryana") {
+    stateTax = CHARGES.STATE_TAX.DELHI_TO_HARYANA[lowerCategory];
+  } else if (pickupState === "Delhi" && dropState === "Uttar Pradesh") {
+    stateTax = CHARGES.STATE_TAX.DELHI_TO_UP[lowerCategory];
+  }
+
+  // Calculate MCD charges (only when entering Delhi from outside)
+  if (pickupState !== "Delhi" && dropState === "Delhi") {
+    mcdCharges = CHARGES.MCD_CHARGE;
+  }
+
+  // Calculate airport charges (only if pickup OR drop is near an airport, not both)
+  const isPickupNearAirport = await isNearAirport(pickup);
+  const isDropNearAirport = await isNearAirport(drop);
+
+  // Only apply airport charges when the ride starts OR ends at the airport, not for both
+  if (isPickupNearAirport || isDropNearAirport) {
+    // Add airport charges only if one end of the journey is at the airport
+    // and the other end is not
+    if (!(isPickupNearAirport && isDropNearAirport)) {
+      airportCharges = CHARGES.AIRPORT_PARKING;
+    }
+  }
+
+  return {
+    stateTax,
+    tollCharges: 0, // Toll charges are not currently implemented
+    airportCharges,
+    mcdCharges,
+  };
+}
+interface FareEstimate {
+  baseFare: number;
+  totalFare: number;
+  charges: TaxAndCharges;
+  distance: number;
+  duration: number;
+  currency: string;
+}
+
+// Enhanced fare calculation function
+export const calculateFare = async (
+  pickupLocation: string,
+  dropLocation: string,
+  distance: number,
+  category: string
+): Promise<{
+  baseFare: number;
+  totalFare: number;
+  charges: TaxAndCharges;
+}> => {
+  const baseFare = 50;
+  let perKmRate = 0;
+
+  // Calculate per km rate based on distance and category
+  if (distance > 8) {
+    switch (category.toLowerCase()) {
+      case "mini":
+        perKmRate = 14;
+        break;
+      case "sedan":
+        perKmRate = 17;
+        break;
+      case "suv":
+        perKmRate = 27;
+        break;
+      default:
+        perKmRate = 15;
+    }
+  } else {
+    switch (category.toLowerCase()) {
+      case "mini":
+        perKmRate = 17;
+        break;
+      case "sedan":
+        perKmRate = 23;
+        break;
+      case "suv":
+        perKmRate = 35;
+        break;
+      default:
+        perKmRate = 20;
+    }
+  }
+
+  const charges = await calculateTaxAndCharges(
+    pickupLocation,
+    dropLocation,
+    category
+  );
+
+  const distanceFare = distance * perKmRate;
+  const totalFare =
+    baseFare +
+    distanceFare +
+    charges.stateTax +
+    charges.tollCharges +
+    charges.airportCharges +
+    charges.mcdCharges;
+
+  return {
+    baseFare: baseFare + distanceFare,
+    totalFare,
+    charges,
+  };
+};
+
+// Update the getFareEstimation endpoint
 export const getFareEstimation = async (req: Request, res: Response) => {
   const { pickupLocation, dropLocation } = req.body;
 
@@ -31,33 +284,30 @@ export const getFareEstimation = async (req: Request, res: Response) => {
     const distance = await calculateDistance(pickupLocation, dropLocation);
     const duration = await calculateDuration(pickupLocation, dropLocation);
 
-    // Calculate fares for all categories
-    const miniFare = calculateFare(distance, "mini");
-    const sedanFare = calculateFare(distance, "sedan");
-    const suvFare = calculateFare(distance, "suv");
+    // Calculate fares for all categories with taxes and charges
+    const categories: CarCategory[] = ["mini", "sedan", "suv"];
+    const estimates: Record<CarCategory, FareEstimate> = {} as Record<
+      CarCategory,
+      FareEstimate
+    >;
 
-    res.json({
-      estimates: {
-        mini: {
-          fare: miniFare,
-          distance,
-          duration,
-          currency: "INR",
-        },
-        sedan: {
-          fare: sedanFare,
-          distance,
-          duration,
-          currency: "INR",
-        },
-        suv: {
-          fare: suvFare,
-          distance,
-          duration,
-          currency: "INR",
-        },
-      },
-    });
+    for (const category of categories) {
+      const fareDetails = await calculateFare(
+        pickupLocation,
+        dropLocation,
+        distance,
+        category
+      );
+
+      estimates[category] = {
+        ...fareDetails,
+        distance,
+        duration,
+        currency: "INR",
+      };
+    }
+
+    res.json({ estimates });
   } catch (error) {
     console.error("Error in fare estimation:", error);
     res.status(500).json({ error: "Failed to calculate fare estimation" });
@@ -102,7 +352,12 @@ async function initializeRide(
 ) {
   const distance = await calculateDistance(pickupLocation, dropLocation);
   const duration = await calculateDuration(pickupLocation, dropLocation);
-  const totalFare = calculateFare(distance, carCategory);
+  const totalFare = await calculateFare(
+    pickupLocation,
+    dropLocation,
+    distance,
+    carCategory
+  );
 
   return prisma.ride.create({
     data: {
@@ -110,7 +365,7 @@ async function initializeRide(
       pickupLocation,
       dropLocation,
       carCategory,
-      fare: totalFare,
+      fare: totalFare.totalFare,
       distance,
       duration,
       status: RideStatus.SEARCHING,
@@ -618,105 +873,6 @@ export const getRide = async (req: Request, res: Response) => {
     res.status(500).json({ error: "Failed to retrieve ride details" });
   }
 };
-
-// calculateFare function -> Delhi/ncr rides
-export const calculateFare = (distance: number, category: string): number => {
-  const baseFare = 50;
-  let perKmRate = 0;
-
-  if (distance > 8) {
-    switch (category.toLowerCase()) {
-      case "mini":
-        perKmRate = 14;
-        break;
-      case "sedan":
-        perKmRate = 17;
-        break;
-      case "suv":
-        perKmRate = 27;
-        break;
-      default:
-        perKmRate = 15;
-    }
-  } else {
-    switch (category.toLowerCase()) {
-      case "mini":
-        perKmRate = 17;
-        break;
-      case "sedan":
-        perKmRate = 23;
-        break;
-      case "suv":
-        perKmRate = 35;
-        break;
-      default:
-        perKmRate = 20;
-    }
-  }
-  // ...
-
-  let fare = baseFare + distance * perKmRate;
-  fare += getAdditionalCharges(distance, category);
-
-  return fare;
-};
-
-const getAdditionalCharges = (distance: number, category: string): number => {
-  let charges = 0;
-
-  if (isEnteringDelhiFromNCR()) {
-    charges += 100;
-  }
-
-  charges += getStateTaxCharges(distance, category);
-
-  return charges;
-};
-
-const isEnteringDelhiFromNCR = (): boolean => {
-  // Logic to determine if the route enters Delhi from NCR
-  // This requires analysis of pickup and drop locations
-  return false;
-};
-
-const getStateTaxCharges = (distance: number, category: string): number => {
-  let stateTax = 0;
-  const destinationState = getDestinationState();
-
-  if (isTravelingFromDelhiTo(destinationState)) {
-    switch (destinationState) {
-      case "Haryana":
-        if (
-          category.toLowerCase() === "sedan" ||
-          category.toLowerCase() === "suv"
-        ) {
-          stateTax = 100;
-        }
-        break;
-      case "Uttar Pradesh":
-        if (category.toLowerCase() === "sedan") {
-          stateTax = 120;
-        } else if (category.toLowerCase() === "suv") {
-          stateTax = 200;
-        }
-        break;
-    }
-  }
-
-  return stateTax;
-};
-
-const isTravelingFromDelhiTo = (state: string): boolean => {
-  // Implement logic based on pickup and drop locations
-  return false;
-};
-
-const getDestinationState = (): string => {
-  // Determine the state from the drop location
-  return "";
-};
-
-const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY!;
 
 // calculateDistance and calculateDuration functions -> Delhi/ncr rides
 
