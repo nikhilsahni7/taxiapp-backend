@@ -179,6 +179,9 @@ model Ride {
   isDriverAccepted Boolean        @default(false)
   driverAcceptedAt DateTime?
   requestExpiresAt DateTime?
+   cancellationReason String?      // Add cancellation reason
+  cancellationFee   Float?        // Add cancellation fee
+  cancelledBy       UserType? 
 
   user         User          @relation("UserRides", fields: [userId], references: [id])
   driver       User?         @relation("DriverRides", fields: [driverId], references: [id])
