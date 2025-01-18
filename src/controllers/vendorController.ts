@@ -19,44 +19,44 @@ const razorpay = new Razorpay({
 // Define the rates with proper type
 const VENDOR_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
   OUTSTATION: {
-    mini: { base: 11, short: 14 },
-    sedan: { base: 14, short: 19 },
-    ertiga: { base: 18, short: 24 },
-    innova: { base: 24, short: 27 },
-    tempo_12: { fixed: 14000, extra: 23 },
-    tempo_16: { fixed: 16000, extra: 26 },
-    tempo_20: { fixed: 18000, extra: 30 },
-    tempo_26: { fixed: 20000, extra: 35 },
+    mini: { base: 14, short: 17 }, // Increased by 3
+    sedan: { base: 17, short: 22 }, // Increased by 3
+    ertiga: { base: 21, short: 27 }, // Increased by 3
+    innova: { base: 27, short: 30 }, // Increased by 3
+    tempo_12: { fixed: 14000, extra: 26 }, // Increased by 3
+    tempo_16: { fixed: 16000, extra: 29 }, // Increased by 3
+    tempo_20: { fixed: 18000, extra: 33 }, // Increased by 3
+    tempo_26: { fixed: 20000, extra: 38 }, // Increased by 3
   },
   HILL_STATION: {
-    mini: { base: 20 },
-    sedan: { base: 27 },
-    ertiga: { base: 30 },
-    innova: { base: 35 },
-    tempo_12: { fixed: 14000, extra: 23 },
-    tempo_16: { fixed: 16000, extra: 26 },
-    tempo_20: { fixed: 18000, extra: 30 },
-    tempo_26: { fixed: 20000, extra: 35 },
+    mini: { base: 23 }, // Increased by 3
+    sedan: { base: 30 }, // Increased by 3
+    ertiga: { base: 33 }, // Increased by 3
+    innova: { base: 38 }, // Increased by 3
+    tempo_12: { fixed: 14000, extra: 26 }, // Increased by 3
+    tempo_16: { fixed: 16000, extra: 29 }, // Increased by 3
+    tempo_20: { fixed: 18000, extra: 33 }, // Increased by 3
+    tempo_26: { fixed: 20000, extra: 38 }, // Increased by 3
   },
   ALL_INDIA_TOUR: {
-    mini: { perDay: 3000, extraKm: 11 },
-    sedan: { perDay: 3500, extraKm: 14 },
-    ertiga: { perDay: 4800, extraKm: 18 },
-    innova: { perDay: 5600, extraKm: 24 },
-    tempo_12: { perDay: 14000, extraKm: 23 },
-    tempo_16: { perDay: 16000, extraKm: 26 },
-    tempo_20: { perDay: 18000, extraKm: 30 },
-    tempo_26: { perDay: 20000, extraKm: 35 },
+    mini: { perDay: 3700, extraKm: 14 }, // Increased by 700 and 3
+    sedan: { perDay: 4200, extraKm: 17 }, // Increased by 700 and 3
+    ertiga: { perDay: 5500, extraKm: 21 }, // Increased by 700 and 3
+    innova: { perDay: 6300, extraKm: 27 }, // Increased by 700 and 3
+    tempo_12: { perDay: 14700, extraKm: 26 }, // Increased by 700 and 3
+    tempo_16: { perDay: 16700, extraKm: 29 }, // Increased by 700 and 3
+    tempo_20: { perDay: 18700, extraKm: 33 }, // Increased by 700 and 3
+    tempo_26: { perDay: 20700, extraKm: 38 }, // Increased by 700 and 3
   },
   CHARDHAM_YATRA: {
-    mini: { base: 25 },
-    sedan: { base: 30 },
-    ertiga: { base: 35 },
-    innova: { base: 40 },
-    tempo_12: { fixed: 8000, extra: 25 },
-    tempo_16: { fixed: 9000, extra: 28 },
-    tempo_20: { fixed: 10000, extra: 32 },
-    tempo_26: { fixed: 11000, extra: 37 },
+    mini: { base: 28 }, // Increased by 3
+    sedan: { base: 33 }, // Increased by 3
+    ertiga: { base: 38 }, // Increased by 3
+    innova: { base: 43 }, // Increased by 3
+    tempo_12: { fixed: 8000, extra: 28 }, // Increased by 3
+    tempo_16: { fixed: 9000, extra: 31 }, // Increased by 3
+    tempo_20: { fixed: 10000, extra: 35 }, // Increased by 3
+    tempo_26: { fixed: 11000, extra: 40 }, // Increased by 3
   },
 };
 
