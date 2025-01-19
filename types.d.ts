@@ -10,6 +10,7 @@ declare global {
       user?: {
         userId: string;
         userType: string;
+        selfieUrl: string;
       };
     }
   }

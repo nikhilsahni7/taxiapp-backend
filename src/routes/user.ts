@@ -7,10 +7,15 @@ import {
 import express from "express";
 
 import { verifyToken } from "../middlewares/auth";
+import multer from "multer";
+import { uploadImage } from "../config/cloudinary";
 
 const router = express.Router();
 
 const prisma = new PrismaClient();
+
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
 
 //get  all user details
 
@@ -71,40 +76,55 @@ router.get("/:id", verifyToken, async (req: Request, res: Response) => {
 });
 
 // Update user
-router.put("/:id", verifyToken, async (req: Request, res: Response) => {
-  try {
-    if (!req.user) {
-      return res.status(401).json({ error: "Unauthorized" });
+router.put(
+  "/:id",
+  verifyToken,
+  upload.single("selfie"),
+  async (req: Request, res: Response) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+      const userId = req.user.userId;
+      const { name, email, state, city } = req.body;
+
+      let selfieUrl = req.user.selfieUrl || "";
+
+      // Check if a new selfie file is uploaded
+      if (req.file) {
+        // Upload the new selfie to Cloudinary
+        selfieUrl = await uploadImage(req.file.buffer);
+      }
+
+      const updatedUser = await prisma.user.update({
+        where: { id: userId },
+        data: {
+          name,
+          email,
+          state,
+          city,
+          selfieUrl, // Update the selfie URL if a new one is uploaded
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          selfieUrl: true,
+          state: true,
+          city: true,
+          userType: true,
+          updatedAt: true,
+        },
+      });
+
+      res.json(updatedUser);
+    } catch (error) {
+      console.error("Error updating user:", error);
+      res.status(500).json({ error: "Failed to update user" });
     }
-    const userId = req.user.userId;
-    const { name, email, state, city } = req.body;
-
-    const updatedUser = await prisma.user.update({
-      where: { id: userId },
-      data: {
-        name,
-        email,
-        state,
-        city,
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        selfieUrl: true,
-        state: true,
-        city: true,
-        userType: true,
-        updatedAt: true,
-      },
-    });
-
-    res.json(updatedUser);
-  } catch (error) {
-    res.status(500).json({ error: "Failed to update user" });
   }
-});
+);
 
 // Delete user
 router.delete("/:id", verifyToken, async (req: Request, res: Response) => {

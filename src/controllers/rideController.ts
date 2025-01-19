@@ -868,17 +868,19 @@ const handleRideCancellation = async (
   res: Response
 ) => {
   try {
-    // Check if the ride was accepted more than 3 minutes ago
-    const currentTime = new Date();
-    const acceptedTime = ride.driverAcceptedAt;
-    const timeDifference =
-      (currentTime.getTime() - acceptedTime.getTime()) / 60000; // Difference in minutes
-
     let cancellationFee = 0;
 
-    if (timeDifference > 3) {
+    // Check if the ride was accepted by a driver
+    if (ride.driverAcceptedAt) {
+      const currentTime = new Date();
+      const acceptedTime = new Date(ride.driverAcceptedAt);
+      const timeDifference =
+        (currentTime.getTime() - acceptedTime.getTime()) / 60000; // Difference in minutes
+
       // Apply cancellation fee if the ride was accepted more than 3 minutes ago
-      cancellationFee = 50; // Example fee, adjust as needed
+      if (timeDifference > 3) {
+        cancellationFee = 50; // Example fee, adjust as needed
+      }
     }
 
     // Update ride with cancellation details

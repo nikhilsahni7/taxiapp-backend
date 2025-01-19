@@ -19,6 +19,7 @@ import {
   calculateDistance,
   calculateDuration,
 } from "./controllers/rideController";
+import { getDistanceAndDuration } from "./lib/mapService";
 
 const app = express();
 const server = http.createServer(app);
@@ -62,6 +63,12 @@ app.use("/api/all-india", allIndiaRoutes);
 app.use("/", (req, res) => {
   res.send("Welcome to the taxiSure API");
 });
+
+const connectedDrivers = new Map<
+  string,
+  { socketId: string; location: { lat: number; lng: number } }
+>();
+
 io.on("connection", (socket: Socket) => {
   console.log("User connected:", socket.id);
 
@@ -775,11 +782,172 @@ io.on("connection", (socket: Socket) => {
     }
   );
 
+  socket.on("car_rental_driver_location", async (data) => {
+    const { driverId, lat, lng, carCategory } = data;
+
+    // Update driver location in the database
+    await prisma.driverStatus.upsert({
+      where: { driverId },
+      update: {
+        locationLat: lat,
+        locationLng: lng,
+        lastLocationUpdate: new Date(),
+      },
+      create: { driverId, locationLat: lat, locationLng: lng, isOnline: true },
+    });
+
+    // Store driver location in memory for real-time tracking
+    connectedDrivers.set(driverId, {
+      socketId: socket.id,
+      location: { lat, lng },
+    });
+
+    console.log(`Driver ${driverId} location updated:`, { lat, lng });
+  });
+
+  // User requests a ride
+  socket.on("car_rental_request_ride", async (data) => {
+    const { userId, pickupLocation, dropLocation, carCategory } = data;
+
+    // Get distance and duration between pickup and drop locations
+    const { distance: rideDistance, duration: rideDuration } =
+      await getDistanceAndDuration(pickupLocation, dropLocation);
+
+    // Calculate fare based on ride distance, duration, and car category
+    const fare = calculateFare(rideDistance, rideDuration, carCategory);
+
+    // Create a new ride in the database
+    const ride = await prisma.ride.create({
+      data: {
+        userId,
+        pickupLocation,
+        dropLocation,
+        distance: rideDistance,
+        duration: rideDuration,
+        fare,
+        carCategory,
+        status: "SEARCHING",
+      },
+    });
+
+    // Broadcast ride request to all drivers of the requested car category
+    for (const [driverId, driver] of connectedDrivers.entries()) {
+      const driverLocation = `${driver.location.lat},${driver.location.lng}`;
+
+      // Calculate pickup distance and duration for this driver
+      const { distance: pickupDistance, duration: pickupDuration } =
+        await getDistanceAndDuration(driverLocation, pickupLocation);
+
+      // Send ride request to the driver with pickup distance and duration
+      io.to(driver.socketId).emit("car_rental_ride_request", {
+        ...ride,
+        pickupDistance,
+        pickupDuration,
+      });
+
+      console.log(`Ride request sent to driver ${driverId}:`, {
+        pickupDistance,
+        pickupDuration,
+      });
+    }
+
+    console.log(`Ride requested by user ${userId}:`, ride);
+  });
+
+  // Driver accepts a ride
+  socket.on("car_rental_accept_ride", async (data) => {
+    const { rideId, driverId } = data;
+
+    // Update ride status to ACCEPTED
+    const ride = await prisma.ride.update({
+      where: { id: rideId },
+      data: {
+        driverId,
+        status: "ACCEPTED",
+        isDriverAccepted: true,
+        driverAcceptedAt: new Date(),
+      },
+    });
+
+    // Notify the user that the ride has been accepted
+    io.emit("car_rental_ride_accepted", ride);
+
+    console.log(`Ride ${rideId} accepted by driver ${driverId}`);
+  });
+
+  // Driver updates ride status (e.g., arrived, started, ended)
+  socket.on("car_rental_update_ride_status", async (data) => {
+    const { rideId, status } = data;
+
+    // Update ride status in the database
+    const ride = await prisma.ride.update({
+      where: { id: rideId },
+      data: { status },
+    });
+
+    // Notify the user about the status update
+    io.emit("car_rental_ride_status_updated", ride);
+
+    console.log(`Ride ${rideId} status updated to ${status}`);
+  });
+
   // Handle disconnection
   socket.on("disconnect", () => {
     console.log("Client disconnected:", socket.id);
   });
+
+  // Remove driver from connectedDrivers map
+  for (const [driverId, driver] of connectedDrivers.entries()) {
+    if (driver.socketId === socket.id) {
+      connectedDrivers.delete(driverId);
+      console.log(`Driver ${driverId} disconnected`);
+      break;
+    }
+  }
 });
+
+// Calculate fare based on distance, duration, and car category
+const calculateFare = (
+  distance: number,
+  duration: number,
+  carCategory: string
+) => {
+  let baseFare = 0;
+  let extraKmCharge = 0;
+  let extraMinuteCharge = 0;
+
+  if (distance <= 20) {
+    baseFare =
+      carCategory === "mini" ? 720 : carCategory === "sedan" ? 810 : 950;
+  } else if (distance <= 40) {
+    baseFare =
+      carCategory === "mini" ? 900 : carCategory === "sedan" ? 950 : 1150;
+  } else if (distance <= 60) {
+    baseFare =
+      carCategory === "Mini" ? 1200 : carCategory === "Sedan" ? 1400 : 1650;
+  } else if (distance <= 80) {
+    baseFare =
+      carCategory === "Mini" ? 2100 : carCategory === "Sedan" ? 2400 : 2700;
+  }
+
+  if (distance > 80) {
+    const extraKm = distance - 80;
+    extraKmCharge =
+      carCategory === "mini"
+        ? extraKm * 14
+        : carCategory === "sedan"
+        ? extraKm * 16
+        : extraKm * 18;
+  }
+
+  if (duration > 60) {
+    const extraMinutes = duration - 60;
+    extraMinuteCharge = extraMinutes * 2;
+  }
+
+  const totalFare = baseFare + extraKmCharge + extraMinuteCharge;
+  return totalFare;
+};
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {

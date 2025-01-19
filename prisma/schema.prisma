@@ -5,9 +5,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-}
-
-
+} 
 
 enum RideType {
   LOCAL
@@ -179,7 +177,7 @@ model Ride {
   isDriverAccepted Boolean        @default(false)
   driverAcceptedAt DateTime?
   requestExpiresAt DateTime?
-   cancellationReason String?      // Add cancellation reason
+  cancellationReason String?      // Add cancellation reason
   cancellationFee   Float?        // Add cancellation fee
   cancelledBy       UserType? 
 

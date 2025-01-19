@@ -453,7 +453,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
         .json({ error: "Unauthorized to cancel this booking" });
     }
 
-    const cancellationFee = 500; // Fixed cancellation fee
+    const cancellationFee = 300; // Fixed cancellation fee
 
     const updatedBooking = await prisma.$transaction(async (prisma) => {
       // Update booking status
