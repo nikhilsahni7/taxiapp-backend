@@ -11,6 +11,7 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_SECRET!,
 });
 
+console.log(process.env.DATABASE_URL);
 interface Location {
   address: string;
   lat: number;

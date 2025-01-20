@@ -373,6 +373,7 @@ export const calculateFinalAmount = (ride: any): number => {
 export const setupPaymentSocketEvents = (socket: any) => {
   socket.on(
     "end_ride",
+
     async (data: { rideId: string; finalLocation: string }) => {
       try {
         const ride = await prisma.ride.findUnique({
