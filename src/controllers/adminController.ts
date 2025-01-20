@@ -306,7 +306,7 @@ export const getDetailedStats = async (req: Request, res: Response) => {
       ]),
       // Ride type stats
       prisma.ride.groupBy({
-        by: ["rideType", "status", "outstationType"],
+        by: ["rideType", "status"],
         _count: true,
         _sum: {
           totalAmount: true,
@@ -432,5 +432,167 @@ export const handleWithdrawal = async (req: Request, res: Response) => {
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to process withdrawal" });
+  }
+};
+
+// / Get active rides status for local rides
+export const getActiveLocalRidesStatus = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const activeLocalRides = await prisma.ride.findMany({
+      where: {
+        status: {
+          notIn: ["PAYMENT_COMPLETED", "RIDE_ENDED", "CANCELLED"],
+        },
+      },
+      include: {
+        user: {
+          include: {
+            userDetails: true,
+            wallet: true,
+          },
+        },
+        driver: {
+          include: {
+            driverDetails: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    res.json({
+      totalActiveRides: activeLocalRides.length,
+      activeRides: activeLocalRides.map((ride) => ({
+        id: ride.id,
+        status: ride.status,
+        user: ride.user,
+        driver: ride.driver,
+        pickupLocation: ride.pickupLocation,
+        dropLocation: ride.dropLocation,
+        rideType: ride.rideType,
+        createdAt: ride.createdAt,
+        driverAcceptedAt: ride.driverAcceptedAt,
+        rideStartedAt: ride.waitStartTime,
+      })),
+    });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ error: "Failed to fetch active local rides status" });
+  }
+};
+
+// Get active rides status for long distance rides
+export const getActiveLongDistanceRidesStatus = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const activeLongDistanceRides = await prisma.longDistanceBooking.findMany({
+      where: {
+        status: {
+          notIn: ["COMPLETED", "CANCELLED"],
+        },
+      },
+      include: {
+        user: {
+          include: {
+            userDetails: true,
+            wallet: true,
+          },
+        },
+        driver: {
+          include: {
+            driverDetails: true,
+            wallet: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    res.json({
+      totalActiveRides: activeLongDistanceRides.length,
+      activeRides: activeLongDistanceRides.map((ride) => ({
+        id: ride.id,
+        status: ride.status,
+        serviceType: ride.serviceType,
+        user: ride.user,
+        driver: ride.driver,
+        pickupLocation: ride.pickupLocation,
+        dropLocation: ride.dropLocation,
+        tripType: ride.tripType,
+        createdAt: ride.createdAt,
+        driverAcceptedAt: ride.driverAcceptedAt,
+        rideStartedAt: ride.rideStartedAt,
+        driverArrivedAt: ride.driverArrivedAt,
+        advancePaidAt: ride.advancePaidAt,
+      })),
+    });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ error: "Failed to fetch active long distance rides status" });
+  }
+};
+
+// Get active rides status for vendor bookings
+export const getActiveVendorRidesStatus = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const activeVendorRides = await prisma.vendorBooking.findMany({
+      where: {
+        status: {
+          notIn: ["COMPLETED"],
+        },
+      },
+      include: {
+        vendor: {
+          include: {
+            vendorDetails: true,
+          },
+        },
+        driver: {
+          include: {
+            driverDetails: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    res.json({
+      totalActiveRides: activeVendorRides.length,
+      activeRides: activeVendorRides.map((ride) => ({
+        id: ride.id,
+        status: ride.status,
+        serviceType: ride.serviceType,
+        vendor: ride.vendor,
+        driver: ride.driver,
+        pickupLocation: ride.pickupLocation,
+        dropLocation: ride.dropLocation,
+        tripType: ride.tripType,
+        createdAt: ride.createdAt,
+        driverAcceptedAt: ride.driverAcceptedAt,
+        rideStartedAt: ride.rideStartedAt,
+        driverCommissionPaid: ride.driverCommissionPaid,
+        vendorPaidAt: ride.vendorPaidAt,
+      })),
+    });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ error: "Failed to fetch active vendor rides status" });
   }
 };
