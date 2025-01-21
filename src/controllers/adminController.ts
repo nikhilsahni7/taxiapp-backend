@@ -596,3 +596,227 @@ export const getActiveVendorRidesStatus = async (
       .json({ error: "Failed to fetch active vendor rides status" });
   }
 };
+
+// Get all transactions for a specific user/driver/vendor
+export const getUserTransactions = async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+
+    const [
+      regularTransactions,
+      longDistanceTransactions,
+      vendorTransactions,
+      wallet,
+    ] = await Promise.all([
+      // Regular ride transactions
+      prisma.transaction.findMany({
+        where: {
+          OR: [{ senderId: userId }, { receiverId: userId }],
+        },
+        include: {
+          ride: true,
+          sender: true,
+          receiver: true,
+        },
+        orderBy: { createdAt: "desc" },
+      }),
+
+      // Long distance transactions
+      prisma.longDistanceTransaction.findMany({
+        where: {
+          OR: [{ senderId: userId }, { receiverId: userId }],
+        },
+        include: {
+          booking: true,
+          sender: true,
+          receiver: true,
+        },
+        orderBy: { createdAt: "desc" },
+      }),
+
+      // Vendor transactions
+      prisma.vendorBookingTransaction.findMany({
+        where: {
+          OR: [{ senderId: userId }, { receiverId: userId }],
+        },
+        include: {
+          booking: true,
+          sender: true,
+          receiver: true,
+        },
+        orderBy: { createdAt: "desc" },
+      }),
+
+      // Get wallet details
+      prisma.wallet.findUnique({
+        where: { userId },
+        include: {
+          user: {
+            include: {
+              userDetails: true,
+              driverDetails: true,
+              vendorDetails: true,
+            },
+          },
+        },
+      }),
+    ]);
+
+    res.json({
+      wallet,
+      transactions: {
+        regular: regularTransactions,
+        longDistance: longDistanceTransactions,
+        vendor: vendorTransactions,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch user transactions" });
+  }
+};
+
+// Adjust wallet balance
+export const adjustWalletBalance = async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+    const { amount, action, reason } = req.body;
+
+    if (!amount || !action || amount <= 0) {
+      return res.status(400).json({
+        error:
+          "Invalid input. Amount must be positive and action must be specified",
+      });
+    }
+
+    const result = await prisma.$transaction(async (prisma) => {
+      // Update wallet balance
+      const wallet = await prisma.wallet.update({
+        where: { userId },
+        data: {
+          balance:
+            action === "ADD" ? { increment: amount } : { decrement: amount },
+        },
+      });
+
+      // Create transaction record
+      const transaction = await prisma.transaction.create({
+        data: {
+          amount,
+          type: "WALLET_TOPUP",
+          status: TransactionStatus.COMPLETED,
+          senderId: action === "ADD" ? null : userId,
+          receiverId: action === "ADD" ? userId : null,
+          description:
+            reason ||
+            `Admin ${action === "ADD" ? "added" : "deducted"} wallet balance`,
+          metadata: {
+            adjustedBy: "ADMIN",
+            reason,
+            action,
+            timestamp: new Date().toISOString(),
+          },
+        },
+      });
+
+      return { wallet, transaction };
+    });
+
+    res.json({
+      success: true,
+      message: `Wallet balance ${
+        action === "ADD" ? "increased" : "decreased"
+      } successfully`,
+      ...result,
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to adjust wallet balance",
+      details: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+// Get wallet summary for all users
+export const getAllWalletsSummary = async (req: Request, res: Response) => {
+  try {
+    const wallets = await prisma.wallet.findMany({
+      include: {
+        user: {
+          include: {
+            userDetails: true,
+            driverDetails: true,
+            vendorDetails: true,
+          },
+        },
+      },
+    });
+
+    const summary = {
+      totalWallets: wallets.length,
+      totalBalance: wallets.reduce((sum, w) => sum + w.balance, 0),
+      byUserType: {
+        users: wallets.filter((w) => w.user.userType === "USER"),
+        drivers: wallets.filter((w) => w.user.userType === "DRIVER"),
+        vendors: wallets.filter((w) => w.user.userType === "VENDOR"),
+      },
+    };
+
+    res.json(summary);
+  } catch (error) {
+    res.status(500).json({ error: "Failed to fetch wallets summary" });
+  }
+};
+
+// Get all user IDs with basic info
+export const getAllUsers = async (req: Request, res: Response) => {
+  try {
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        email: true,
+        userType: true,
+        verified: true,
+        wallet: {
+          select: {
+            balance: true,
+          },
+        },
+        userDetails: true,
+        driverDetails: {
+          select: {
+            vehicleNumber: true,
+            vehicleName: true,
+            vehicleCategory: true,
+          },
+        },
+        vendorDetails: {
+          select: {
+            businessName: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    res.json({
+      total: users.length,
+      users: users.map((user) => ({
+        ...user,
+        // Add a display name based on user type
+        displayName:
+          user.userType === "VENDOR"
+            ? user.vendorDetails?.businessName
+            : user.name,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: "Failed to fetch users",
+      details: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};

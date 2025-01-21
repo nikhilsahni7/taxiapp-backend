@@ -7,6 +7,10 @@ import {
   getActiveLocalRidesStatus,
   getActiveLongDistanceRidesStatus,
   getActiveVendorRidesStatus,
+  getUserTransactions,
+  adjustWalletBalance,
+  getAllWalletsSummary,
+  getAllUsers,
 } from "../controllers/adminController";
 import { verifyAdmin } from "../middlewares/auth";
 
@@ -28,5 +32,14 @@ router.get(
   getActiveLongDistanceRidesStatus
 );
 router.get("/rides/active/vendor", verifyAdmin, getActiveVendorRidesStatus);
+
+//wallet routes
+
+router.get("/transactions/:userId", verifyAdmin, getUserTransactions);
+router.post("/wallet/:userId/adjust", verifyAdmin, adjustWalletBalance);
+router.get("/wallets/summary", verifyAdmin, getAllWalletsSummary);
+
+// Add new route for getting all users
+router.get("/users", verifyAdmin, getAllUsers);
 
 export { router as adminRouter };

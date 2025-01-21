@@ -6,6 +6,7 @@ import {
   getRide,
   updateRideStatus,
   getFareEstimation,
+  getChatMessages,
 } from "../controllers/rideController";
 import { verifyToken } from "../middlewares/auth";
 import { getOutstationFareEstimate } from "../controllers/outstationController";
@@ -21,5 +22,6 @@ router.post(
   verifyToken,
   getOutstationFareEstimate
 );
+router.get("/:id/chat", verifyToken, getChatMessages);
 
 export { router as rideRouter };

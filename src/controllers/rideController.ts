@@ -1027,3 +1027,84 @@ export const generateOTP = (): number => {
 const validateOTP = (ride: any, otp: number): boolean => {
   return ride.otp === otp;
 };
+
+export const validateRideChatAccess = async (
+  rideId: string,
+  userId: string
+): Promise<boolean> => {
+  try {
+    const ride = await prisma.ride.findFirst({
+      where: {
+        id: rideId,
+        OR: [{ userId }, { driverId: userId }],
+        status: {
+          in: [
+            RideStatus.ACCEPTED,
+            RideStatus.DRIVER_ARRIVED,
+            RideStatus.RIDE_STARTED,
+            RideStatus.PAYMENT_PENDING,
+          ],
+        },
+      },
+    });
+
+    return !!ride;
+  } catch (error) {
+    console.error("Error validating ride chat access:", error);
+    return false;
+  }
+};
+
+export const getChatMessages = async (req: Request, res: Response) => {
+  const { id: rideId } = req.params;
+  const userId = req.user?.userId;
+
+  if (!userId) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    // Validate access
+    const hasAccess = await validateRideChatAccess(rideId, userId);
+    if (!hasAccess) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    // Get messages
+    const messages = await prisma.chatMessage.findMany({
+      where: {
+        rideId,
+      },
+      include: {
+        sender: {
+          select: {
+            name: true,
+            userType: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "asc",
+      },
+    });
+
+    // Mark messages as read
+    await prisma.chatMessage.updateMany({
+      where: {
+        rideId,
+        NOT: {
+          senderId: userId,
+        },
+        read: false,
+      },
+      data: {
+        read: true,
+      },
+    });
+
+    res.json(messages);
+  } catch (error) {
+    console.error("Error fetching chat messages:", error);
+    res.status(500).json({ error: "Failed to fetch chat messages" });
+  }
+};
