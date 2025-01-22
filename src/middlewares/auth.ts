@@ -4,6 +4,7 @@ import jwt from "jsonwebtoken";
 interface TokenPayload {
   userId: string;
   userType: string;
+  selfieUrl: string;
 }
 
 declare global {

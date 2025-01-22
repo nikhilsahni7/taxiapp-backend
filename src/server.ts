@@ -20,6 +20,8 @@ import {
   calculateDuration,
   validateRideChatAccess,
 } from "./controllers/rideController";
+import { CarRentalSocketHandler } from "./socket/carRentalHandler";
+import { carRentalRouter } from "./routes/car-rental";
 
 const app = express();
 const server = http.createServer(app);
@@ -62,9 +64,13 @@ app.use("/api/outstation", outstationRouter);
 app.use("/api/hill-station", hillStationRouter);
 app.use("/api/vendor", vendorRouter);
 app.use("/api/all-india", allIndiaRoutes);
+app.use("/api/car-rental", carRentalRouter);
 app.use("/", (req, res) => {
   res.send("Welcome to the taxiSure API");
 });
+
+// Initialize car rental socket handler
+const carRentalHandler = new CarRentalSocketHandler(io);
 
 io.on("connection", (socket: Socket) => {
   console.log("User connected:", socket.id);
@@ -854,6 +860,38 @@ io.on("connection", (socket: Socket) => {
       }
     }
   );
+
+  // Car rental socket events
+  socket.on(
+    "driver:register",
+    (data: { driverId: string; location: { lat: number; lng: number } }) => {
+      console.log("Driver registered:", data);
+
+      socket.data.userId = data.driverId;
+      socket.join(`driver:${data.driverId}`);
+      carRentalHandler.registerDriver(socket, data);
+    }
+  );
+
+  socket.on("driver:location", (data: { lat: number; lng: number }) => {
+    console.log("Received driver location update:", data);
+    carRentalHandler.handleDriverLocation(socket, data);
+  });
+
+  socket.on("carRental:response", (data) => {
+    console.log("Received car rental response:", data);
+    carRentalHandler.handleDriverResponse(socket, data);
+  });
+
+  socket.on("carRental:start", (data) => {
+    console.log("Car rental ride start:", data);
+    carRentalHandler.handleRideStart(socket, data);
+  });
+
+  socket.on("carRental:end", (data) => {
+    console.log("Car rental ride end:", data);
+    carRentalHandler.handleRideEnd(socket, data);
+  });
 
   // Handle disconnection
   socket.on("disconnect", () => {
