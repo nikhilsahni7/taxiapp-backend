@@ -684,6 +684,7 @@ export const getBookingStatus = async (req: Request, res: Response) => {
       driverArrivedAt: booking.driverArrivedAt,
       rideStartedAt: booking.rideStartedAt,
       rideEndedAt: booking.rideEndedAt,
+      cancelReason: booking.cancelReason,
 
       // User info (always included)
       user: {

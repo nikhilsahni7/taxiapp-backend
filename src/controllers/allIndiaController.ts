@@ -581,34 +581,119 @@ export const cancelBooking = async (req: Request, res: Response) => {
         .json({ error: "Unauthorized to cancel this booking" });
     }
 
-    const updatedBooking = await prisma.longDistanceBooking.update({
-      where: { id: bookingId },
-      data: {
-        status: "CANCELLED",
-        cancelReason: reason,
-      },
-    });
+    // Check if cancellation charge applies
+    const shouldChargeCancellationFee =
+      booking.status === "DRIVER_ACCEPTED" &&
+      booking.driverAcceptedAt &&
+      new Date().getTime() - booking.driverAcceptedAt.getTime() > 3 * 60 * 1000; // 3 minutes
+
+    const CANCELLATION_FEE = 300;
+    let updatedBooking;
+
+    if (shouldChargeCancellationFee) {
+      // Use transaction to handle cancellation fee
+      updatedBooking = await prisma.$transaction(async (prisma) => {
+        // Deduct from cancelling user's wallet
+        const wallet = await prisma.wallet.findUnique({
+          where: { userId: req.user!.userId },
+        });
+
+        if (!wallet || wallet.balance < CANCELLATION_FEE) {
+          throw new Error("Insufficient wallet balance for cancellation fee");
+        }
+
+        // Update wallet
+        await prisma.wallet.update({
+          where: { userId: req.user!.userId },
+          data: {
+            balance: { decrement: CANCELLATION_FEE },
+          },
+        });
+
+        // Create transaction record
+        await prisma.longDistanceTransaction.create({
+          data: {
+            bookingId: bookingId,
+            amount: CANCELLATION_FEE,
+            type: "BOOKING_ADVANCE",
+            status: "COMPLETED",
+            senderId: req.user!.userId,
+            receiverId: process.env.ADMIN_USER_ID!, // Send to admin wallet
+            description: `Cancellation fee for booking ${bookingId}`,
+            metadata: {
+              cancellationType: "LATE_CANCELLATION",
+              cancelledBy:
+                req.user!.userId === booking.userId ? "USER" : "DRIVER",
+            },
+          },
+        });
+
+        // Update booking
+        return await prisma.longDistanceBooking.update({
+          where: { id: bookingId },
+          data: {
+            status: "CANCELLED",
+            cancelReason: reason,
+            metadata: {
+              cancellationFee: CANCELLATION_FEE,
+              cancelledBy:
+                req.user!.userId === booking.userId ? "USER" : "DRIVER",
+              cancellationTime: new Date(),
+            },
+          },
+        });
+      });
+    } else {
+      // Simple cancellation without fee
+      updatedBooking = await prisma.longDistanceBooking.update({
+        where: { id: bookingId },
+        data: {
+          status: "CANCELLED",
+          cancelReason: reason,
+          metadata: {
+            cancelledBy:
+              req.user!.userId === booking.userId ? "USER" : "DRIVER",
+            cancellationTime: new Date(),
+          },
+        },
+      });
+    }
 
     // Notify both parties through socket
     io.to(booking.userId).emit("booking_cancelled", {
       bookingId,
       reason,
-      cancelledBy: req.user.userType,
+      cancelledBy: req.user!.userId === booking.userId ? "USER" : "DRIVER",
       serviceType: "ALL_INDIA_TOUR",
+      cancellationFee: shouldChargeCancellationFee ? CANCELLATION_FEE : 0,
     });
 
     if (booking.driverId) {
       io.to(booking.driverId).emit("booking_cancelled", {
         bookingId,
         reason,
-        cancelledBy: req.user.userType,
+        cancelledBy: req.user!.userId === booking.userId ? "USER" : "DRIVER",
         serviceType: "ALL_INDIA_TOUR",
+        cancellationFee: shouldChargeCancellationFee ? CANCELLATION_FEE : 0,
       });
     }
 
-    res.json({ success: true, booking: updatedBooking });
+    res.json({
+      success: true,
+      booking: updatedBooking,
+      cancellationFee: shouldChargeCancellationFee ? CANCELLATION_FEE : 0,
+    });
   } catch (error) {
     console.error("Error cancelling booking:", error);
+    if (
+      error instanceof Error &&
+      error.message === "Insufficient wallet balance for cancellation fee"
+    ) {
+      return res.status(400).json({
+        error: "Insufficient wallet balance to cover cancellation fee",
+        requiredAmount: 300,
+      });
+    }
     res.status(500).json({ error: "Failed to cancel booking" });
   }
 };
@@ -693,6 +778,7 @@ export const getBookingStatus = async (req: Request, res: Response) => {
       paymentMode: booking.paymentMode,
       advancePaymentStatus: booking.advancePaymentStatus,
       finalPaymentStatus: booking.finalPaymentStatus,
+      cancelReason: booking.cancelReason,
 
       // Timestamps
       createdAt: booking.createdAt,
