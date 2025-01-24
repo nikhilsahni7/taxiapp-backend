@@ -66,7 +66,7 @@ export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
     // Calculate total days (including partial days)
     const timeDiff = endDateTime.getTime() - startDateTime.getTime();
     const daysDiff = timeDiff / (1000 * 3600 * 24);
-    const numberOfDays = Math.ceil(daysDiff) || 1; // Minimum 1 day
+    const numberOfDays = Math.ceil(daysDiff + 1) || 1; // Minimum 1 day
 
     // Get rates for vehicle type
     //@ts-ignore
@@ -180,8 +180,9 @@ export const createAllIndiaBooking = async (req: Request, res: Response) => {
     endDateTime.setHours(pickupHours, pickupMinutes, 0, 0);
     const numberOfDays =
       Math.ceil(
-        (endDateTime.getTime() - startDateTime.getTime()) / (1000 * 3600 * 24)
-      ) || 1;
+        (endDateTime.getTime() - startDateTime.getTime()) / (1000 * 3600 * 24) +
+          1
+      ) || 1; // Added +1 to increase by one day
 
     // Calculate fare
     //@ts-ignore
