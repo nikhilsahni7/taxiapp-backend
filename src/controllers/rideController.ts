@@ -7,6 +7,7 @@ import {
   UserType,
   TransactionType,
   TransactionStatus,
+  RideType,
 } from "@prisma/client";
 import { searchAvailableDrivers } from "../lib/driverService";
 
@@ -558,25 +559,194 @@ async function findAndRequestDrivers(ride: any) {
   };
 }
 
+// Define types for the package structure
+type PackageDetails = {
+  km: number;
+  price: number;
+};
+
+type PackageHours = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+
+type RentalPackages = {
+  [K in CarCategory]: {
+    [H in PackageHours]: PackageDetails;
+  };
+};
+
+// Define the rental packages with proper typing
+const RENTAL_PACKAGES: RentalPackages = {
+  mini: {
+    1: { km: 15, price: 380 },
+    2: { km: 25, price: 550 },
+    3: { km: 35, price: 700 },
+    4: { km: 45, price: 950 },
+    5: { km: 60, price: 1250 },
+    6: { km: 70, price: 1550 },
+    7: { km: 80, price: 1850 },
+    8: { km: 90, price: 2100 },
+  },
+  sedan: {
+    1: { km: 15, price: 450 },
+    2: { km: 25, price: 600 },
+    3: { km: 40, price: 850 },
+    4: { km: 50, price: 1100 },
+    5: { km: 65, price: 1400 },
+    6: { km: 75, price: 1650 },
+    7: { km: 85, price: 2000 },
+    8: { km: 90, price: 2300 },
+  },
+  suv: {
+    1: { km: 15, price: 580 },
+    2: { km: 25, price: 750 },
+    3: { km: 40, price: 950 },
+    4: { km: 50, price: 1200 },
+    5: { km: 65, price: 1500 },
+    6: { km: 75, price: 1850 },
+    7: { km: 85, price: 2100 },
+    8: { km: 90, price: 2450 },
+  },
+};
+
+const EXTRA_KM_RATES = {
+  mini: 14,
+  sedan: 16,
+  suv: 18,
+};
+
+const EXTRA_MINUTE_RATE = 2;
+
+// Add this new function to calculate rental fare
+export const calculateRentalFare = (
+  carCategory: string,
+  packageHours: number,
+  actualKms: number,
+  actualMinutes: number
+) => {
+  const category = carCategory.toLowerCase() as keyof typeof RENTAL_PACKAGES;
+  const packageDetails =
+    RENTAL_PACKAGES[category][
+      packageHours as keyof (typeof RENTAL_PACKAGES)[typeof category]
+    ];
+
+  if (!packageDetails) {
+    throw new Error("Invalid package selected");
+  }
+
+  const basePrice = packageDetails.price;
+  const packageKms = packageDetails.km;
+
+  // Calculate extra km charges
+  const extraKms = Math.max(0, actualKms - packageKms);
+  const extraKmCharges = extraKms * EXTRA_KM_RATES[category];
+
+  // Calculate extra minute charges
+  const packageMinutes = packageHours * 60;
+  const extraMinutes = Math.max(0, actualMinutes - packageMinutes);
+  const extraMinuteCharges = extraMinutes * EXTRA_MINUTE_RATE;
+
+  return {
+    basePrice,
+    packageKms,
+    extraKmCharges,
+    extraMinuteCharges,
+    totalAmount: basePrice + extraKmCharges + extraMinuteCharges,
+  };
+};
+
+// Type guards for validation
+const isValidCarCategory = (category: string): category is CarCategory => {
+  return ["mini", "sedan", "suv"].includes(category.toLowerCase());
+};
+
+const isValidPackageHours = (hours: number): hours is PackageHours => {
+  return hours >= 1 && hours <= 8;
+};
+
+// Modify createRide to handle car rentals
 export const createRide = async (req: Request, res: Response) => {
-  const { pickupLocation, dropLocation, carCategory, paymentMode } = req.body;
+  const {
+    pickupLocation,
+    dropLocation,
+    carCategory,
+    paymentMode,
+    isCarRental,
+    rentalPackageHours,
+  } = req.body;
+
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
   const userId = req.user.userId;
 
   try {
-    // Create initial ride record with SEARCHING status
-    const ride = await initializeRide(
+    let rideData: any = {
       userId,
       pickupLocation,
-      dropLocation,
       carCategory,
-      paymentMode
-    );
+      status: RideStatus.SEARCHING,
+      paymentMode: paymentMode || PaymentMode.CASH,
+      otp: generateOTP().toString(),
+      rideType: isCarRental ? RideType.CAR_RENTAL : RideType.LOCAL,
+    };
+
+    if (isCarRental) {
+      // For car rental, initialize rental-specific fields
+      const isValidCategory = isValidCarCategory(carCategory);
+      const isValidHours = isValidPackageHours(rentalPackageHours);
+
+      if (!isValidCategory) {
+        return res.status(400).json({ error: "Invalid car category" });
+      }
+
+      if (!isValidHours) {
+        return res.status(400).json({ error: "Invalid package hours" });
+      }
+
+      const packageDetails =
+        RENTAL_PACKAGES[carCategory.toLowerCase() as CarCategory][
+          rentalPackageHours
+        ];
+
+      rideData = {
+        ...rideData,
+        isCarRental: true,
+        rentalPackageHours,
+        rentalPackageKms: packageDetails.km,
+        rentalBasePrice: packageDetails.price,
+        dropLocation: "", // Initially empty for rentals
+      };
+    } else {
+      // For regular rides, include drop location and calculate fare
+      rideData.dropLocation = dropLocation;
+      const distance = await calculateDistance(pickupLocation, dropLocation);
+      const duration = await calculateDuration(pickupLocation, dropLocation);
+      const fareDetails = await calculateFare(
+        pickupLocation,
+        dropLocation,
+        distance,
+        carCategory
+      );
+
+      rideData = {
+        ...rideData,
+        distance,
+        duration,
+        fare: fareDetails.totalFare,
+      };
+    }
+
+    // Create the ride
+    const ride = await prisma.ride.create({
+      data: rideData,
+      include: {
+        user: {
+          select: { name: true, phone: true },
+        },
+      },
+    });
 
     // Start driver search process
     const driverSearchResult = await findAndRequestDrivers(ride);
 
-    // If no driver was found, mark ride as cancelled
+    // Handle no driver found case
     if (!driverSearchResult.success) {
       const cancelledRide = await updateRideInDatabase(
         ride.id,
@@ -589,7 +759,6 @@ export const createRide = async (req: Request, res: Response) => {
       });
     }
 
-    // Return successful response with ride details and driver search info
     return res.status(201).json({
       ride: driverSearchResult.ride,
       message: driverSearchResult.message,
@@ -695,18 +864,13 @@ const calculateWaitingCharges = async (ride: any) => {
 };
 export const handleRideCompletion = async (req: Request, res: Response) => {
   const { rideId } = req.params;
-  const { finalLocation } = req.body;
-
-  if (!rideId) {
-    return res.status(400).json({ error: "Ride ID is required" });
-  }
+  const { finalLocation, actualKmsTravelled, actualMinutes } = req.body;
 
   try {
-    // First find the ride
     const ride = await prisma.ride.findFirst({
       where: {
         id: rideId,
-        status: RideStatus.RIDE_STARTED, // Only allow completion of started rides
+        status: RideStatus.RIDE_STARTED,
       },
       include: {
         user: true,
@@ -715,26 +879,47 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
     });
 
     if (!ride) {
-      return res.status(404).json({
-        error: "Ride not found or invalid status",
-        details: "Ride must be in RIDE_STARTED status to end it",
-      });
+      return res
+        .status(404)
+        .json({ error: "Ride not found or invalid status" });
     }
 
-    // Calculate final amount including any extra charges
-    const finalAmount = calculateFinalAmount(ride);
+    let finalAmount: number;
+    let updateData: any = {
+      status:
+        ride.paymentMode === PaymentMode.CASH
+          ? RideStatus.RIDE_ENDED
+          : RideStatus.PAYMENT_PENDING,
+      dropLocation: finalLocation,
+    };
 
-    // Update ride with final details
+    if (ride.isCarRental) {
+      // Calculate final amount for rental
+      const rentalCalculation = calculateRentalFare(
+        ride.carCategory!,
+        ride.rentalPackageHours!,
+        actualKmsTravelled,
+        actualMinutes
+      );
+
+      updateData = {
+        ...updateData,
+        actualKmsTravelled,
+        actualMinutes,
+        extraKmCharges: rentalCalculation.extraKmCharges,
+        extraMinuteCharges: rentalCalculation.extraMinuteCharges,
+        totalAmount: rentalCalculation.totalAmount,
+      };
+
+      finalAmount = rentalCalculation.totalAmount;
+    } else {
+      finalAmount = calculateFinalAmount(ride);
+      updateData.totalAmount = finalAmount;
+    }
+
     const updatedRide = await prisma.ride.update({
       where: { id: rideId },
-      data: {
-        dropLocation: finalLocation || ride.dropLocation,
-        totalAmount: finalAmount,
-        status:
-          ride.paymentMode === PaymentMode.CASH
-            ? RideStatus.RIDE_ENDED
-            : RideStatus.PAYMENT_PENDING,
-      },
+      data: updateData,
       include: {
         user: true,
         driver: true,
@@ -747,6 +932,13 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
       finalLocation,
       amount: finalAmount,
       paymentMode: ride.paymentMode,
+      isCarRental: ride.isCarRental,
+      ...(ride.isCarRental && {
+        actualKmsTravelled,
+        actualMinutes,
+        extraKmCharges: updateData.extraKmCharges,
+        extraMinuteCharges: updateData.extraMinuteCharges,
+      }),
     });
 
     // Handle payment based on mode
@@ -765,11 +957,11 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         paymentDetails,
       });
     }
-  } catch (error: any) {
+  } catch (error) {
     console.error("Error completing ride:", error);
     return res.status(500).json({
       error: "Failed to complete ride",
-      message: error.message,
+      message: error instanceof Error ? error.message : "Unknown error",
     });
   }
 };

@@ -4,7 +4,6 @@ import {
   getOutstationFareEstimate,
   searchOutstationDrivers,
   acceptOutstationBooking,
-  createAdvancePayment,
   verifyAdvancePayment,
   startDriverPickup,
   driverArrived,
@@ -26,7 +25,7 @@ router.use(verifyToken);
 // User routes
 router.post("/fare-estimate", getOutstationFareEstimate);
 router.post("/search-drivers", searchOutstationDrivers);
-router.post("/bookings/:bookingId/advance-payment", createAdvancePayment);
+
 router.post(
   "/bookings/:bookingId/verify-advance-payment",
   verifyAdvancePayment
