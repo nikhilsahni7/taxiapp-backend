@@ -151,7 +151,6 @@ export const createAllIndiaBooking = async (req: Request, res: Response) => {
     startDate,
     endDate,
     pickupTime,
-    paymentMode,
   }: {
     pickupLocation: Location;
     dropLocation: Location;
@@ -159,7 +158,6 @@ export const createAllIndiaBooking = async (req: Request, res: Response) => {
     startDate: string;
     endDate: string;
     pickupTime: string;
-    paymentMode: PaymentMode;
   } = req.body;
 
   if (!req.user?.userId) {
@@ -182,7 +180,7 @@ export const createAllIndiaBooking = async (req: Request, res: Response) => {
       Math.ceil(
         (endDateTime.getTime() - startDateTime.getTime()) / (1000 * 3600 * 24) +
           1
-      ) || 1; // Added +1 to increase by one day
+      ) || 1;
 
     // Calculate fare
     //@ts-ignore
@@ -195,7 +193,7 @@ export const createAllIndiaBooking = async (req: Request, res: Response) => {
     const advanceAmount = totalFare * 0.25;
     const remainingAmount = totalFare * 0.75;
 
-    // Create booking
+    // Create booking with PENDING status
     const booking = await prisma.longDistanceBooking.create({
       data: {
         userId: req.user.userId,
@@ -209,10 +207,10 @@ export const createAllIndiaBooking = async (req: Request, res: Response) => {
         vehicleCategory: vehicleType,
         distance,
         duration,
-        paymentMode,
+        paymentMode: PaymentMode.RAZORPAY, // Force Razorpay for advance payment
         startDate: startDateTime,
         endDate: endDateTime,
-        pickupTime: pickupTime,
+        pickupTime,
         totalDays: numberOfDays,
         baseAmount: baseFare,
         totalAmount: totalFare,
@@ -223,28 +221,28 @@ export const createAllIndiaBooking = async (req: Request, res: Response) => {
       },
     });
 
-    // Find available drivers
-    const availableDrivers = await prisma.driverDetails.findMany({
-      where: {
-        vehicleCategory: vehicleType,
-      },
-      include: {
-        user: true,
+    // Create Razorpay order for advance payment
+    const order = await razorpay.orders.create({
+      amount: Math.round(advanceAmount * 100),
+      currency: "INR",
+      receipt: `ADV${booking.id.slice(-8)}`,
+      notes: {
+        bookingId: booking.id,
+        userId: req.user.userId,
+        type: "all_india_advance_payment",
       },
     });
 
-    const expiryTime = new Date();
-    expiryTime.setHours(expiryTime.getHours() + 1);
-
     res.json({
       booking,
-      availableDrivers: availableDrivers.length,
-      expiresAt: expiryTime,
+      paymentDetails: {
+        order,
+        amount: advanceAmount,
+      },
       estimate: {
         distance,
         duration,
         totalFare,
-        paymentMode,
         advanceAmount,
         remainingAmount,
         numberOfDays,
@@ -275,16 +273,12 @@ export const getAvailableAllIndiaBookings = async (
       return res.status(404).json({ error: "Driver details not found" });
     }
 
-    const now = new Date();
     const availableBookings = await prisma.longDistanceBooking.findMany({
       where: {
-        status: "PENDING",
+        status: "ADVANCE_PAID", // Only show bookings with paid advance
         serviceType: "ALL_INDIA_TOUR",
         vehicleCategory: driverDetails.vehicleCategory ?? "",
         driverId: null,
-        createdAt: {
-          gte: new Date(now.getTime() - 60 * 60 * 1000), // Last hour
-        },
       },
       include: {
         user: {
@@ -321,7 +315,7 @@ export const getAvailableAllIndiaBookings = async (
         0,
         60 -
           Math.floor(
-            (now.getTime() - booking.createdAt.getTime()) / (1000 * 60)
+            (new Date().getTime() - booking.createdAt.getTime()) / (1000 * 60)
           )
       ),
     }));
@@ -347,7 +341,7 @@ export const acceptAllIndiaBooking = async (req: Request, res: Response) => {
     const booking = await prisma.longDistanceBooking.update({
       where: {
         id: bookingId,
-        status: "PENDING",
+        status: "ADVANCE_PAID",
       },
       data: {
         driverId: req.user.userId,
@@ -406,6 +400,7 @@ export const verifyAdvancePayment = async (req: Request, res: Response) => {
   }
 
   try {
+    // Verify payment signature
     const body = razorpay_order_id + "|" + razorpay_payment_id;
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_SECRET!)
@@ -417,19 +412,22 @@ export const verifyAdvancePayment = async (req: Request, res: Response) => {
     }
 
     const updatedBooking = await prisma.$transaction(async (prisma) => {
+      // Update booking status to make it available to drivers
       const booking = await prisma.longDistanceBooking.update({
         where: {
           id: bookingId,
           userId: req.user!.userId,
+          status: "PENDING", // Only update if status is PENDING
         },
         data: {
           status: "ADVANCE_PAID",
-          advancePaymentStatus: "COMPLETED",
           advancePaidAt: new Date(),
           advancePaymentId: razorpay_payment_id,
+          advancePaymentStatus: "COMPLETED",
         },
       });
 
+      // Create transaction record
       await prisma.longDistanceTransaction.create({
         data: {
           bookingId,
@@ -437,21 +435,10 @@ export const verifyAdvancePayment = async (req: Request, res: Response) => {
           type: "BOOKING_ADVANCE",
           status: "COMPLETED",
           senderId: booking.userId,
-          receiverId: booking.driverId!,
+          receiverId: null, // Will be updated when driver accepts
           razorpayOrderId: razorpay_order_id,
           razorpayPaymentId: razorpay_payment_id,
           description: `Advance payment for All India Tour ${bookingId}`,
-        },
-      });
-
-      await prisma.wallet.upsert({
-        where: { userId: booking.driverId! },
-        create: {
-          userId: booking.driverId!,
-          balance: booking.advanceAmount,
-        },
-        update: {
-          balance: { increment: booking.advanceAmount },
         },
       });
 
@@ -477,7 +464,7 @@ export const startDriverPickup = async (req: Request, res: Response) => {
       where: {
         id: bookingId,
         driverId: req.user.userId,
-        status: "ADVANCE_PAID",
+        status: "DRIVER_ACCEPTED",
       },
       data: {
         status: "DRIVER_PICKUP_STARTED",
@@ -1056,21 +1043,24 @@ export const confirmRideCompletion = async (req: Request, res: Response) => {
         },
       });
 
-      // 3. Update driver's wallet
-      await prisma.wallet.upsert({
-        where: {
-          userId: booking.driverId!,
-        },
-        create: {
-          userId: booking.driverId!,
-          balance: booking.remainingAmount,
-        },
-        update: {
-          balance: {
-            increment: booking.remainingAmount,
+      // 3. Update driver's wallet - Fixed the null userId issue
+      if (booking.driverId) {
+        // Add null check
+        await prisma.wallet.upsert({
+          where: {
+            userId: booking.driverId,
           },
-        },
-      });
+          create: {
+            userId: booking.driverId,
+            balance: booking.remainingAmount,
+          },
+          update: {
+            balance: {
+              increment: booking.remainingAmount,
+            },
+          },
+        });
+      }
 
       return completed;
     });
