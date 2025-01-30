@@ -10,7 +10,6 @@ datasource db {
 enum RideType {
   LOCAL
   OUTSTATION
-  CAR_RENTAL
 }
 
 enum OutstationTripType {
@@ -76,6 +75,15 @@ enum LongDistanceBookingStatus {
   CANCELLED
 }
 
+enum CarRentalStatus {
+  SEARCHING
+  ACCEPTED
+  DRIVER_ARRIVED
+  STARTED
+  COMPLETED
+  CANCELLED
+}
+
 model User {
   id            String          @id @default(uuid())
   phone         String          @unique
@@ -118,6 +126,12 @@ model User {
 
   // Chat Messages
   sentMessages ChatMessage[] @relation("SentMessages")
+
+  // Car Rentals
+  carRentalsAsUser    CarRentalBooking[] @relation("UserCarRentals")
+  carRentalsAsDriver  CarRentalBooking[] @relation("DriverCarRentals")
+  sentCarRentalTransactions     CarRentalTransaction[] @relation("SenderCarRentalTransactions")
+  receivedCarRentalTransactions CarRentalTransaction[] @relation("ReceiverCarRentalTransactions")
 }
 
 model Wallet {
@@ -191,16 +205,6 @@ model Ride {
 
   // Chat Messages
   chatMessages ChatMessage[]
-
-  // New fields for car rental
-  isCarRental        Boolean        @default(false)
-  rentalPackageHours Int?          // 1-8 hours package
-  rentalPackageKms   Int?          // Package kilometers
-  rentalBasePrice    Float?        // Base package price
-  actualKmsTravelled Float?        // Actual distance traveled
-  actualMinutes      Int?          // Actual minutes used
-  extraKmCharges     Float?        // Charges for extra kms
-  extraMinuteCharges Float?        // Charges for extra minutes
 }
 
 // Existing models remain unchanged
@@ -464,3 +468,93 @@ model ChatMessage {
 
   @@index([rideId])
 }
+
+model CarRentalPackage {
+  id          String   @id @default(uuid())
+  name        String   // e.g. "2-20", "4-40"
+  hours       Int
+  kilometers  Int
+  basePrice   Float
+  carType     String   // mini, sedan, suv
+  extraKmRate Float
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  bookings    CarRentalBooking[]
+}
+
+model CarRentalBooking {
+  id              String          @id @default(uuid())
+  packageId       String
+  userId          String
+  driverId        String?
+  status          CarRentalStatus @default(SEARCHING)
+  pickupLocation  String
+  pickupLat       Float
+  pickupLng       Float
+  pickupDistance  Float?          // Distance from driver to pickup
+  pickupDuration  Int?           // Duration to pickup in minutes
+  
+  // Package details
+  hours           Int
+  kilometers      Int
+  carType         String
+  baseAmount      Float
+  
+  // Actual usage
+  startTime       DateTime?
+  endTime         DateTime?
+  totalDistance   Float?
+  extraKms        Float?
+  extraMinutes    Int?
+  extraCharges    Float?
+  finalAmount     Float?
+  
+  // Payment
+  paymentMode     PaymentMode     @default(CASH)
+  paymentStatus   TransactionStatus @default(PENDING)
+  razorpayOrderId String?         @unique
+  
+  // Timestamps
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  driverAcceptedAt DateTime?
+  driverArrivedAt  DateTime?
+  rideStartedAt    DateTime?
+  rideEndedAt      DateTime?
+  
+  // Relations
+  package         CarRentalPackage @relation(fields: [packageId], references: [id])
+  user            User            @relation("UserCarRentals", fields: [userId], references: [id])
+  driver          User?           @relation("DriverCarRentals", fields: [driverId], references: [id])
+  transactions    CarRentalTransaction[]
+
+  @@map("car_rental_bookings")
+}
+
+model CarRentalTransaction {
+  id                String            @id @default(uuid())
+  bookingId         String
+  amount            Float
+  type              TransactionType
+  status            TransactionStatus @default(PENDING)
+  senderId          String
+  receiverId        String
+  razorpayOrderId   String?          @unique
+  razorpayPaymentId String?
+  
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  booking           CarRentalBooking @relation(fields: [bookingId], references: [id])
+  sender            User             @relation("SenderCarRentalTransactions", fields: [senderId], references: [id])
+  receiver          User             @relation("ReceiverCarRentalTransactions", fields: [receiverId], references: [id])
+
+  @@map("car_rental_transactions")
+}
+
+//--  state-persistnece 
+
+// move 4 things in ui to profile 
+
+
+// 

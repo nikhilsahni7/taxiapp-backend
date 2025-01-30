@@ -110,6 +110,7 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
     dropLocation,
     vehicleType,
     tripType,
+    paymentMode,
   }: {
     pickupLocation: Location;
     dropLocation: Location;
@@ -118,6 +119,7 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
     paymentMode: PaymentMode;
   } = req.body;
 
+  // @ts-ignore
   if (!req.user?.userId) {
     return res.status(401).json({ error: "User not authenticated" });
   }
@@ -132,7 +134,7 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
 
     const booking = await prisma.longDistanceBooking.create({
       data: {
-        userId: req.user.userId,
+        userId: (req as any).user.userId,
         serviceType: "OUTSTATION",
         pickupLocation: pickupLocation.address,
         pickupLat: pickupLocation.lat,
@@ -144,7 +146,7 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
         tripType: tripType as OutstationTripType,
         distance,
         duration,
-        paymentMode: PaymentMode.RAZORPAY, // Force Razorpay for advance payment
+        paymentMode: paymentMode || PaymentMode.CASH,
         startDate: new Date(),
         endDate: new Date(),
         pickupTime: new Date().toISOString(),
@@ -154,101 +156,38 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
         totalAmount: fare,
         advanceAmount: fare * 0.25,
         remainingAmount: fare * 0.75,
-        status: "PENDING", // Initial status
+        status: "PENDING",
       },
     });
 
-    // Create Razorpay order for advance payment
-    const order = await razorpay.orders.create({
-      amount: Math.round(booking.advanceAmount * 100),
-      currency: "INR",
-      receipt: `ADV${booking.id.slice(-8)}`,
-      notes: {
-        bookingId: booking.id,
-        userId: req.user.userId,
-        type: "outstation_advance_payment",
+    const availableDrivers = await prisma.driverDetails.findMany({
+      where: {
+        vehicleCategory: vehicleType,
+      },
+      include: {
+        user: true,
       },
     });
+
+    const expiryTime = new Date();
+    expiryTime.setHours(expiryTime.getHours() + 1);
 
     res.json({
       booking,
-      paymentDetails: {
-        order,
-        amount: booking.advanceAmount,
-      },
+      availableDrivers: availableDrivers.length,
+      expiresAt: expiryTime,
       estimate: {
         distance,
         duration,
         fare,
-        advanceAmount: booking.advanceAmount,
-        remainingAmount: booking.remainingAmount,
+        paymentMode,
+        advanceAmount: fare * 0.25,
+        remainingAmount: fare * 0.75,
       },
     });
   } catch (error) {
-    console.error("Error creating booking:", error);
-    res.status(500).json({ error: "Failed to create booking" });
-  }
-};
-
-// Verify advance payment and make booking available to drivers
-export const verifyAdvancePayment = async (req: Request, res: Response) => {
-  const { bookingId } = req.params;
-  const { razorpay_payment_id, razorpay_order_id, razorpay_signature } =
-    req.body;
-
-  if (!req.user?.userId) {
-    return res.status(401).json({ error: "User not authenticated" });
-  }
-
-  try {
-    // Verify payment signature
-    const body = razorpay_order_id + "|" + razorpay_payment_id;
-    const expectedSignature = crypto
-      .createHmac("sha256", process.env.RAZORPAY_SECRET!)
-      .update(body.toString())
-      .digest("hex");
-
-    if (expectedSignature !== razorpay_signature) {
-      return res.status(400).json({ error: "Invalid payment signature" });
-    }
-
-    const updatedBooking = await prisma.$transaction(async (prisma) => {
-      // Update booking status to make it available to drivers
-      const booking = await prisma.longDistanceBooking.update({
-        where: {
-          id: bookingId,
-          userId: req.user!.userId,
-        },
-        data: {
-          status: "ADVANCE_PAID", // This status means booking is now visible to drivers
-          advancePaidAt: new Date(),
-          advancePaymentId: razorpay_payment_id,
-          advancePaymentStatus: "COMPLETED",
-        },
-      });
-
-      // Create transaction record
-      await prisma.longDistanceTransaction.create({
-        data: {
-          bookingId,
-          amount: booking.advanceAmount,
-          type: "BOOKING_ADVANCE",
-          status: "COMPLETED",
-          senderId: booking.userId,
-          receiverId: null, // Will be updated when driver accepts
-          razorpayOrderId: razorpay_order_id,
-          razorpayPaymentId: razorpay_payment_id,
-          description: `Advance payment for outstation ride ${bookingId}`,
-        },
-      });
-
-      return booking;
-    });
-
-    res.json({ success: true, booking: updatedBooking });
-  } catch (error) {
-    console.error("Error verifying payment:", error);
-    res.status(500).json({ error: "Failed to verify payment" });
+    console.error("Error searching drivers:", error);
+    res.status(500).json({ error: "Failed to search drivers" });
   }
 };
 
@@ -276,6 +215,124 @@ export const acceptOutstationBooking = async (req: Request, res: Response) => {
   }
 };
 
+// Create payment order for advance payment
+export const createAdvancePayment = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+  if (!req.user?.userId) {
+    return res.status(401).json({ error: "User not authenticated" });
+  }
+
+  try {
+    const booking = await prisma.longDistanceBooking.findFirst({
+      where: {
+        id: bookingId,
+        userId: req.user.userId, // Ensure booking belongs to user
+      },
+    });
+
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    const order = await razorpay.orders.create({
+      amount: Math.round(booking.advanceAmount * 100),
+      currency: "INR",
+      receipt: bookingId,
+    });
+
+    res.json({ order });
+  } catch (error) {
+    console.error("Error creating payment:", error);
+    res.status(500).json({ error: "Failed to create payment" });
+  }
+};
+
+// Verify advance payment
+export const verifyAdvancePayment = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+  const { razorpay_payment_id, razorpay_order_id, razorpay_signature } =
+    req.body;
+
+  if (!req.user?.userId) {
+    return res.status(401).json({ error: "User not authenticated" });
+  }
+
+  try {
+    // Verify the payment signature first
+    const body = razorpay_order_id + "|" + razorpay_payment_id;
+    const expectedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_SECRET!)
+      .update(body.toString())
+      .digest("hex");
+
+    if (expectedSignature !== razorpay_signature) {
+      return res.status(400).json({ error: "Invalid payment signature" });
+    }
+
+    const updatedBooking = await prisma.$transaction(async (prisma) => {
+      // 1. Update booking status
+      const updatedBooking = await prisma.longDistanceBooking.update({
+        where: {
+          id: bookingId,
+          userId: req.user!.userId,
+        },
+        data: {
+          status: "ADVANCE_PAID",
+          advancePaidAt: new Date(),
+          advancePaymentId: razorpay_payment_id,
+          advancePaymentStatus: "COMPLETED",
+        },
+      });
+
+      // 2. Create transaction record
+      await prisma.longDistanceTransaction.create({
+        data: {
+          bookingId,
+          amount: updatedBooking.advanceAmount,
+          type: "BOOKING_ADVANCE",
+          status: "COMPLETED",
+          senderId: updatedBooking.userId,
+          receiverId: updatedBooking.driverId!,
+          razorpayOrderId: razorpay_order_id,
+          razorpayPaymentId: razorpay_payment_id,
+          description: `Advance payment for outstation taxisure ride ${bookingId}`,
+          metadata: {
+            bookingId,
+            paymentMode: updatedBooking.paymentMode,
+
+            advanceAmount: updatedBooking.advanceAmount,
+            remainingAmount: updatedBooking.remainingAmount,
+            totalAmount: updatedBooking.totalAmount,
+          },
+        },
+      });
+
+      // 3. Get or create driver's wallet
+      const driverWallet = await prisma.wallet.upsert({
+        where: {
+          userId: updatedBooking.driverId!,
+        },
+        create: {
+          userId: updatedBooking.driverId!,
+          balance: updatedBooking.advanceAmount,
+        },
+        update: {
+          balance: {
+            increment: updatedBooking.advanceAmount,
+          },
+        },
+      });
+
+      return updatedBooking;
+    });
+
+    res.json({ success: true, booking: updatedBooking });
+  } catch (error) {
+    console.error("Error verifying payment:", error);
+    res.status(500).json({ error: "Failed to verify payment" });
+  }
+};
+
 // Driver starts journey to pickup location
 export const startDriverPickup = async (req: Request, res: Response) => {
   const { bookingId } = req.params;
@@ -288,7 +345,7 @@ export const startDriverPickup = async (req: Request, res: Response) => {
       where: {
         id: bookingId,
         driverId: req.user.userId,
-        status: "DRIVER_ACCEPTED",
+        status: "ADVANCE_PAID",
       },
       data: {
         status: "DRIVER_PICKUP_STARTED",
@@ -411,7 +468,6 @@ export const cancelBooking = async (req: Request, res: Response) => {
 
       // Handle cancellation fee transaction if applicable
       if (booking.status !== "PENDING") {
-        // Create transaction record
         await prisma.longDistanceTransaction.create({
           data: {
             bookingId,
@@ -427,20 +483,15 @@ export const cancelBooking = async (req: Request, res: Response) => {
           },
         });
 
-        // Update or create wallet for the receiving party
-        const receiverId =
-          req.user?.userId === booking.userId
-            ? booking.driverId!
-            : booking.userId;
-        await prisma.wallet.upsert({
+        // Update wallet of the receiving party
+        await prisma.wallet.update({
           where: {
-            userId: receiverId,
+            userId:
+              req.user?.userId === booking.userId
+                ? booking.driverId!
+                : booking.userId,
           },
-          create: {
-            userId: receiverId,
-            balance: cancellationFee,
-          },
-          update: {
+          data: {
             balance: {
               increment: cancellationFee,
             },
@@ -458,13 +509,14 @@ export const cancelBooking = async (req: Request, res: Response) => {
   }
 };
 
-// Get available bookings for driver (only show ADVANCE_PAID bookings)
+// Get available bookings for driver
 export const getAvailableBookings = async (req: Request, res: Response) => {
   if (!req.user?.userId || req.user.userType !== "DRIVER") {
     return res.status(403).json({ error: "Unauthorized. Driver access only." });
   }
 
   try {
+    // Get driver's vehicle category
     const driverDetails = await prisma.driverDetails.findUnique({
       where: { userId: req.user.userId },
     });
@@ -473,12 +525,18 @@ export const getAvailableBookings = async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Driver details not found" });
     }
 
-    // Find bookings that are paid and match driver's vehicle category
+    // Get current time
+    const now = new Date();
+
+    // Find all pending bookings matching driver's vehicle category
     const availableBookings = await prisma.longDistanceBooking.findMany({
       where: {
-        status: "ADVANCE_PAID", // Only show paid bookings
+        status: "PENDING",
         vehicleCategory: driverDetails.vehicleCategory ?? "",
-        driverId: null, // Not yet accepted by any driver
+        driverId: { equals: null },
+        createdAt: {
+          gte: new Date(now.getTime() - 60 * 60 * 1000),
+        },
       },
       include: {
         user: {
@@ -493,15 +551,17 @@ export const getAvailableBookings = async (req: Request, res: Response) => {
       },
     });
 
-    // Format response
+    // Format response with essential booking details
     const formattedBookings = availableBookings.map((booking) => ({
       id: booking.id,
       serviceType: booking.serviceType,
+
       tripType: booking.tripType,
       pickupLocation: booking.pickupLocation,
       distance: booking.distance,
       duration: booking.duration,
       vehicleCategory: booking.vehicleCategory,
+
       dropLocation: booking.dropLocation,
       startDate: booking.startDate,
       endDate: booking.endDate,
@@ -522,7 +582,7 @@ export const getAvailableBookings = async (req: Request, res: Response) => {
         0,
         60 -
           Math.floor(
-            (new Date().getTime() - booking.createdAt.getTime()) / (1000 * 60)
+            (now.getTime() - booking.createdAt.getTime()) / (1000 * 60)
           )
       ), // minutes remaining
     }));

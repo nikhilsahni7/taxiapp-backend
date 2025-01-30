@@ -20,7 +20,8 @@ import {
   calculateDuration,
   validateRideChatAccess,
 } from "./controllers/rideController";
-import { calculateRentalFare } from "./controllers/rideController";
+import { CarRentalSocketHandler } from "./socket/carRentalHandler";
+import { carRentalRouter } from "./routes/car-rental";
 
 const app = express();
 const server = http.createServer(app);
@@ -63,9 +64,13 @@ app.use("/api/outstation", outstationRouter);
 app.use("/api/hill-station", hillStationRouter);
 app.use("/api/vendor", vendorRouter);
 app.use("/api/all-india", allIndiaRoutes);
+app.use("/api/car-rental", carRentalRouter);
 app.use("/", (req, res) => {
   res.send("Welcome to the taxiSure API");
 });
+
+// Initialize car rental socket handler
+const carRentalHandler = new CarRentalSocketHandler(io);
 
 io.on("connection", (socket: Socket) => {
   console.log("User connected:", socket.id);
@@ -186,29 +191,13 @@ io.on("connection", (socket: Socket) => {
 
   socket.on(
     "update_ride_status",
-    async (data: {
-      rideId: string;
-      status: string;
-      carRentalData?: {
-        actualKmsTravelled: number;
-        actualMinutes: number;
-        finalLocation: string;
-      };
-    }) => {
-      const { rideId, status, carRentalData } = data;
+    async (data: { rideId: string; status: string }) => {
+      const { rideId, status } = data;
 
       try {
-        const ride = await prisma.ride.findUnique({
-          where: { id: rideId },
-          include: { user: true, driver: true },
-        });
-
-        if (!ride) return;
-
+        // Map the string status to the RideStatus enum
         let updatedStatus: RideStatus;
-        let updateData: any = {};
 
-        // Map the string status to RideStatus enum
         switch (status) {
           case "SEARCHING":
             updatedStatus = RideStatus.SEARCHING;
@@ -224,25 +213,6 @@ io.on("connection", (socket: Socket) => {
             break;
           case "RIDE_ENDED":
             updatedStatus = RideStatus.RIDE_ENDED;
-            if (ride.isCarRental && carRentalData) {
-              // Calculate final charges for car rental
-              const rentalCalculation = calculateRentalFare(
-                ride.carCategory!,
-                ride.rentalPackageHours!,
-                carRentalData.actualKmsTravelled,
-                carRentalData.actualMinutes
-              );
-
-              updateData = {
-                status: updatedStatus,
-                dropLocation: carRentalData.finalLocation,
-                actualKmsTravelled: carRentalData.actualKmsTravelled,
-                actualMinutes: carRentalData.actualMinutes,
-                extraKmCharges: rentalCalculation.extraKmCharges,
-                extraMinuteCharges: rentalCalculation.extraMinuteCharges,
-                totalAmount: rentalCalculation.totalAmount,
-              };
-            }
             break;
           case "CANCELLED":
             updatedStatus = RideStatus.CANCELLED;
@@ -252,42 +222,24 @@ io.on("connection", (socket: Socket) => {
             return;
         }
 
-        const updatedRide = await prisma.ride.update({
+        const ride = await prisma.ride.update({
           where: { id: rideId },
-          data: updateData,
+          data: { status: updatedStatus },
           include: { user: true, driver: true },
         });
 
         // Notify user and driver about the status update
-        if (updatedRide.userId) {
-          io.to(updatedRide.userId).emit("ride_status_update", {
+        if (ride.userId) {
+          io.to(ride.userId).emit("ride_status_update", {
             rideId,
             status: updatedStatus,
-            ...(ride.isCarRental && {
-              rentalDetails: {
-                actualKmsTravelled: updateData.actualKmsTravelled,
-                actualMinutes: updateData.actualMinutes,
-                extraKmCharges: updateData.extraKmCharges,
-                extraMinuteCharges: updateData.extraMinuteCharges,
-                totalAmount: updateData.totalAmount,
-              },
-            }),
           });
         }
 
-        if (updatedRide.driverId) {
-          io.to(updatedRide.driverId).emit("ride_status_update", {
+        if (ride.driverId) {
+          io.to(ride.driverId).emit("ride_status_update", {
             rideId,
             status: updatedStatus,
-            ...(ride.isCarRental && {
-              rentalDetails: {
-                actualKmsTravelled: updateData.actualKmsTravelled,
-                actualMinutes: updateData.actualMinutes,
-                extraKmCharges: updateData.extraKmCharges,
-                extraMinuteCharges: updateData.extraMinuteCharges,
-                totalAmount: updateData.totalAmount,
-              },
-            }),
           });
         }
       } catch (error) {
@@ -909,114 +861,37 @@ io.on("connection", (socket: Socket) => {
     }
   );
 
-  // Add these new car rental specific events
+  // Car rental socket events
   socket.on(
-    "car_rental_location_update",
-    async (data: {
-      rideId: string;
-      driverId: string;
-      locationLat: number;
-      locationLng: number;
-      distanceTravelled: number;
-      minutesElapsed: number;
-      heading?: number;
-      speed?: number;
-    }) => {
-      const {
-        rideId,
-        locationLat,
-        locationLng,
-        driverId,
-        distanceTravelled,
-        minutesElapsed,
-        heading,
-        speed,
-      } = data;
+    "driver:register",
+    (data: { driverId: string; location: { lat: number; lng: number } }) => {
+      console.log("Driver registered:", data);
 
-      try {
-        const ride = await prisma.ride.findUnique({
-          where: {
-            id: rideId,
-            isCarRental: true,
-          },
-          select: {
-            userId: true,
-            status: true,
-            rentalPackageHours: true,
-            rentalPackageKms: true,
-          },
-        });
-
-        if (ride && ride.status !== RideStatus.CANCELLED) {
-          // Emit location and usage updates to user
-          io.to(ride.userId).emit("car_rental_status", {
-            rideId,
-            locationLat,
-            locationLng,
-            heading,
-            speed,
-            distanceTravelled,
-            minutesElapsed,
-            packageLimits: {
-              hours: ride.rentalPackageHours,
-              kms: ride.rentalPackageKms,
-            },
-          });
-        }
-
-        // Update driver's location in database
-        await prisma.driverStatus.update({
-          where: { driverId },
-          data: {
-            locationLat,
-            locationLng,
-            lastLocationUpdate: new Date(),
-            heading,
-            speed,
-          },
-        });
-      } catch (error) {
-        console.error("Error in car rental location update:", error);
-      }
+      socket.data.userId = data.driverId;
+      socket.join(`driver:${data.driverId}`);
+      carRentalHandler.registerDriver(socket, data);
     }
   );
 
-  socket.on(
-    "car_rental_package_warning",
-    async (data: {
-      rideId: string;
-      type: "DISTANCE" | "TIME";
-      currentUsage: number;
-      packageLimit: number;
-    }) => {
-      const { rideId, type, currentUsage, packageLimit } = data;
+  socket.on("driver:location", (data: { lat: number; lng: number }) => {
+    console.log("Received driver location update:", data);
+    carRentalHandler.handleDriverLocation(socket, data);
+  });
 
-      try {
-        const ride = await prisma.ride.findUnique({
-          where: { id: rideId },
-          select: { userId: true, driverId: true },
-        });
+  socket.on("carRental:response", (data) => {
+    console.log("Received car rental response:", data);
+    carRentalHandler.handleDriverResponse(socket, data);
+  });
 
-        if (ride) {
-          // Notify both user and driver about approaching package limits
-          const warningMessage = {
-            rideId,
-            type,
-            currentUsage,
-            packageLimit,
-            message: `Warning: Approaching ${type.toLowerCase()} limit. Extra charges will apply.`,
-          };
+  socket.on("carRental:start", (data) => {
+    console.log("Car rental ride start:", data);
+    carRentalHandler.handleRideStart(socket, data);
+  });
 
-          io.to(ride.userId).emit("package_limit_warning", warningMessage);
-          if (ride.driverId) {
-            io.to(ride.driverId).emit("package_limit_warning", warningMessage);
-          }
-        }
-      } catch (error) {
-        console.error("Error sending package warning:", error);
-      }
-    }
-  );
+  socket.on("carRental:end", (data) => {
+    console.log("Car rental ride end:", data);
+    carRentalHandler.handleRideEnd(socket, data);
+  });
 
   // Handle disconnection
   socket.on("disconnect", () => {
