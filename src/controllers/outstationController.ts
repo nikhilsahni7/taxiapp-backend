@@ -1,5 +1,10 @@
 import type { Request, Response } from "express";
-import { PrismaClient, PaymentMode, OutstationTripType } from "@prisma/client";
+import {
+  PrismaClient,
+  PaymentMode,
+  OutstationTripType,
+  LongDistanceServiceType,
+} from "@prisma/client";
 import Razorpay from "razorpay";
 import crypto from "crypto";
 import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
@@ -18,8 +23,23 @@ interface Location {
   lng: number;
 }
 
-// Base rates for different vehicle categories
-const VEHICLE_RATES = {
+// Define types for the rate objects
+type TempoRate = {
+  fixed: number;
+  extra: number;
+};
+
+type CarRate = {
+  base: number;
+};
+
+type OutstationCarRate = {
+  base: number;
+  short: number;
+};
+
+// Define the rate objects with proper typing
+const VEHICLE_RATES: Record<string, OutstationCarRate | TempoRate> = {
   mini: { base: 11, short: 14 },
   sedan: { base: 14, short: 19 },
   ertiga: { base: 18, short: 24 },
@@ -28,6 +48,19 @@ const VEHICLE_RATES = {
   tempo_16: { fixed: 16000, extra: 26 },
   tempo_20: { fixed: 18000, extra: 30 },
   tempo_26: { fixed: 20000, extra: 35 },
+};
+
+const HILL_STATION_RATES: Record<string, CarRate | TempoRate> = {
+  // Tempo rates
+  tempo_12: { fixed: 7000, extra: 23 },
+  tempo_16: { fixed: 8000, extra: 26 },
+  tempo_20: { fixed: 9000, extra: 30 },
+  tempo_26: { fixed: 10000, extra: 35 },
+  // Car rates
+  mini: { base: 20 },
+  sedan: { base: 27 },
+  ertiga: { base: 30 },
+  innova: { base: 35 },
 };
 
 export const getOutstationFareEstimate = async (
@@ -39,11 +72,13 @@ export const getOutstationFareEstimate = async (
     dropLocation,
     tripType,
     vehicleType,
+    serviceType = "OUTSTATION",
   }: {
     pickupLocation: Location;
     dropLocation: Location;
     tripType: OutstationTripType;
     vehicleType: string;
+    serviceType?: LongDistanceServiceType;
   } = req.body;
 
   try {
@@ -52,7 +87,19 @@ export const getOutstationFareEstimate = async (
       { lat: dropLocation.lat, lng: dropLocation.lng }
     );
 
-    let fare = calculateOutstationFare(distance, vehicleType, tripType);
+    // Validate minimum distance for hill station (e.g., 50km)
+    if (serviceType === "HILL_STATION" && distance < 50) {
+      return res.status(400).json({
+        error: "Hill station bookings require minimum 50km distance",
+      });
+    }
+
+    let fare = calculateOutstationFare(
+      distance,
+      vehicleType,
+      tripType,
+      serviceType
+    );
 
     res.json({
       estimate: {
@@ -62,6 +109,7 @@ export const getOutstationFareEstimate = async (
         currency: "INR",
         tripType,
         vehicleType,
+        serviceType,
       },
     });
   } catch (error) {
@@ -73,32 +121,44 @@ export const getOutstationFareEstimate = async (
 function calculateOutstationFare(
   distance: number,
   vehicleType: string,
-  tripType: string
+  tripType: string,
+  serviceType: LongDistanceServiceType = "OUTSTATION"
 ): number {
   let fare = 0;
-  //@ts-ignore
-  const rates = VEHICLE_RATES[vehicleType];
+  const rates =
+    serviceType === "HILL_STATION"
+      ? HILL_STATION_RATES[vehicleType]
+      : VEHICLE_RATES[vehicleType];
+
+  if (!rates) {
+    throw new Error("Invalid vehicle type");
+  }
 
   if (vehicleType.startsWith("tempo_")) {
     // For tempo vehicles (round trip only)
     if (tripType === "ROUND_TRIP") {
-      fare = rates.fixed;
+      const tempoRates = rates as TempoRate;
+      fare = tempoRates.fixed;
       if (distance > 250) {
         const extraKm = distance - 250;
-        fare += extraKm * rates.extra;
+        fare += extraKm * tempoRates.extra;
       }
     }
   } else {
     // For cars
-    const ratePerKm = distance <= 150 ? rates.short : rates.base;
-    fare = distance * ratePerKm;
+    if (serviceType === "HILL_STATION") {
+      const hillRates = rates as CarRate;
+      fare = distance * hillRates.base;
+    } else {
+      const outstationRates = rates as OutstationCarRate;
+      const ratePerKm =
+        distance <= 150 ? outstationRates.short : outstationRates.base;
+      fare = distance * ratePerKm;
+    }
 
     if (tripType === "ROUND_TRIP") {
       fare *= 2;
     }
-
-    // Add 12% commission
-    fare += fare * 0.12;
   }
 
   return Math.round(fare);
@@ -110,11 +170,13 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
     dropLocation,
     vehicleType,
     tripType,
+    serviceType = "OUTSTATION", // Default to outstation if not specified
   }: {
     pickupLocation: Location;
     dropLocation: Location;
     vehicleType: string;
     tripType: string;
+    serviceType?: LongDistanceServiceType;
     paymentMode: PaymentMode;
   } = req.body;
 
@@ -128,12 +190,17 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
       { lat: dropLocation.lat, lng: dropLocation.lng }
     );
 
-    const fare = calculateOutstationFare(distance, vehicleType, tripType);
+    const fare = calculateOutstationFare(
+      distance,
+      vehicleType,
+      tripType,
+      serviceType
+    );
 
     const booking = await prisma.longDistanceBooking.create({
       data: {
         userId: req.user.userId,
-        serviceType: "OUTSTATION",
+        serviceType, // Use the provided service type
         pickupLocation: pickupLocation.address,
         pickupLat: pickupLocation.lat,
         pickupLng: pickupLocation.lng,
@@ -144,7 +211,7 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
         tripType: tripType as OutstationTripType,
         distance,
         duration,
-        paymentMode: PaymentMode.RAZORPAY, // Force Razorpay for advance payment
+        paymentMode: PaymentMode.RAZORPAY,
         startDate: new Date(),
         endDate: new Date(),
         pickupTime: new Date().toISOString(),
@@ -154,7 +221,7 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
         totalAmount: fare,
         advanceAmount: fare * 0.25,
         remainingAmount: fare * 0.75,
-        status: "PENDING", // Initial status
+        status: "PENDING",
       },
     });
 
@@ -166,7 +233,7 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
       notes: {
         bookingId: booking.id,
         userId: req.user.userId,
-        type: "outstation_advance_payment",
+        type: `${serviceType.toLowerCase()}_advance_payment`,
       },
     });
 
@@ -213,21 +280,21 @@ export const verifyAdvancePayment = async (req: Request, res: Response) => {
     }
 
     const updatedBooking = await prisma.$transaction(async (prisma) => {
-      // Update booking status to make it available to drivers
+      // First get the booking to access the serviceType
       const booking = await prisma.longDistanceBooking.update({
         where: {
           id: bookingId,
           userId: req.user!.userId,
         },
         data: {
-          status: "ADVANCE_PAID", // This status means booking is now visible to drivers
+          status: "ADVANCE_PAID",
           advancePaidAt: new Date(),
           advancePaymentId: razorpay_payment_id,
           advancePaymentStatus: "COMPLETED",
         },
       });
 
-      // Create transaction record
+      // Create transaction record with dynamic service type
       await prisma.longDistanceTransaction.create({
         data: {
           bookingId,
@@ -235,10 +302,10 @@ export const verifyAdvancePayment = async (req: Request, res: Response) => {
           type: "BOOKING_ADVANCE",
           status: "COMPLETED",
           senderId: booking.userId,
-          receiverId: null, // Will be updated when driver accepts
+          receiverId: null,
           razorpayOrderId: razorpay_order_id,
           razorpayPaymentId: razorpay_payment_id,
-          description: `Advance payment for outstation ride ${bookingId}`,
+          description: `Advance payment for ${booking.serviceType.toLowerCase()} ride ${bookingId}`,
         },
       });
 
@@ -823,7 +890,7 @@ export const confirmRideCompletion = async (req: Request, res: Response) => {
         },
       });
 
-      // 2. Create transaction record
+      // 2. Create transaction record with dynamic service type
       await prisma.longDistanceTransaction.create({
         data: {
           bookingId,
@@ -834,9 +901,7 @@ export const confirmRideCompletion = async (req: Request, res: Response) => {
           receiverId: booking.driverId!,
           razorpayOrderId: razorpay_order_id || null,
           razorpayPaymentId: razorpay_payment_id || null,
-          //  more than 40 length
-          description: `Final payment for outstation taxisure ride ${booking.id}`,
-
+          description: `Final payment for ${booking.serviceType.toLowerCase()} ride ${bookingId}`,
           metadata:
             paymentMode === "CASH"
               ? { paymentType: "CASH", collectedBy: "DRIVER" }

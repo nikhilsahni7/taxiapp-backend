@@ -17,16 +17,32 @@ interface Location {
   lng: number;
 }
 
-// Base rates for different vehicle categories for All India Tour
+// Updated base rates including tempo travellers
 const ALL_INDIA_RATES = {
-  mini: { perDay: 6000, extraKm: 11 },
-  sedan: { perDay: 7000, extraKm: 14 },
-  ertiga: { perDay: 9600, extraKm: 18 },
-  innova: { perDay: 11200, extraKm: 24 },
-  tempo_12: { perDay: 14000, extraKm: 23 },
-  tempo_16: { perDay: 16000, extraKm: 26 },
-  tempo_20: { perDay: 18000, extraKm: 30 },
-  tempo_26: { perDay: 20000, extraKm: 35 },
+  mini: { baseFare: 2750, extraKm: 14 },
+  sedan: { baseFare: 3500, extraKm: 16 },
+  ertiga: { baseFare: 4500, extraKm: 16 },
+  innova: { baseFare: 6000, extraKm: 18 },
+  // Adding tempo traveller categories
+  tempo_12: { baseFare: 7000, extraKm: 20 },
+  tempo_16: { baseFare: 8000, extraKm: 22 },
+  tempo_20: { baseFare: 9000, extraKm: 24 },
+  tempo_26: { baseFare: 10000, extraKm: 26 },
+};
+
+// Helper function to get vehicle capacity
+const getVehicleCapacity = (vehicleType: string): string => {
+  const capacities: { [key: string]: string } = {
+    mini: "4 seater",
+    sedan: "4 seater",
+    ertiga: "6 seater",
+    innova: "7 seater",
+    tempo_12: "12 seater",
+    tempo_16: "16 seater",
+    tempo_20: "20 seater",
+    tempo_26: "26 seater",
+  };
+  return capacities[vehicleType] || "N/A";
 };
 
 export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
@@ -37,13 +53,6 @@ export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
     startDate,
     endDate,
     pickupTime,
-  }: {
-    pickupLocation: Location;
-    dropLocation: Location;
-    vehicleType: string;
-    startDate: string;
-    endDate: string;
-    pickupTime: string;
   } = req.body;
 
   try {
@@ -52,21 +61,18 @@ export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
       { lat: dropLocation.lat, lng: dropLocation.lng }
     );
 
-    // Parse dates and time
+    // Parse dates and calculate total days
     const [pickupHours, pickupMinutes] = pickupTime.split(":").map(Number);
-
-    // Create start datetime with pickup time
     const startDateTime = new Date(startDate);
     startDateTime.setHours(pickupHours, pickupMinutes, 0, 0);
-
-    // Create end datetime with same pickup time
     const endDateTime = new Date(endDate);
     endDateTime.setHours(pickupHours, pickupMinutes, 0, 0);
 
-    // Calculate total days (including partial days)
-    const timeDiff = endDateTime.getTime() - startDateTime.getTime();
-    const daysDiff = timeDiff / (1000 * 3600 * 24);
-    const numberOfDays = Math.ceil(daysDiff + 1) || 1; // Minimum 1 day
+    const numberOfDays =
+      Math.ceil(
+        (endDateTime.getTime() - startDateTime.getTime()) / (1000 * 3600 * 24) +
+          1
+      ) || 1;
 
     // Get rates for vehicle type
     //@ts-ignore
@@ -75,18 +81,20 @@ export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid vehicle type" });
     }
 
-    // Calculate base fare (per day rate * number of days)
-    const baseFare = rates.perDay * numberOfDays;
+    // Calculate round trip distance
+    const roundTripDistance = distance * 2;
 
-    // Calculate extra distance fare
-    const allowedDistance = 250 * numberOfDays; // 250 km per day
-    const extraDistance = Math.max(0, distance - allowedDistance);
+    // Calculate allowed distance based on number of days
+    const allowedDistance = 250 * numberOfDays;
+
+    // Calculate base fare
+    let baseFare = rates.baseFare * numberOfDays;
+
+    // Calculate extra distance fare if applicable
+    const extraDistance = Math.max(0, roundTripDistance - allowedDistance);
     const extraDistanceFare = extraDistance * rates.extraKm;
 
     // Calculate total fare
-
-    //it will always in round trip-so we will multiply by 2
-
     const totalFare = baseFare + extraDistanceFare;
 
     // Calculate advance amount (25%) and remaining amount (75%)
@@ -100,14 +108,15 @@ export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
         totalFare,
         advanceAmount,
         remainingAmount,
-        distance,
+        distance: roundTripDistance,
         numberOfDays,
         allowedDistance,
         extraDistance,
-        perDayRate: rates.perDay,
+        perDayRate: rates.baseFare,
         extraKmRate: rates.extraKm,
         currency: "INR",
         vehicleType,
+        vehicleCapacity: getVehicleCapacity(vehicleType),
         tripDetails: {
           startDateTime: startDateTime.toISOString(),
           endDateTime: endDateTime.toISOString(),
@@ -116,14 +125,26 @@ export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
         },
         details: {
           perDayKmLimit: 250,
-          includedInFare: ["Fuel charges", "Vehicle rental", "Driver charges"],
+          includedInFare: [
+            "Driver charges",
+            "Fuel charges",
+            "Vehicle rental",
+            `${allowedDistance} kms included`,
+            vehicleType.includes("tempo")
+              ? "Tempo Traveller with Push Back Seats"
+              : "Car with AC",
+          ],
           excludedFromFare: [
             "State tax",
             "Toll tax",
             "Parking charges",
             "Driver allowance",
             "Night charges",
-          ],
+            `Extra km charges (₹${rates.extraKm}/km after ${allowedDistance} kms)`,
+            vehicleType.includes("tempo")
+              ? "Driver's food and accommodation"
+              : null,
+          ].filter(Boolean), // Remove null values
           paymentBreakdown: {
             advancePayment: {
               percentage: 25,
@@ -134,6 +155,17 @@ export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
               amount: remainingAmount,
             },
           },
+          vehicleFeatures: vehicleType.includes("tempo")
+            ? [
+                "Push Back Seats",
+                "AC",
+                "Music System",
+                "LCD/LED Screen",
+                "Sufficient Luggage Space",
+                "First Aid Kit",
+                "Reading Lights",
+              ]
+            : undefined,
         },
       },
     });
@@ -185,7 +217,7 @@ export const createAllIndiaBooking = async (req: Request, res: Response) => {
     // Calculate fare
     //@ts-ignore
     const rates = ALL_INDIA_RATES[vehicleType];
-    const baseFare = rates.perDay * numberOfDays;
+    const baseFare = rates.baseFare * numberOfDays;
     const allowedDistance = 250 * numberOfDays;
     const extraDistance = Math.max(0, distance - allowedDistance);
     const extraDistanceFare = extraDistance * rates.extraKm;

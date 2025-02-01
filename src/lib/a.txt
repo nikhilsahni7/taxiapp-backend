@@ -1,224 +1,67 @@
-// Add this to your vendor registration endpoint
-router.post(
-  "/vendor-register",
-  verifyToken,
-  upload.fields([
-    { name: "aadharFront", maxCount: 1 },
-    { name: "aadharBack", maxCount: 1 },
-    { name: "panCard", maxCount: 1 },
-  ]),
-  async (req: AuthRequest, res: Response) => {
-    try {
-      const userId = req.user.userId;
-      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
-
-      const {
-        name,
-        email,
-        state,
-        city,
-        businessName,
-        address,
-        experience,
-        gstNumber,
-        aadharNumber,
-        panNumber,
-      } = req.body;
-
-      // Validate required fields
-      if (!businessName || !address || !experience || !gstNumber || !aadharNumber || !panNumber) {
-        return res.status(400).json({ error: "Missing required fields" });
-      }
-
-      // Upload documents to Cloudinary
-      const aadharFrontUrl = files?.["aadharFront"]?.[0]
-        ? await uploadImage(files["aadharFront"][0].buffer)
-        : null;
-      const aadharBackUrl = files?.["aadharBack"]?.[0]
-        ? await uploadImage(files["aadharBack"][0].buffer)
-        : null;
-      const panUrl = files?.["panCard"]?.[0]
-        ? await uploadImage(files["panCard"][0].buffer)
-        : null;
-
-      if (!aadharFrontUrl || !aadharBackUrl || !panUrl) {
-        return res.status(400).json({ error: "All documents are required" });
-      }
-
-      // Update user profile
-      await prisma.user.update({
-        where: { id: userId },
-        data: {
-          name,
-          email,
-          state,
-          city,
-          userType: "VENDOR",
-        },
-      });
-
-      // Create vendor details
-      const vendorDetails = await prisma.vendorDetails.create({
-        data: {
-          userId,
-          businessName,
-          address,
-          experience,
-          gstNumber,
-          aadharNumber,
-          panNumber,
-          aadharFrontUrl,
-          aadharBackUrl,
-          panUrl,
-        },
-      });
-
-      // Get updated user data
-      const updatedUser = await prisma.user.findUnique({
-        where: { id: userId },
-        include: { vendorDetails: true },
-      });
-
-      if (!updatedUser) {
-        return res.status(404).json({ error: "User not found" });
-      }
-
-      // Generate new token with updated user type
-      const token = jwt.sign(
-        { userId, userType: "VENDOR" },
-        process.env.JWT_SECRET!,
-        { expiresIn: "7d" }
-      );
-
-      res.json({
-        message: "Vendor registration completed successfully",
-        token,
-        userId,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        phone: updatedUser.phone,
-        state: updatedUser.state,
-        city: updatedUser.city,
-        vendorDetails: updatedUser.vendorDetails,
-      });
-    } catch (error) {
-      console.error("Vendor registration error:", error);
-      res.status(500).json({
-        error: "Failed to complete vendor registration",
-        details: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
+[
+  {
+    "id": "5b455605-d066-4364-8773-30ecc648cb24",
+    "userId": "b7398a1c-7f39-4ddc-9ab4-486434c56925",
+    "driverId": null,
+    "status": "SEARCHING",
+    "pickupLocation": "H.No. - 520, Sector 91, Faridabad, 121013",
+    "dropLocation": "",
+    "pickupDistance": null,
+    "pickupDuration": null,
+    "fare": null,
+    "distance": null,
+    "duration": null,
+    "tax": null,
+    "carCategory": "mini",
+    "otp": "4009",
+    "totalAmount": null,
+    "waitStartTime": null,
+    "extraCharges": 0,
+    "paymentMode": "CASH",
+    "paymentStatus": "PENDING",
+    "razorpayOrderId": null,
+    "createdAt": "2025-02-01T11:15:17.541Z",
+    "updatedAt": "2025-02-01T11:15:20.892Z",
+    "rideType": "LOCAL",
+    "outstationType": null,
+    "isDriverAccepted": false,
+    "driverAcceptedAt": null,
+    "requestExpiresAt": null,
+    "cancellationReason": null,
+    "cancellationFee": null,
+    "cancelledBy": null,
+    "metadata": {
+      "expiresAt": "2025-02-01T11:16:00.891Z",
+      "availableDrivers": [
+        {
+          "status": "pending",
+          "distance": 0.002,
+          "driverId": "c653f229-ca15-4634-9387-a8b1182f5211"
+        }
+      ]
+    },
+    "isCarRental": true,
+    "rentalPackageHours": 3,
+    "rentalPackageKms": 35,
+    "rentalBasePrice": 700,
+    "actualKmsTravelled": null,
+    "actualMinutes": null,
+    "extraKmCharges": null,
+    "extraMinuteCharges": null,
+    "rideStartedAt": null,
+    "rideEndedAt": null,
+    "currentLat": null,
+    "currentLng": null,
+    "lastLocationUpdate": null,
+    "otpVerified": false,
+    "driverAssignedAt": null,
+    "driverArrivedAt": null,
+    "estimatedStartKms": null,
+    "estimatedEndKms": null,
+    "startOdometer": null,
+    "endOdometer": null,
+    "pickupLat": 28.4819135,
+    "pickupLng": 77.3309329,
+    "pickupAddress": null
   }
-);
-
-// Update the vendor sign-in endpoint to include all details
-router.post("/vendor-sign-in", async (req: Request, res: Response) => {
-  try {
-    const { phone } = req.body;
-
-    if (!phone) {
-      return res.status(400).json({ error: "Phone number is required" });
-    }
-
-    const vendor = await prisma.user.findFirst({
-      where: {
-        phone,
-        userType: "VENDOR",
-      },
-      include: {
-        vendorDetails: true,
-      },
-    });
-
-    if (!vendor || !vendor.verified) {
-      return res.status(401).json({
-        error: "Invalid phone number or vendor not verified",
-      });
-    }
-
-    const token = jwt.sign(
-      {
-        userId: vendor.id,
-        userType: vendor.userType,
-      },
-      process.env.JWT_SECRET!,
-      { expiresIn: "7d" }
-    );
-
-    res.json({
-      token,
-      vendorId: vendor.id,
-      name: vendor.name,
-      email: vendor.email,
-      phone: vendor.phone,
-      state: vendor.state,
-      city: vendor.city,
-      verified: vendor.verified,
-      vendorDetails: vendor.vendorDetails,
-    });
-  } catch (error) {
-    console.error("Vendor sign-in error:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// Update the verify vendor OTP endpoint
-router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
-  try {
-    const { phone, otp } = req.body;
-
-    if (!phone || !otp) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    // Check if vendor already exists
-    const existingVendor = await prisma.user.findFirst({
-      where: {
-        phone,
-        userType: "VENDOR",
-      },
-    });
-
-    if (existingVendor) {
-      return res.status(400).json({ error: "Vendor already exists" });
-    }
-
-    // Verify OTP using Twilio
-    const verification = await twilioClient.verify.v2
-      .services(process.env.TWILIO_VERIFY_SID!)
-      .verificationChecks.create({
-        to: phone,
-        code: otp,
-      });
-
-    if (!verification.valid) {
-      return res.status(400).json({ error: "Invalid or expired OTP" });
-    }
-
-    // Create vendor with verified status
-    const vendor = await prisma.user.create({
-      data: {
-        phone,
-        userType: "VENDOR",
-        verified: true,
-      },
-    });
-
-    const token = jwt.sign(
-      { userId: vendor.id, userType: vendor.userType },
-      process.env.JWT_SECRET!,
-      { expiresIn: "7d" }
-    );
-
-    res.json({
-      token,
-      userId: vendor.id,
-      message: "Vendor verified successfully",
-    });
-  } catch (error: any) {
-    console.error("Verify Vendor OTP error:", error);
-    res.status(500).json({
-      error: error.message || "Failed to verify OTP",
-    });
-  }
-});
+]

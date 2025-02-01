@@ -70,6 +70,7 @@ const CHARGES = {
     "Noida International Airport",
     "Hindon Airport",
   ],
+  // make in terminals only ->
 } as const;
 
 // Function to validate car category

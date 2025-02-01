@@ -54,6 +54,9 @@ enum TransactionType {
   WALLET_TOPUP
   WITHDRAWAL
   REFUND
+  DRIVER_REGISTRATION_FEE
+  RENTAL_PAYMENT
+  RENTAL_CANCELLATION
 }
 
 // New enums for long distance services
@@ -74,6 +77,13 @@ enum LongDistanceBookingStatus {
   PAYMENT_PENDING
   COMPLETED
   CANCELLED
+}
+
+// Add this new enum for who cancelled the ride
+enum CancelledBy {
+  USER
+  DRIVER
+  SYSTEM
 }
 
 model User {
@@ -183,7 +193,7 @@ model Ride {
   requestExpiresAt DateTime?
   cancellationReason String?      // Add cancellation reason
   cancellationFee   Float?        // Add cancellation fee
-  cancelledBy       UserType? 
+  cancelledBy       CancelledBy? 
 
   user         User          @relation("UserRides", fields: [userId], references: [id])
   driver       User?         @relation("DriverRides", fields: [driverId], references: [id])
@@ -193,14 +203,51 @@ model Ride {
   chatMessages ChatMessage[]
 
   // New fields for car rental
+   metadata          Json?  
   isCarRental        Boolean        @default(false)
   rentalPackageHours Int?          // 1-8 hours package
-  rentalPackageKms   Int?          // Package kilometers
+  rentalPackageKms   Float?        // Package kilometers
   rentalBasePrice    Float?        // Base package price
   actualKmsTravelled Float?        // Actual distance traveled
   actualMinutes      Int?          // Actual minutes used
   extraKmCharges     Float?        // Charges for extra kms
   extraMinuteCharges Float?        // Charges for extra minutes
+  
+  // Timestamps for rental
+  rideStartedAt     DateTime?     // When ride actually starts (after OTP)
+  rideEndedAt       DateTime?     // When ride ends
+  
+  
+  
+  // Location tracking
+  currentLat        Float?        // Current latitude of driver
+  currentLng        Float?        // Current longitude of driver
+  lastLocationUpdate DateTime?    // Last time location was updated
+  
+  
+
+  otpVerified      Boolean          @default(false)
+  
+  // Driver assignment
+  driverAssignedAt DateTime?        // When driver was assigned
+  driverArrivedAt  DateTime?        // When driver marked arrival
+  
+  // Extra fields for better tracking
+  estimatedStartKms Float?          // Initial odometer reading
+  estimatedEndKms   Float?          // Final odometer reading
+
+  // Car Rental specific fields
+  startOdometer      Float?    // Initial odometer reading
+  endOdometer        Float?    // Final odometer reading
+  
+  // Tracking fields
+ 
+  locationLogs       RideLocationLog[]
+
+  // Add new location fields
+  pickupLat        Float?
+  pickupLng        Float?
+  pickupAddress    String?   // Store formatted address
 }
 
 // Existing models remain unchanged
@@ -228,6 +275,7 @@ model DriverDetails {
   carRightUrl     String?
   carInteriorUrl  String?
   carCategory     String?
+  registrationFeePaid Boolean @default(false)
 }
 model VendorDetails {
   id             String   @id @default(uuid())
@@ -463,4 +511,18 @@ model ChatMessage {
   sender  User     @relation("SentMessages", fields: [senderId], references: [id])
 
   @@index([rideId])
+}
+
+model RideLocationLog {
+  id          String   @id @default(uuid())
+  rideId      String
+  latitude    Float
+  longitude   Float
+  speed       Float?
+  heading     Float?
+  timestamp   DateTime @default(now())
+  odometer    Float?   // Current odometer reading
+
+  ride        Ride     @relation(fields: [rideId], references: [id])
+  @@index([rideId, timestamp])
 }

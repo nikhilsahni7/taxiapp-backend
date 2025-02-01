@@ -1,11 +1,17 @@
 import express from "express";
 import type { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
+import {
+  createRegistrationOrder,
+  verifyRegistrationPayment,
+  checkRegistrationStatus,
+} from "../controllers/driverRegistrationController";
 
 interface AuthRequest extends Request {
   user: {
     userId: string;
     userType: string;
+    selfieUrl: string;
   };
 }
 import twilio from "twilio";
@@ -677,5 +683,21 @@ router.post("/driver-sign-in", async (req, res) => {
 router.post("/logout", verifyToken, (req, res) => {
   res.json({ message: "Logged out successfully" });
 });
+
+router.post(
+  "/driver/registration-fee/create",
+  verifyToken,
+  createRegistrationOrder
+);
+router.post(
+  "/driver/registration-fee/verify",
+  verifyToken,
+  verifyRegistrationPayment
+);
+router.get(
+  "/driver/registration-fee/status",
+  verifyToken,
+  checkRegistrationStatus
+);
 
 export { router as authRouter };
