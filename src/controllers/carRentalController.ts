@@ -177,6 +177,8 @@ export const getRentalStatus = async (req: Request, res: Response) => {
       };
     }
 
+    console.log(currentMetrics);
+
     return res.json({
       rental,
       currentMetrics,
@@ -188,51 +190,6 @@ export const getRentalStatus = async (req: Request, res: Response) => {
 };
 
 // End rental and calculate final charges
-export const endRental = async (req: Request, res: Response) => {
-  const { id } = req.params;
-  const { actualKms, actualMinutes } = req.body;
-
-  try {
-    const rental = await prisma.ride.findUnique({
-      where: { id },
-    });
-
-    if (!rental) {
-      return res.status(404).json({ error: "Rental not found" });
-    }
-
-    // Calculate extra charges
-    const extraKms = Math.max(0, actualKms - rental.rentalPackageKms!);
-    const extraMinutes = Math.max(
-      0,
-      actualMinutes - rental.rentalPackageHours! * 60
-    );
-
-    const extraKmCharges =
-      extraKms *
-      EXTRA_KM_RATES[rental.carCategory as keyof typeof EXTRA_KM_RATES];
-    const extraMinuteCharges = extraMinutes * EXTRA_MINUTE_RATE;
-
-    // Update rental with final charges
-    const updatedRental = await prisma.ride.update({
-      where: { id },
-      data: {
-        status: RideStatus.PAYMENT_PENDING,
-        actualKmsTravelled: actualKms,
-        actualMinutes,
-        extraKmCharges,
-        extraMinuteCharges,
-        totalAmount:
-          rental.rentalBasePrice! + extraKmCharges + extraMinuteCharges,
-      },
-    });
-
-    return res.json(updatedRental);
-  } catch (error) {
-    console.error("Error ending rental:", error);
-    return res.status(500).json({ error: "Failed to end rental" });
-  }
-};
 
 // Helper function to find available drivers
 async function findDriversForRental(rental: any) {
@@ -254,7 +211,7 @@ async function findDriversForRental(rental: any) {
           distance: d.distance,
           status: "pending",
         })),
-        expiresAt: new Date(Date.now() + 40000).toISOString(), // 40 seconds from now
+        expiresAt: new Date(Date.now() + 60000).toISOString(), // 60 seconds from now
       };
 
       await prisma.ride.update({
@@ -262,7 +219,7 @@ async function findDriversForRental(rental: any) {
         data: { metadata },
       });
 
-      // Schedule automatic cancellation after 40 seconds
+      // Schedule automatic cancellation after 60 seconds
       setTimeout(async () => {
         const currentRental = await prisma.ride.findUnique({
           where: { id: rental.id },
@@ -278,7 +235,7 @@ async function findDriversForRental(rental: any) {
             },
           });
         }
-      }, 40000);
+      }, 60000);
 
       return {
         success: true,
@@ -511,122 +468,6 @@ export const cancelRental = async (req: Request, res: Response) => {
   }
 };
 
-// End ride and calculate charges
-export const endRide = async (req: Request, res: Response) => {
-  const { id } = req.params;
-  const { endOdometer } = req.body;
-  if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-
-  try {
-    const rental = await prisma.ride.findFirst({
-      where: {
-        id,
-        driverId: req.user.userId,
-        status: RideStatus.RIDE_STARTED,
-        isCarRental: true,
-      },
-      include: {
-        locationLogs: {
-          orderBy: { timestamp: "asc" },
-        },
-      },
-    });
-
-    if (!rental) {
-      return res.status(404).json({ error: "Active rental not found" });
-    }
-
-    // Calculate actual duration
-    const startTime = rental.rideStartedAt!;
-    const endTime = new Date();
-    const actualMinutes = Math.ceil(
-      (endTime.getTime() - startTime.getTime()) / (1000 * 60)
-    );
-
-    // Calculate actual distance using odometer readings
-    const actualKms = endOdometer - rental.startOdometer!;
-
-    // Validate distance with GPS logs as backup
-    let gpsDistance = 0;
-    const logs = rental.locationLogs;
-
-    for (let i = 1; i < logs.length; i++) {
-      const prevLog = logs[i - 1];
-      const currentLog = logs[i];
-
-      const segmentDistance = await calculateDistance(
-        `${prevLog.latitude},${prevLog.longitude}`,
-        `${currentLog.latitude},${currentLog.longitude}`
-      );
-      gpsDistance += segmentDistance;
-    }
-
-    // Use GPS distance if odometer reading seems incorrect (±20% difference)
-    const finalDistance =
-      Math.abs(actualKms - gpsDistance) > actualKms * 0.2
-        ? gpsDistance
-        : actualKms;
-
-    // Calculate extra charges
-    const extraKms = Math.max(0, finalDistance - rental.rentalPackageKms!);
-    const extraMinutes = Math.max(
-      0,
-      actualMinutes - rental.rentalPackageHours! * 60
-    );
-
-    const extraKmCharges =
-      extraKms *
-      EXTRA_KM_RATES[rental.carCategory as keyof typeof EXTRA_KM_RATES];
-    const extraMinuteCharges = extraMinutes * EXTRA_MINUTE_RATE;
-
-    // Update rental with final charges
-    const updatedRental = await prisma.ride.update({
-      where: { id },
-      data: {
-        status: RideStatus.PAYMENT_PENDING,
-        endOdometer,
-        actualKmsTravelled: finalDistance,
-        actualMinutes,
-        extraKmCharges,
-        extraMinuteCharges,
-        totalAmount:
-          rental.rentalBasePrice! + extraKmCharges + extraMinuteCharges,
-        rideEndedAt: endTime,
-        lastLocationUpdate: endTime,
-      },
-    });
-
-    return res.json({
-      success: true,
-      rental: {
-        ...updatedRental,
-        metrics: {
-          distance: {
-            odometerReading: actualKms,
-            gpsCalculated: gpsDistance,
-            finalDistance: finalDistance,
-          },
-          duration: {
-            minutes: actualMinutes,
-            formatted: `${Math.floor(actualMinutes / 60)}h ${
-              actualMinutes % 60
-            }m`,
-          },
-        },
-        charges: {
-          basePrice: rental.rentalBasePrice,
-          extraKmCharges,
-          extraMinuteCharges,
-          totalAmount: updatedRental.totalAmount,
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Error ending ride:", error);
-    return res.status(500).json({ error: "Failed to end ride" });
-  }
-};
-
 // Driver requests to end rental
 export const requestEndRental = async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -683,120 +524,84 @@ export const requestEndRental = async (req: Request, res: Response) => {
         : actualKms;
 
     // Calculate extra charges
-    const extraKms = Math.max(0, finalDistance - rental.rentalPackageKms!);
+    const packageKms = rental.rentalPackageKms || 0;
+    const extraKms = Math.max(0, finalDistance - packageKms);
     const extraMinutes = Math.max(
       0,
-      actualMinutes - rental.rentalPackageHours! * 60
+      actualMinutes - (rental.rentalPackageHours || 0) * 60
     );
 
-    const extraKmCharges =
+    const extraKmCharges = Math.round(
       extraKms *
-      EXTRA_KM_RATES[rental.carCategory as keyof typeof EXTRA_KM_RATES];
-    const extraMinuteCharges = extraMinutes * EXTRA_MINUTE_RATE;
+        EXTRA_KM_RATES[rental.carCategory as keyof typeof EXTRA_KM_RATES]
+    );
+    const extraMinuteCharges = Math.round(extraMinutes * EXTRA_MINUTE_RATE);
 
     const totalAmount =
-      rental.rentalBasePrice! + extraKmCharges + extraMinuteCharges;
+      (rental.rentalBasePrice || 0) + extraKmCharges + extraMinuteCharges;
 
-    // Update rental with calculated charges
-    const updatedRental = await prisma.ride.update({
-      where: { id },
-      data: {
-        endOdometer,
-        actualKmsTravelled: finalDistance,
-        actualMinutes,
-        extraKmCharges,
-        extraMinuteCharges,
-        totalAmount,
-        status: RideStatus.PAYMENT_PENDING,
-      },
-    });
-
-    return res.json({
-      success: true,
-      rental: updatedRental,
-      charges: {
-        basePrice: rental.rentalBasePrice,
-        extraKmCharges,
-        extraMinuteCharges,
-        totalAmount,
-      },
-      metrics: {
-        distance: {
-          odometerReading: actualKms,
-          gpsCalculated: gpsDistance,
-          finalDistance,
-        },
-        duration: {
-          minutes: actualMinutes,
-          formatted: `${Math.floor(actualMinutes / 60)}h ${
-            actualMinutes % 60
-          }m`,
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Error ending rental:", error);
-    return res.status(500).json({ error: "Failed to end rental" });
-  }
-};
-
-// User initiates payment
-export const initiateRentalPayment = async (req: Request, res: Response) => {
-  const { id } = req.params;
-  const { paymentMode } = req.body;
-  if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-
-  try {
-    const rental = await prisma.ride.findFirst({
-      where: {
-        id,
-        userId: req.user.userId,
-        status: RideStatus.PAYMENT_PENDING,
-      },
-    });
-
-    if (!rental) {
-      return res.status(404).json({ error: "Rental not found" });
-    }
-
-    if (paymentMode === PaymentMode.CASH) {
-      await prisma.ride.update({
+    if (rental.paymentMode === PaymentMode.CASH) {
+      // Update rental status to wait for driver's cash confirmation
+      const updatedRental = await prisma.ride.update({
         where: { id },
         data: {
-          paymentMode: PaymentMode.CASH,
+          endOdometer,
+          actualKmsTravelled: finalDistance,
+          actualMinutes,
+          extraKmCharges,
+          extraMinuteCharges,
+          totalAmount,
+          status: RideStatus.PAYMENT_PENDING,
         },
       });
 
       return res.json({
         success: true,
-        message: "Waiting for driver to confirm cash payment",
-        rental: {
-          id: rental.id,
-          status: RideStatus.PAYMENT_PENDING,
-          paymentMode: PaymentMode.CASH,
-          amount: rental.totalAmount,
+        rental: updatedRental,
+        message: "Waiting for cash payment confirmation",
+        charges: {
+          basePrice: rental.rentalBasePrice,
+          extraKmCharges,
+          extraMinuteCharges,
+          totalAmount,
         },
       });
     } else {
-      // Create Razorpay order
+      // For online payment, create Razorpay order with shorter receipt ID
       const order = await razorpay.orders.create({
-        amount: Math.round(rental.totalAmount! * 100),
+        amount: Math.round(totalAmount * 100),
         currency: "INR",
-        receipt: `rental_${rental.id}`,
+        receipt: `r_${rental.id.slice(-12)}`, // Shortened receipt ID
         notes: {
           rentalId: rental.id,
-          userId: req.user.userId,
+          userId: rental.userId,
           driverId: rental.driverId,
         },
       });
 
-      // Create transaction record
+      // Update rental with payment details
+      const updatedRental = await prisma.ride.update({
+        where: { id },
+        data: {
+          endOdometer,
+          actualKmsTravelled: finalDistance,
+          actualMinutes,
+          extraKmCharges,
+          extraMinuteCharges,
+          totalAmount,
+          status: RideStatus.PAYMENT_PENDING,
+          razorpayOrderId: order.id,
+          rideEndedAt: new Date(), // Add this to mark ride end time
+        },
+      });
+
+      // Create pending transaction
       const transaction = await prisma.transaction.create({
         data: {
-          amount: rental.totalAmount!,
+          amount: totalAmount,
           type: TransactionType.RENTAL_PAYMENT,
           status: TransactionStatus.PENDING,
-          senderId: req.user.userId,
+          senderId: rental.userId,
           receiverId: rental.driverId!,
           rideId: rental.id,
           razorpayOrderId: order.id,
@@ -805,19 +610,23 @@ export const initiateRentalPayment = async (req: Request, res: Response) => {
 
       return res.json({
         success: true,
-        orderId: order.id,
-        amount: rental.totalAmount,
-        transaction: transaction.id,
-        rental: {
-          id: rental.id,
-          status: RideStatus.PAYMENT_PENDING,
-          paymentMode: PaymentMode.RAZORPAY,
+        rental: updatedRental,
+        transaction,
+        razorpayOrder: {
+          orderId: order.id,
+          amount: totalAmount,
+        },
+        charges: {
+          basePrice: rental.rentalBasePrice,
+          extraKmCharges,
+          extraMinuteCharges,
+          totalAmount,
         },
       });
     }
   } catch (error) {
-    console.error("Error initiating payment:", error);
-    return res.status(500).json({ error: "Failed to initiate payment" });
+    console.error("Error ending rental:", error);
+    return res.status(500).json({ error: "Failed to end rental" });
   }
 };
 
@@ -852,7 +661,7 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // Complete the rental and create transaction
+    // Complete the rental, create transaction, and update wallet in a transaction
     const [updatedRental, transaction] = await prisma.$transaction([
       prisma.ride.update({
         where: { id },
@@ -870,6 +679,21 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
           receiverId: rental.driverId!,
           rideId: rental.id,
           description: "Cash payment for car rental",
+        },
+      }),
+      // Add wallet update
+      prisma.wallet.upsert({
+        where: {
+          userId: rental.driverId!,
+        },
+        create: {
+          userId: rental.driverId!,
+          balance: rental.totalAmount!,
+        },
+        update: {
+          balance: {
+            increment: rental.totalAmount!,
+          },
         },
       }),
     ]);
@@ -893,52 +717,68 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
     req.body;
 
   try {
-    // Verify payment signature
+    // Verify payment signature using Razorpay docs
     const body = razorpay_order_id + "|" + razorpay_payment_id;
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_SECRET!)
-      .update(body.toString())
+      .update(body)
       .digest("hex");
 
     if (expectedSignature !== razorpay_signature) {
       return res.status(400).json({ error: "Invalid payment signature" });
     }
 
-    // Verify payment amount with Razorpay
-    const payment = await razorpay.payments.fetch(razorpay_payment_id);
-    const rental = await prisma.ride.findUnique({ where: { id } });
-
-    if (!rental || payment.amount !== Math.round(rental.totalAmount! * 100)) {
-      return res.status(400).json({ error: "Payment amount mismatch" });
+    // Fetch the rental so we have access to driverId and totalAmount needed later
+    const rental = await prisma.ride.findUnique({
+      where: { id },
+    });
+    if (!rental) {
+      return res.status(404).json({ error: "Rental not found" });
     }
 
-    // Complete the rental and update transaction
-    const [updatedRental, transaction] = await prisma.$transaction([
-      prisma.ride.update({
-        where: { id },
-        data: {
-          status: RideStatus.PAYMENT_COMPLETED,
-          rideEndedAt: new Date(),
-        },
-      }),
-      prisma.transaction.updateMany({
-        where: {
-          rideId: id,
-          razorpayOrderId: razorpay_order_id,
-          status: TransactionStatus.PENDING,
-        },
-        data: {
-          status: TransactionStatus.COMPLETED,
-          razorpayPaymentId: razorpay_payment_id,
-        },
-      }),
-    ]);
+    // Complete the rental, update transaction, and update wallet in a single transaction
+    const [updatedRental, paymentUpdate, walletUpdate] =
+      await prisma.$transaction([
+        prisma.ride.update({
+          where: { id },
+          data: {
+            status: RideStatus.PAYMENT_COMPLETED,
+            rideEndedAt: new Date(),
+            paymentStatus: TransactionStatus.COMPLETED,
+          },
+        }),
+        prisma.transaction.updateMany({
+          where: {
+            rideId: id,
+            razorpayOrderId: razorpay_order_id,
+            status: TransactionStatus.PENDING,
+          },
+          data: {
+            status: TransactionStatus.COMPLETED,
+            razorpayPaymentId: razorpay_payment_id,
+            description: "online payment for car rental",
+          },
+        }),
+        prisma.wallet.upsert({
+          where: { userId: rental.driverId! },
+          create: {
+            userId: rental.driverId!,
+            balance: rental.totalAmount!,
+          },
+          update: {
+            balance: {
+              increment: rental.totalAmount!,
+            },
+          },
+        }),
+      ]);
 
     return res.json({
       success: true,
       message: "Payment verified and rental completed",
       rental: updatedRental,
-      transaction,
+      transaction: paymentUpdate,
+      wallet: walletUpdate,
     });
   } catch (error) {
     console.error("Error verifying payment:", error);

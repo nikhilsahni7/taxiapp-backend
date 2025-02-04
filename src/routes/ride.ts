@@ -16,11 +16,9 @@ import {
   markDriverArrived,
   startRide,
   cancelRental,
-  endRide,
   getAvailableRentals,
   acceptRental,
   requestEndRental,
-  initiateRentalPayment,
   confirmCashPayment,
   verifyRazorpayPayment,
 } from "../controllers/carRentalController";
@@ -44,13 +42,13 @@ router.get("/rental/:id/status", verifyToken, getRentalStatus);
 router.post("/rental/:id/arrive", verifyToken, markDriverArrived);
 router.post("/rental/:id/start", verifyToken, startRide);
 router.post("/rental/:id/cancel", verifyToken, cancelRental);
-router.post("/rental/:id/end", verifyToken, endRide);
+
 router.get("/rental/available", verifyToken, getAvailableRentals);
 router.post("/rental/:rentalId/accept", verifyToken, acceptRental);
 
-// New rental payment flow routes
+//  rental final  payment flow routes
 router.post("/rental/:id/end-request", verifyToken, requestEndRental);
-router.post("/rental/:id/payment", verifyToken, initiateRentalPayment);
+
 router.post("/rental/:id/confirm-cash", verifyToken, confirmCashPayment);
 router.post("/rental/:id/verify-payment", verifyToken, verifyRazorpayPayment);
 

@@ -31,6 +31,7 @@ const io = new Server(server, {
     allowedHeaders: ["Content-Type", "Authorization"],
   },
 });
+
 const prisma = new PrismaClient();
 
 console.log(process.env.DATABASE_URL);
@@ -62,12 +63,9 @@ app.use("/api/outstation", outstationRouter);
 app.use("/api/hill-station", hillStationRouter);
 app.use("/api/vendor", vendorRouter);
 app.use("/api/all-india", allIndiaRoutes);
-
 app.use("/", (req, res) => {
   res.send("Welcome to the taxiSure API");
 });
-
-// Initialize car rental socket handler
 
 io.on("connection", (socket: Socket) => {
   console.log("User connected:", socket.id);
@@ -260,7 +258,12 @@ io.on("connection", (socket: Socket) => {
               status: RideStatus.SEARCHING,
               driverId: null,
             },
-            select: { status: true, pickupLocation: true },
+            select: {
+              status: true,
+              pickupLocation: true,
+              pickupLat: true,
+              pickupLng: true,
+            },
             orderBy: { createdAt: "asc" },
             take: 1,
           });
@@ -284,7 +287,7 @@ io.on("connection", (socket: Socket) => {
             };
           }
 
-          // Calculate pickup metrics
+          // Calculate pickup metrics by passing both the driver's location and the ride's stored pickup coordinates
           const pickupDistance = await calculateDistance(
             `${driverStatus.locationLat},${driverStatus.locationLng}`,
             existingRide.pickupLocation
@@ -310,7 +313,7 @@ io.on("connection", (socket: Socket) => {
             include: { user: true },
           });
 
-          // Broadcast to all connected clients that ride is no longer available
+          // Broadcast to all connected clients that the ride is no longer available
           io.emit("ride_unavailable", { rideId });
 
           return {
@@ -329,7 +332,7 @@ io.on("connection", (socket: Socket) => {
           return;
         }
 
-        // Notify the user
+        // Notify the user about ride acceptance
         io.to(result.ride.userId).emit("ride_status_update", {
           rideId,
           status: "ACCEPTED",
@@ -855,17 +858,6 @@ io.on("connection", (socket: Socket) => {
       } catch (error) {
         console.error("Error marking messages as read:", error);
       }
-    }
-  );
-
-  // Car rental socket events
-  socket.on(
-    "driver:register",
-    (data: { driverId: string; location: { lat: number; lng: number } }) => {
-      console.log("Driver registered:", data);
-
-      socket.data.userId = data.driverId;
-      socket.join(`driver:${data.driverId}`);
     }
   );
 

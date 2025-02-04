@@ -441,6 +441,7 @@ export const startRide = async (req: Request, res: Response) => {
 export const cancelBooking = async (req: Request, res: Response) => {
   const { bookingId } = req.params;
   const { reason } = req.body;
+
   if (!req.user?.userId) {
     return res.status(401).json({ error: "User not authenticated" });
   }
@@ -466,9 +467,10 @@ export const cancelBooking = async (req: Request, res: Response) => {
 
     const cancellationFee = 300; // Fixed cancellation fee
 
-    const updatedBooking = await prisma.$transaction(async (prisma) => {
-      // Update booking status
-      const updated = await prisma.longDistanceBooking.update({
+    // Use a transaction to update booking and handle cancellation fee if applicable.
+    const updatedBooking = await prisma.$transaction(async (tx) => {
+      // Update booking status to CANCELLED with the provided reason.
+      const updated = await tx.longDistanceBooking.update({
         where: { id: bookingId },
         data: {
           status: "CANCELLED",
@@ -476,10 +478,17 @@ export const cancelBooking = async (req: Request, res: Response) => {
         },
       });
 
-      // Handle cancellation fee transaction if applicable
-      if (booking.status !== "PENDING") {
-        // Create transaction record
-        await prisma.longDistanceTransaction.create({
+      /**
+       * Process cancellation fee transaction only if:
+       * - The booking is not in the initial PENDING state AND
+       * - A driver is assigned.
+       *
+       * This ensures that if the advance is paid but no driver is assigned,
+       * the cancellation fee logic is bypassed.
+       */
+      if (booking.status !== "PENDING" && booking.driverId) {
+        // Create a transaction record for the cancellation fee.
+        await tx.longDistanceTransaction.create({
           data: {
             bookingId,
             amount: cancellationFee,
@@ -488,18 +497,18 @@ export const cancelBooking = async (req: Request, res: Response) => {
             senderId: req.user?.userId,
             receiverId:
               req.user?.userId === booking.userId
-                ? booking.driverId!
+                ? booking.driverId
                 : booking.userId,
             description: "Cancellation fee",
           },
         });
 
-        // Update or create wallet for the receiving party
+        // Determine the receiving party and update (or create) their wallet.
         const receiverId =
           req.user?.userId === booking.userId
-            ? booking.driverId!
+            ? booking.driverId
             : booking.userId;
-        await prisma.wallet.upsert({
+        await tx.wallet.upsert({
           where: {
             userId: receiverId,
           },

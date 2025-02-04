@@ -172,6 +172,8 @@ model Ride {
   dropLocation   String
   pickupDistance Float?        // Distance from driver to pickup point
   pickupDuration Int?         // Duration from driver to pickup point in minutes
+  dropLat        Float?        // New field: drop latitude
+  dropLng        Float?        // New field: drop longitude
   fare           Float?
   distance       Float?
   duration       Int?

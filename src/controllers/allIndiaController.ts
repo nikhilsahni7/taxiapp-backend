@@ -370,16 +370,26 @@ export const acceptAllIndiaBooking = async (req: Request, res: Response) => {
   }
 
   try {
-    const booking = await prisma.longDistanceBooking.update({
+    const result = await prisma.longDistanceBooking.updateMany({
       where: {
         id: bookingId,
-        status: "ADVANCE_PAID",
+        status: "ADVANCE_PAID", // Only update if status is ADVANCE_PAID
       },
       data: {
         driverId: req.user.userId,
         status: "DRIVER_ACCEPTED",
         driverAcceptedAt: new Date(),
       },
+    });
+
+    if (result.count === 0) {
+      return res
+        .status(404)
+        .json({ error: "Booking not found or invalid status." });
+    }
+
+    const booking = await prisma.longDistanceBooking.findUnique({
+      where: { id: bookingId },
     });
 
     res.json({ booking });
@@ -444,8 +454,7 @@ export const verifyAdvancePayment = async (req: Request, res: Response) => {
     }
 
     const updatedBooking = await prisma.$transaction(async (prisma) => {
-      // Update booking status to make it available to drivers
-      const booking = await prisma.longDistanceBooking.update({
+      const updateResult = await prisma.longDistanceBooking.updateMany({
         where: {
           id: bookingId,
           userId: req.user!.userId,
@@ -459,15 +468,23 @@ export const verifyAdvancePayment = async (req: Request, res: Response) => {
         },
       });
 
+      if (updateResult.count === 0) {
+        throw new Error("Booking not found or invalid status for verification");
+      }
+
+      const booking = await prisma.longDistanceBooking.findUnique({
+        where: { id: bookingId },
+      });
+
       // Create transaction record
       await prisma.longDistanceTransaction.create({
         data: {
           bookingId,
-          amount: booking.advanceAmount,
+          amount: booking!.advanceAmount,
           type: "BOOKING_ADVANCE",
           status: "COMPLETED",
-          senderId: booking.userId,
-          receiverId: null, // Will be updated when driver accepts
+          senderId: booking!.userId,
+          receiverId: null,
           razorpayOrderId: razorpay_order_id,
           razorpayPaymentId: razorpay_payment_id,
           description: `Advance payment for All India Tour ${bookingId}`,
@@ -492,7 +509,7 @@ export const startDriverPickup = async (req: Request, res: Response) => {
   }
 
   try {
-    const booking = await prisma.longDistanceBooking.update({
+    const updateResult = await prisma.longDistanceBooking.updateMany({
       where: {
         id: bookingId,
         driverId: req.user.userId,
@@ -501,6 +518,16 @@ export const startDriverPickup = async (req: Request, res: Response) => {
       data: {
         status: "DRIVER_PICKUP_STARTED",
       },
+    });
+
+    if (updateResult.count === 0) {
+      return res
+        .status(404)
+        .json({ error: "Booking not found or invalid status for pickup" });
+    }
+
+    const booking = await prisma.longDistanceBooking.findUnique({
+      where: { id: bookingId },
     });
 
     res.json({ booking });
@@ -518,7 +545,7 @@ export const driverArrived = async (req: Request, res: Response) => {
   }
 
   try {
-    const booking = await prisma.longDistanceBooking.update({
+    const updateResult = await prisma.longDistanceBooking.updateMany({
       where: {
         id: bookingId,
         driverId: req.user.userId,
@@ -529,6 +556,16 @@ export const driverArrived = async (req: Request, res: Response) => {
         driverArrivedAt: new Date(),
         otp: Math.floor(1000 + Math.random() * 9000).toString(),
       },
+    });
+
+    if (updateResult.count === 0) {
+      return res
+        .status(404)
+        .json({ error: "Booking not found or invalid status for arrival" });
+    }
+
+    const booking = await prisma.longDistanceBooking.findUnique({
+      where: { id: bookingId },
     });
 
     res.json({ booking });
@@ -856,7 +893,7 @@ export const initiateRideCompletion = async (req: Request, res: Response) => {
   }
 
   try {
-    const booking = await prisma.longDistanceBooking.update({
+    const updateResult = await prisma.longDistanceBooking.updateMany({
       where: {
         id: bookingId,
         driverId: req.user.userId,
@@ -865,6 +902,16 @@ export const initiateRideCompletion = async (req: Request, res: Response) => {
       data: {
         status: "PAYMENT_PENDING",
       },
+    });
+
+    if (updateResult.count === 0) {
+      return res.status(404).json({
+        error: "Booking not found or invalid status for ride completion",
+      });
+    }
+
+    const booking = await prisma.longDistanceBooking.findUnique({
+      where: { id: bookingId },
       include: {
         user: {
           select: {
@@ -881,19 +928,13 @@ export const initiateRideCompletion = async (req: Request, res: Response) => {
       },
     });
 
-    if (!booking) {
-      return res
-        .status(404)
-        .json({ error: "Booking not found or invalid status" });
-    }
-
     // Notify user through socket
-    io.to(booking.userId).emit("ride_completion_initiated", {
+    io.to(booking!.userId).emit("ride_completion_initiated", {
       bookingId,
-      remainingAmount: booking.remainingAmount,
+      remainingAmount: booking!.remainingAmount,
       driverDetails: {
-        name: booking.driver?.name,
-        phone: booking.driver?.phone,
+        name: booking!.driver?.name,
+        phone: booking!.driver?.phone,
       },
       serviceType: "ALL_INDIA_TOUR",
     });
