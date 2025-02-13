@@ -38,6 +38,10 @@ const uploadFields = upload.fields([
   { name: "permitImages", maxCount: 4 },
   { name: "carFront", maxCount: 1 },
   { name: "carBack", maxCount: 1 },
+  { name: "rcDocument", maxCount: 1 },
+  { name: "fitnessDocument", maxCount: 1 },
+  { name: "pollutionDocument", maxCount: 1 },
+  { name: "insuranceDocument", maxCount: 1 },
 ]);
 
 // Send OTP
@@ -115,18 +119,18 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
   }
 });
 
-// Add this new route after the existing verify-otp route
-router.post("/verify-driver-otp", async (req: Request, res: Response) => {
+// Add this new route for driver OTP sending
+router.post("/send-driver-otp", async (req: Request, res: Response) => {
   try {
-    const { phone, otp } = req.body;
+    const { phone } = req.body;
 
-    // Validate input
-    if (!phone || !otp) {
-      return res.status(400).json({ error: "Missing required fields" });
+    // Validate phone number
+    if (!phone) {
+      return res.status(400).json({ error: "Phone number is required" });
     }
 
     // Check if driver already exists
-    const existingDriver = await prisma.user.findUnique({
+    const existingDriver = await prisma.user.findFirst({
       where: {
         phone,
         userType: "DRIVER",
@@ -137,22 +141,70 @@ router.post("/verify-driver-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Driver already exists" });
     }
 
-    // Verify OTP using Twilio Verify Service
-    const verification = await twilioClient.verify.v2
+    // Send OTP via Twilio Verify Service
+    await twilioClient.verify.v2
       .services(process.env.TWILIO_VERIFY_SID!)
-      .verificationChecks.create({
+      .verifications.create({
         to: phone,
-        code: otp,
+        channel: "sms",
       });
 
-    if (!verification.valid) {
-      return res.status(400).json({ error: "Invalid or expired OTP" });
+    res.json({ message: "OTP sent successfully" });
+  } catch (error) {
+    console.error("Send Driver OTP error:", error);
+    res.status(500).json({ error: "Failed to send OTP" });
+  }
+});
+
+// Update the verify-driver-otp route
+router.post("/verify-driver-otp", async (req: Request, res: Response) => {
+  try {
+    const { phone, otp } = req.body;
+
+    // Validate input
+    if (!phone || !otp) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Format phone number
+    const formattedPhone = phone.startsWith("+") ? phone : `+${phone}`;
+
+    // Check if driver already exists
+    const existingDriver = await prisma.user.findFirst({
+      where: {
+        phone: formattedPhone,
+        userType: "DRIVER",
+      },
+    });
+
+    if (existingDriver) {
+      return res.status(400).json({ error: "Driver already exists" });
+    }
+
+    // Verify OTP using Twilio Verify Service
+    try {
+      const verification = await twilioClient.verify.v2
+        .services(process.env.TWILIO_VERIFY_SID!)
+        .verificationChecks.create({
+          to: formattedPhone,
+          code: otp,
+        });
+
+      if (!verification.valid) {
+        return res.status(400).json({ error: "Invalid or expired OTP" });
+      }
+    } catch (twilioError: any) {
+      console.error("Twilio verification error:", twilioError);
+      return res.status(400).json({
+        error: "OTP verification failed",
+        details: twilioError.message,
+      });
     }
 
     // Create driver with verified status
     const driver = await prisma.user.create({
       data: {
-        phone,
+        phone: formattedPhone,
         userType: "DRIVER",
         verified: true,
       },
@@ -172,7 +224,8 @@ router.post("/verify-driver-otp", async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("Verify Driver OTP error:", error);
     res.status(500).json({
-      error: error.message || "Failed to verify OTP",
+      error: "Failed to verify OTP",
+      details: error.message || "Unknown error",
     });
   }
 });
@@ -485,6 +538,7 @@ router.post(
           vehicleCategory,
         } = req.body;
 
+        // Upload all documents
         const dlUrl = files?.["dlPath"]?.[0]
           ? await uploadImage(files["dlPath"][0].buffer)
           : null;
@@ -502,7 +556,21 @@ router.post(
             )
           : [];
 
-        // Create driver details
+        // Upload new optional documents
+        const rcUrl = files?.["rcDocument"]?.[0]
+          ? await uploadImage(files["rcDocument"][0].buffer)
+          : null;
+        const fitnessUrl = files?.["fitnessDocument"]?.[0]
+          ? await uploadImage(files["fitnessDocument"][0].buffer)
+          : null;
+        const pollutionUrl = files?.["pollutionDocument"]?.[0]
+          ? await uploadImage(files["pollutionDocument"][0].buffer)
+          : null;
+        const insuranceUrl = files?.["insuranceDocument"]?.[0]
+          ? await uploadImage(files["insuranceDocument"][0].buffer)
+          : null;
+
+        // Create driver details with new fields
         await prisma.driverDetails.create({
           data: {
             userId,
@@ -516,6 +584,10 @@ router.post(
             permitUrls,
             carFrontUrl,
             carBackUrl,
+            rcUrl,
+            fitnessUrl,
+            pollutionUrl,
+            insuranceUrl,
           },
         });
       } else if (type.toUpperCase() === "USER") {

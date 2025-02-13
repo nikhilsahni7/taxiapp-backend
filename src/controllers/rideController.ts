@@ -817,18 +817,34 @@ const validatePermissions = (
   userType: UserType | undefined,
   userId: string | undefined,
   ride: any,
-  status: RideStatus
+  newStatus: RideStatus
 ): boolean => {
-  if (!userType) return false;
+  if (!userType || !userId) return false;
+
+  // Allow ride cancellation for both drivers and users
+  if (newStatus === RideStatus.CANCELLED) {
+    if (userType === "DRIVER") {
+      return ride.driverId === userId;
+    }
+    if (userType === "USER") {
+      return ride.userId === userId;
+    }
+    return false;
+  }
+
+  // Other status updates for drivers
   if (userType === "DRIVER") {
     return (
       ride.driverId === userId &&
-      ["DRIVER_ARRIVED", "RIDE_STARTED", "RIDE_ENDED"].includes(status)
+      ["DRIVER_ARRIVED", "RIDE_STARTED", "RIDE_ENDED"].includes(newStatus)
     );
   }
+
+  // For users, allow other actions if needed
   if (userType === "USER") {
-    return ride.userId === userId && status === "CANCELLED";
+    return ride.userId === userId;
   }
+
   return false;
 };
 
@@ -1055,22 +1071,26 @@ const handleRideCancellation = async (
   res: Response
 ) => {
   try {
+    console.log(
+      `Starting ride cancellation for ride ${ride.id} by ${userType} with reason: ${cancellationReason}`
+    );
     let cancellationFee = 0;
 
-    // Check if the ride was accepted by a driver
     if (ride.driverAcceptedAt) {
       const currentTime = new Date();
       const acceptedTime = new Date(ride.driverAcceptedAt);
       const timeDifference =
         (currentTime.getTime() - acceptedTime.getTime()) / 60000; // Difference in minutes
 
-      // Apply cancellation fee if the ride was accepted more than 3 minutes ago
       if (timeDifference > 3) {
-        cancellationFee = 50; // Example fee, adjust as needed
+        cancellationFee = 50;
       }
+      console.log(
+        `Time diff: ${timeDifference} minutes; Cancellation fee: ${cancellationFee}`
+      );
     }
 
-    // Update ride with cancellation details
+    console.log("Updating ride in DB...");
     const updatedRide = await prisma.ride.update({
       where: { id: ride.id },
       data: {
@@ -1078,7 +1098,8 @@ const handleRideCancellation = async (
         cancellationReason,
         cancellationFee,
         totalAmount: {
-          increment: cancellationFee, // Add cancellation fee to the total amount
+          // If totalAmount might be null, ensure it’s a number first.
+          increment: cancellationFee,
         },
       },
       include: {
@@ -1098,14 +1119,13 @@ const handleRideCancellation = async (
         },
       },
     });
+    console.log("Ride updated:", updatedRide);
 
-    // Notify both user and driver about the cancellation
     emitRideStatusUpdate(updatedRide, "CANCELLED");
 
-    // Deduct cancellation fee from the wallet of the party who cancelled
     if (cancellationFee > 0) {
       if (userType === "USER") {
-        // Deduct from user's wallet if the user cancelled
+        console.log("Updating user's wallet...");
         await prisma.wallet.update({
           where: { userId: ride.userId },
           data: {
@@ -1114,8 +1134,7 @@ const handleRideCancellation = async (
             },
           },
         });
-
-        // Create a transaction record for the user's cancellation fee
+        console.log("Creating refund transaction for user...");
         await prisma.transaction.create({
           data: {
             amount: cancellationFee,
@@ -1128,41 +1147,39 @@ const handleRideCancellation = async (
             description: `Cancellation fee (user) for ride ${ride.id}`,
           },
         });
-      } else if (userType === "DRIVER") {
-        // Deduct from driver's wallet if the driver cancelled
-        if (ride.driverId) {
-          await prisma.wallet.update({
-            where: { userId: ride.driverId },
-            data: {
-              balance: {
-                decrement: cancellationFee,
-              },
+      } else if (userType === "DRIVER" && ride.driverId) {
+        console.log("Updating driver's wallet...");
+        await prisma.wallet.update({
+          where: { userId: ride.driverId },
+          data: {
+            balance: {
+              decrement: cancellationFee,
             },
-          });
-
-          // Create a transaction record for the driver's cancellation fee
-          await prisma.transaction.create({
-            data: {
-              amount: cancellationFee,
-              currency: "INR",
-              type: TransactionType.REFUND,
-              status: TransactionStatus.COMPLETED,
-              senderId: ride.driverId,
-              receiverId: ride.userId,
-              rideId: ride.id,
-              description: `Cancellation fee (driver) for ride ${ride.id}`,
-            },
-          });
-        }
+          },
+        });
+        console.log("Creating refund transaction for driver...");
+        await prisma.transaction.create({
+          data: {
+            amount: cancellationFee,
+            currency: "INR",
+            type: TransactionType.REFUND,
+            status: TransactionStatus.COMPLETED,
+            senderId: ride.driverId,
+            receiverId: ride.userId,
+            rideId: ride.id,
+            description: `Cancellation fee (driver) for ride ${ride.id}`,
+          },
+        });
       }
     }
 
+    console.log("Sending cancellation success response...");
     res.json({
       success: true,
       message: "Ride cancelled successfully",
       ride: updatedRide,
       cancellationFee,
-      cancelledBy: userType, // Indicate who cancelled the ride
+      cancelledBy: userType,
     });
   } catch (error) {
     console.error("Error cancelling ride:", error);

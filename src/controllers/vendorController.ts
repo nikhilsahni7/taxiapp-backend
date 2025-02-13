@@ -5,6 +5,7 @@ import {
   VendorBookingTransactionType,
   LongDistanceServiceType,
   TransactionStatus,
+  CancelledBy,
 } from "@prisma/client";
 import Razorpay from "razorpay";
 import crypto from "crypto";
@@ -264,20 +265,20 @@ export const createDriverCommissionPayment = async (
       return res.status(404).json({ error: "Booking not found" });
     }
 
-    // Calculate driver commission as appBasePrice - driverPayout
-    const driverCommissionAmount = booking.appBasePrice - booking.driverPayout;
+    // Only collect app's total commission (from base price and vendor markup)
+    const totalAppCommission = booking.appCommission;
 
-    // Create a shorter receipt ID using last 8 characters of bookingId
     const shortBookingId = bookingId.slice(-8);
     const receiptId = `comm_${shortBookingId}`;
 
     const order = await razorpay.orders.create({
-      amount: Math.round(driverCommissionAmount * 100),
+      amount: Math.round(totalAppCommission * 100),
       currency: "INR",
-      receipt: receiptId, // Shortened receipt ID
+      receipt: receiptId,
       notes: {
         bookingId,
         type: "driver_commission",
+        amount: totalAppCommission,
       },
     });
 
@@ -291,7 +292,7 @@ export const createDriverCommissionPayment = async (
   }
 };
 
-// Verify driver commission payment and accept booking
+// Update verify payment to handle commission
 export const verifyDriverCommissionPayment = async (
   req: Request,
   res: Response
@@ -327,11 +328,10 @@ export const verifyDriverCommissionPayment = async (
         },
       });
 
-      // Add driver's commission to app wallet
-      const driverCommission = booking.appBasePrice * 0.12;
+      // Add app commission to app wallet
       await createAppWalletTransaction(
-        driverCommission,
-        "Driver commission (12% of base price)",
+        booking.appCommission,
+        "Driver commission payment",
         {
           bookingId,
           senderId: req.user!.userId,
@@ -348,6 +348,106 @@ export const verifyDriverCommissionPayment = async (
   } catch (error) {
     console.error("Error verifying payment:", error);
     res.status(500).json({ error: "Failed to verify payment" });
+  }
+};
+
+// Update cancel booking endpoint
+export const cancelVendorBooking = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+  const { reason } = req.body;
+
+  if (!req.user?.userId) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const booking = await prisma.vendorBooking.findUnique({
+      where: { id: bookingId },
+    });
+
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    // Check if user is authorized to cancel (either vendor or assigned driver)
+    if (
+      booking.vendorId !== req.user.userId &&
+      booking.driverId !== req.user.userId
+    ) {
+      return res
+        .status(403)
+        .json({ error: "Not authorized to cancel this booking" });
+    }
+
+    // Check if booking can be cancelled
+    if (booking.status === "COMPLETED" || booking.status === "CANCELLED") {
+      return res.status(400).json({ error: "Booking cannot be cancelled" });
+    }
+
+    // If driver has paid commission, initiate refund process
+    if (booking.driverCommissionPaid) {
+      await prisma.$transaction(async (prisma) => {
+        // Refund app commission to driver's wallet
+        await prisma.wallet.upsert({
+          where: { userId: booking.driverId! },
+          create: {
+            userId: booking.driverId!,
+            balance: booking.appCommission,
+          },
+          update: {
+            balance: { increment: booking.appCommission },
+          },
+        });
+
+        // Deduct from app wallet
+        await prisma.wallet.update({
+          where: { userId: process.env.ADMIN_USER_ID! },
+          data: {
+            balance: { decrement: booking.appCommission },
+          },
+        });
+
+        // Add refund transaction record
+        await prisma.vendorBookingTransaction.create({
+          data: {
+            bookingId,
+            amount: booking.appCommission,
+            type: VendorBookingTransactionType.DRIVER_PAYOUT,
+            status: TransactionStatus.COMPLETED,
+            senderId: process.env.ADMIN_USER_ID!,
+            receiverId: booking.driverId!,
+            description: "Commission refund for cancelled booking",
+          },
+        });
+
+        // Update booking status
+        await prisma.vendorBooking.update({
+          where: { id: bookingId },
+          data: {
+            status: "CANCELLED",
+            cancelledBy: req.user?.userId as CancelledBy,
+            cancelReason: reason || "No reason provided",
+            cancelledAt: new Date(),
+          },
+        });
+      });
+    } else {
+      // If no commission paid, simply cancel the booking
+      await prisma.vendorBooking.update({
+        where: { id: bookingId },
+        data: {
+          status: "CANCELLED",
+          cancelledBy: req.user.userId as CancelledBy,
+          cancelReason: reason,
+          cancelledAt: new Date(),
+        },
+      });
+    }
+
+    res.json({ success: true, message: "Booking cancelled successfully" });
+  } catch (error) {
+    console.error("Error cancelling booking:", error);
+    res.status(500).json({ error: "Failed to cancel booking" });
   }
 };
 
@@ -412,7 +512,7 @@ export const completeVendorRide = async (req: Request, res: Response) => {
       const driverCommission = booking.appBasePrice * 0.12; // Already paid by driver
       const driverPayout = booking.appBasePrice - driverCommission; // Amount driver should receive
       const vendorMarkup = booking.vendorPrice - booking.appBasePrice; // Vendor's markup
-      const vendorCommissionToApp = vendorMarkup * 0.1; // 10% of vendor markup
+      const vendorCommissionToApp = vendorMarkup * 0.1; // 10% of vendor markup which we already got from driver
       const vendorFinalPayout = vendorMarkup * 0.9; // 90% of vendor markup
 
       // 1. Deduct total amount from vendor's wallet

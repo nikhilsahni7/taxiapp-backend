@@ -273,9 +273,14 @@ model DriverDetails {
   permitUrls      String[]
   carFrontUrl     String?
   carBackUrl      String?
-  carLeftUrl      String?
-  carRightUrl     String?
-  carInteriorUrl  String?
+  
+  
+  rcUrl           String?
+  fitnessUrl      String?
+  pollutionUrl    String?
+  insuranceUrl    String?
+ 
+
   carCategory     String?
   registrationFeePaid Boolean @default(false)
 }
@@ -455,6 +460,10 @@ model VendorBooking {
   driverAcceptedAt  DateTime?
   rideStartedAt     DateTime?
   rideEndedAt       DateTime?
+  cancelledAt       DateTime?
+  cancelledBy       CancelledBy? 
+  cancelReason      String?
+
 
   // Relations
   vendor           User     @relation("VendorBookings", fields: [vendorId], references: [id])
@@ -491,6 +500,7 @@ enum VendorBookingStatus {
   DRIVER_ACCEPTED
   STARTED
   COMPLETED
+  CANCELLED
 }
 
 
@@ -499,6 +509,7 @@ enum VendorBookingTransactionType {
   VENDOR_PAYOUT
   APP_COMMISSION
   DRIVER_PAYOUT
+
 }
 
 model ChatMessage {

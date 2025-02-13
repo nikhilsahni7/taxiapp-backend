@@ -12,6 +12,7 @@ import {
   verifyDriverCommissionPayment,
   getVendorWallet,
   getVendorTransactions,
+  cancelVendorBooking,
 } from "../controllers/vendorController";
 
 const router = express.Router();
@@ -42,5 +43,6 @@ router.post(
 );
 router.post("/bookings/:bookingId/start", startVendorRide);
 router.post("/bookings/:bookingId/complete", completeVendorRide);
+router.post("/bookings/:bookingId/cancel", cancelVendorBooking);
 
 export { router as vendorRouter };

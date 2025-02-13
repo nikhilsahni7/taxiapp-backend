@@ -20,6 +20,7 @@ import {
   calculateDuration,
   validateRideChatAccess,
 } from "./controllers/rideController";
+import { driverEarningsRoutes } from "./routes/driverEarningRoutes";
 
 const app = express();
 const server = http.createServer(app);
@@ -59,6 +60,7 @@ app.use("/api/drivers", driverRouter);
 app.use("/api/payments", paymentRouter);
 app.use("/api/wallets", walletRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/driver-earnings", driverEarningsRoutes);
 app.use("/api/outstation", outstationRouter);
 app.use("/api/hill-station", hillStationRouter);
 app.use("/api/vendor", vendorRouter);
