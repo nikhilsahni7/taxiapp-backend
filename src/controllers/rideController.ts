@@ -24,7 +24,7 @@ const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY!;
 const prisma = new PrismaClient();
 const WAIT_TIME_THRESHOLD = 5; // minutes
 const EXTRA_CHARGE_PER_MINUTE = 2;
-const DRIVER_REQUEST_TIMEOUT = 15000; // 30 seconds
+const DRIVER_REQUEST_TIMEOUT = 5000; //5 seconds
 const MAX_SEARCH_RADIUS = 15; // kilometers
 const INITIAL_SEARCH_RADIUS = 3; // kilometers
 
@@ -1098,7 +1098,7 @@ const handleRideCancellation = async (
         cancellationReason,
         cancellationFee,
         totalAmount: {
-          // If totalAmount might be null, ensure it’s a number first.
+          // If totalAmount might be null, ensure it's a number first.
           increment: cancellationFee,
         },
       },
@@ -1310,5 +1310,77 @@ export const getChatMessages = async (req: Request, res: Response) => {
   } catch (error) {
     console.error("Error fetching chat messages:", error);
     res.status(500).json({ error: "Failed to fetch chat messages" });
+  }
+};
+
+export const getUserSelfieUrl = async (req: Request, res: Response) => {
+  const { userId } = req.params;
+  const requestingUserId = req.user?.userId;
+
+  if (!requestingUserId) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    // Find the user and include necessary details
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        userType: true,
+        selfieUrl: true,
+        driverDetails: {
+          select: {
+            dlUrl: true,
+            carFrontUrl: true,
+            carBackUrl: true,
+          },
+        },
+        vendorDetails: {
+          select: {
+            aadharFrontUrl: true,
+            aadharBackUrl: true,
+            panUrl: true,
+          },
+        },
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Construct response based on user type
+    const response: any = {
+      id: user.id,
+      userType: user.userType,
+      selfieUrl: user.selfieUrl,
+    };
+
+    // Add driver-specific URLs if user is a driver
+    if (user.userType === "DRIVER" && user.driverDetails) {
+      response.driverUrls = {
+        dlUrl: user.driverDetails.dlUrl,
+        carFrontUrl: user.driverDetails.carFrontUrl,
+        carBackUrl: user.driverDetails.carBackUrl,
+      };
+    }
+
+    // Add vendor-specific URLs if user is a vendor
+    if (user.userType === "VENDOR" && user.vendorDetails) {
+      response.vendorUrls = {
+        aadharFrontUrl: user.vendorDetails.aadharFrontUrl,
+        aadharBackUrl: user.vendorDetails.aadharBackUrl,
+        panUrl: user.vendorDetails.panUrl,
+      };
+    }
+
+    res.json(response);
+  } catch (error) {
+    console.error("Error fetching user selfie URL:", error);
+    res.status(500).json({
+      error: "Failed to fetch user details",
+      message: error instanceof Error ? error.message : "Unknown error",
+    });
   }
 };

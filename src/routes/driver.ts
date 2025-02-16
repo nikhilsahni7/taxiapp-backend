@@ -119,7 +119,7 @@ router.delete("/:id", verifyToken, async (req: Request, res: Response) => {
 // Update Driver Status and Location
 router.post("/update-status", async (req, res) => {
   try {
-    const { driverId, isOnline, locationLat, locationLng } = req.body;
+    const { driverId, isOnline, locationLat, locationLng, socketId } = req.body;
 
     // Validate input
     if (!driverId) {
@@ -135,12 +135,15 @@ router.post("/update-status", async (req, res) => {
         locationLng: locationLng ?? undefined,
         updatedAt: new Date(),
         lastLocationUpdate: new Date(),
+        socketId: socketId ?? undefined,
       },
       create: {
         driverId,
         isOnline: isOnline ?? false,
         locationLat,
         locationLng,
+        socketId: socketId ?? undefined,
+        lastLocationUpdate: new Date(),
       },
     });
 
@@ -150,6 +153,8 @@ router.post("/update-status", async (req, res) => {
       isOnline: updatedDriverStatus.isOnline,
       locationLat: updatedDriverStatus.locationLat,
       locationLng: updatedDriverStatus.locationLng,
+      socketId: updatedDriverStatus.socketId,
+      updatedAt: updatedDriverStatus.updatedAt,
     });
 
     res.json(updatedDriverStatus);

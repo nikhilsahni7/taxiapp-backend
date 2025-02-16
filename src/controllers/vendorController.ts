@@ -425,7 +425,7 @@ export const cancelVendorBooking = async (req: Request, res: Response) => {
           where: { id: bookingId },
           data: {
             status: "CANCELLED",
-            cancelledBy: req.user?.userId as CancelledBy,
+            cancelledBy: CancelledBy.USER || CancelledBy.DRIVER,
             cancelReason: reason || "No reason provided",
             cancelledAt: new Date(),
           },
@@ -437,7 +437,7 @@ export const cancelVendorBooking = async (req: Request, res: Response) => {
         where: { id: bookingId },
         data: {
           status: "CANCELLED",
-          cancelledBy: req.user.userId as CancelledBy,
+          cancelledBy: CancelledBy.USER || CancelledBy.DRIVER,
           cancelReason: reason,
           cancelledAt: new Date(),
         },

@@ -7,6 +7,7 @@ import {
   updateRideStatus,
   getFareEstimation,
   getChatMessages,
+  getUserSelfieUrl,
 } from "../controllers/rideController";
 import { verifyToken } from "../middlewares/auth";
 import { getOutstationFareEstimate } from "../controllers/outstationController";
@@ -51,5 +52,8 @@ router.post("/rental/:id/end-request", verifyToken, requestEndRental);
 
 router.post("/rental/:id/confirm-cash", verifyToken, confirmCashPayment);
 router.post("/rental/:id/verify-payment", verifyToken, verifyRazorpayPayment);
+
+// Add new route for getting selfie URLs
+router.get("/user/:userId/selfie", verifyToken, getUserSelfieUrl);
 
 export { router as rideRouter };
