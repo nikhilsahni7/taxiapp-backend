@@ -20,44 +20,44 @@ const razorpay = new Razorpay({
 // Define the rates with proper type
 const VENDOR_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
   OUTSTATION: {
-    mini: { base: 14, short: 17 }, // Increased by 3
-    sedan: { base: 17, short: 22 }, // Increased by 3
-    ertiga: { base: 21, short: 27 }, // Increased by 3
-    innova: { base: 27, short: 30 }, // Increased by 3
-    tempo_12: { fixed: 14000, extra: 26 }, // Increased by 3
-    tempo_16: { fixed: 16000, extra: 29 }, // Increased by 3
-    tempo_20: { fixed: 18000, extra: 33 }, // Increased by 3
-    tempo_26: { fixed: 20000, extra: 38 }, // Increased by 3
+    mini: { base: 14, short: 17 },
+    sedan: { base: 17, short: 22 },
+    ertiga: { base: 21, short: 27 },
+    innova: { base: 27, short: 30 },
+    tempo_12: { fixed: 14700, extra: 26 },
+    tempo_16: { fixed: 16700, extra: 29 },
+    tempo_20: { fixed: 18700, extra: 33 },
+    tempo_26: { fixed: 20700, extra: 38 },
   },
   HILL_STATION: {
-    mini: { base: 23 }, // Increased by 3
-    sedan: { base: 30 }, // Increased by 3
-    ertiga: { base: 33 }, // Increased by 3
-    innova: { base: 38 }, // Increased by 3
-    tempo_12: { fixed: 14000, extra: 26 }, // Increased by 3
-    tempo_16: { fixed: 16000, extra: 29 }, // Increased by 3
-    tempo_20: { fixed: 18000, extra: 33 }, // Increased by 3
-    tempo_26: { fixed: 20000, extra: 38 }, // Increased by 3
+    mini: { base: 23 },
+    sedan: { base: 30 },
+    ertiga: { base: 33 },
+    innova: { base: 38 },
+    tempo_12: { fixed: 7700, extra: 26 },
+    tempo_16: { fixed: 8700, extra: 29 },
+    tempo_20: { fixed: 9700, extra: 33 },
+    tempo_26: { fixed: 10700, extra: 38 },
   },
   ALL_INDIA_TOUR: {
-    mini: { perDay: 3700, extraKm: 14 }, // Increased by 700 and 3
-    sedan: { perDay: 4200, extraKm: 17 }, // Increased by 700 and 3
-    ertiga: { perDay: 5500, extraKm: 21 }, // Increased by 700 and 3
-    innova: { perDay: 6300, extraKm: 27 }, // Increased by 700 and 3
-    tempo_12: { perDay: 14700, extraKm: 26 }, // Increased by 700 and 3
-    tempo_16: { perDay: 16700, extraKm: 29 }, // Increased by 700 and 3
-    tempo_20: { perDay: 18700, extraKm: 33 }, // Increased by 700 and 3
-    tempo_26: { perDay: 20700, extraKm: 38 }, // Increased by 700 and 3
+    mini: { perDay: 3450, extraKm: 17 },
+    sedan: { perDay: 4200, extraKm: 19 },
+    ertiga: { perDay: 5200, extraKm: 19 },
+    innova: { perDay: 6700, extraKm: 21 },
+    tempo_12: { perDay: 7700, extraKm: 23 },
+    tempo_16: { perDay: 8700, extraKm: 25 },
+    tempo_20: { perDay: 9700, extraKm: 27 },
+    tempo_26: { perDay: 10700, extraKm: 29 },
   },
   CHARDHAM_YATRA: {
-    mini: { base: 28 }, // Increased by 3
-    sedan: { base: 33 }, // Increased by 3
-    ertiga: { base: 38 }, // Increased by 3
-    innova: { base: 43 }, // Increased by 3
-    tempo_12: { fixed: 8000, extra: 28 }, // Increased by 3
-    tempo_16: { fixed: 9000, extra: 31 }, // Increased by 3
-    tempo_20: { fixed: 10000, extra: 35 }, // Increased by 3
-    tempo_26: { fixed: 11000, extra: 40 }, // Increased by 3
+    mini: { base: 28 },
+    sedan: { base: 33 },
+    ertiga: { base: 38 },
+    innova: { base: 43 },
+    tempo_12: { fixed: 8700, extra: 28 },
+    tempo_16: { fixed: 9700, extra: 31 },
+    tempo_20: { fixed: 10700, extra: 35 },
+    tempo_26: { fixed: 11700, extra: 40 },
   },
 };
 
@@ -869,50 +869,69 @@ export const getVendorEarnings = async (req: Request, res: Response) => {
   }
 };
 
+// Helper function to calculate base price
 function calculateAppBasePrice(
   distance: number,
   vehicleType: string,
   serviceType: LongDistanceServiceType,
   tripType: string
 ): number {
-  const rates = VENDOR_RATES[serviceType]?.[vehicleType.toLowerCase()];
-  if (!rates) {
-    throw new Error(`Invalid vehicle type or service type`);
+  const rates = VENDOR_RATES[serviceType];
+  if (!rates || !rates[vehicleType]) {
+    throw new Error(
+      `Invalid vehicle type or service type: ${vehicleType}, ${serviceType}`
+    );
   }
 
   let baseFare = 0;
-  const normalizedVehicleType = vehicleType.toLowerCase();
+  const rate = rates[vehicleType];
 
-  if (serviceType === "ALL_INDIA_TOUR") {
-    baseFare = rates.perDay;
-    if (distance > 250) {
-      const extraKm = distance - 250;
-      baseFare += extraKm * rates.extraKm;
-    }
-    // Ensure round trip logic is applied
-    if (tripType === "ROUND_TRIP") {
-      baseFare *= 2;
-    }
-  } else if (normalizedVehicleType.startsWith("tempo_")) {
-    baseFare = rates.fixed;
-    if (distance > 250) {
-      const extraKm = distance - 250;
-      baseFare += extraKm * rates.extra;
-    }
-    if (tripType === "ROUND_TRIP") {
-      baseFare *= 2;
-    }
-  } else {
-    // For cars
-    const ratePerKm =
-      serviceType === "OUTSTATION" && distance <= 150
-        ? rates.short
-        : rates.base;
-    baseFare = distance * ratePerKm;
+  switch (serviceType) {
+    case "OUTSTATION":
+      if (vehicleType.startsWith("tempo_")) {
+        baseFare = rate.fixed;
+        if (distance > 250) {
+          baseFare += (distance - 250) * rate.extra;
+        }
+      } else {
+        const ratePerKm = distance <= 150 ? rate.short : rate.base;
+        baseFare = distance * ratePerKm;
+        if (tripType === "ROUND_TRIP") {
+          baseFare *= 2;
+        }
+      }
+      break;
 
-    if (tripType === "ROUND_TRIP") {
-      baseFare *= 2;
-    }
+    case "HILL_STATION":
+      if (vehicleType.startsWith("tempo_")) {
+        baseFare = rate.fixed;
+        if (distance > 250) {
+          baseFare += (distance - 250) * rate.extra;
+        }
+      } else {
+        baseFare = distance * rate.base;
+      }
+      break;
+
+    case "ALL_INDIA_TOUR":
+      const numberOfDays = Math.ceil(distance / 250);
+      baseFare = rate.perDay * numberOfDays;
+      const allowedDistance = 250 * numberOfDays;
+      if (distance > allowedDistance) {
+        baseFare += (distance - allowedDistance) * rate.extraKm;
+      }
+      break;
+
+    case "CHARDHAM_YATRA":
+      if (vehicleType.startsWith("tempo_")) {
+        baseFare = rate.fixed;
+        if (distance > 250) {
+          baseFare += (distance - 250) * rate.extra;
+        }
+      } else {
+        baseFare = distance * rate.base;
+      }
+      break;
   }
 
   return Math.round(baseFare);

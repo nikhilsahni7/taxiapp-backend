@@ -63,6 +63,11 @@ const CHARGES = {
       sedan: 120,
       suv: 200,
     } as StateTaxStructure,
+    HARYANA_TO_UP: {
+      mini: 220,
+      sedan: 220,
+      suv: 300,
+    } as StateTaxStructure,
   },
   // Add reference for major airports
   MAJOR_AIRPORTS: [
@@ -170,19 +175,26 @@ async function calculateTaxAndCharges(
     };
   }
 
-  // Calculate state tax
-  if (pickupState === "Delhi" && dropState === "Haryana") {
+  // Calculate state tax and MCD charges based on route
+  if (pickupState === "Haryana" && dropState === "Uttar Pradesh") {
+    // Direct Haryana to UP route
+    stateTax = CHARGES.STATE_TAX.HARYANA_TO_UP[lowerCategory];
+  } else if (pickupState === "Haryana" && dropState === "Delhi") {
+    // Haryana to Delhi route (MCD applies)
+    mcdCharges = CHARGES.MCD_CHARGE;
+  } else if (pickupState === "Delhi" && dropState === "Haryana") {
+    // Delhi to Haryana route
     stateTax = CHARGES.STATE_TAX.DELHI_TO_HARYANA[lowerCategory];
   } else if (pickupState === "Delhi" && dropState === "Uttar Pradesh") {
+    // Delhi to UP route
     stateTax = CHARGES.STATE_TAX.DELHI_TO_UP[lowerCategory];
+  } else if (pickupState === "Haryana" && dropState === "Uttar Pradesh") {
+    // Haryana to UP via Delhi route (both MCD and state tax apply)
+    stateTax = CHARGES.STATE_TAX.HARYANA_TO_UP[lowerCategory];
+    mcdCharges = CHARGES.MCD_CHARGE; // Since the route goes through Delhi
   }
 
-  // Calculate MCD charges (only when entering Delhi from outside)
-  if (pickupState !== "Delhi" && dropState === "Delhi") {
-    mcdCharges = CHARGES.MCD_CHARGE;
-  }
-
-  // Apply airport charges only if the pickup location contains "Terminal 1", "Terminal 2", or "Terminal 3"
+  // Apply airport charges if applicable
   if (
     pickupLocation.toLowerCase().includes("terminal 1") ||
     pickupLocation.toLowerCase().includes("terminal 2") ||
