@@ -23,6 +23,7 @@ import {
   confirmCashPayment,
   verifyRazorpayPayment,
 } from "../controllers/carRentalController";
+import { getAllUsersWithDetails } from "../controllers/userController";
 
 const router = express.Router();
 
@@ -55,5 +56,6 @@ router.post("/rental/:id/verify-payment", verifyToken, verifyRazorpayPayment);
 
 // Add new route for getting selfie URLs
 router.get("/user/:userId/selfie", verifyToken, getUserSelfieUrl);
+router.get("/all/users", verifyToken, getAllUsersWithDetails);
 
 export { router as rideRouter };

@@ -64,9 +64,14 @@ const CHARGES = {
       suv: 200,
     } as StateTaxStructure,
     HARYANA_TO_UP: {
-      mini: 220,
-      sedan: 220,
-      suv: 300,
+      mini: 220, // 100 (Delhi to Haryana) + 120 (Delhi to UP)
+      sedan: 220, // 100 (Delhi to Haryana) + 120 (Delhi to UP)
+      suv: 300, // 100 (Delhi to Haryana) + 200 (Delhi to UP)
+    } as StateTaxStructure,
+    UP_TO_HARYANA: {
+      mini: 220, // 120 (UP to Delhi) + 100 (Delhi to Haryana)
+      sedan: 220, // 120 (UP to Delhi) + 100 (Delhi to Haryana)
+      suv: 300, // 200 (UP to Delhi) + 100 (Delhi to Haryana)
     } as StateTaxStructure,
   },
   // Add reference for major airports
@@ -177,21 +182,20 @@ async function calculateTaxAndCharges(
 
   // Calculate state tax and MCD charges based on route
   if (pickupState === "Haryana" && dropState === "Uttar Pradesh") {
-    // Direct Haryana to UP route
+    // Haryana to UP route (includes both taxes since it goes via Delhi)
     stateTax = CHARGES.STATE_TAX.HARYANA_TO_UP[lowerCategory];
-  } else if (pickupState === "Haryana" && dropState === "Delhi") {
-    // Haryana to Delhi route (MCD applies)
+    mcdCharges = CHARGES.MCD_CHARGE;
+  } else if (pickupState === "Uttar Pradesh" && dropState === "Haryana") {
+    // UP to Haryana route (includes both taxes since it goes via Delhi)
+    stateTax = CHARGES.STATE_TAX.UP_TO_HARYANA[lowerCategory];
     mcdCharges = CHARGES.MCD_CHARGE;
   } else if (pickupState === "Delhi" && dropState === "Haryana") {
-    // Delhi to Haryana route
     stateTax = CHARGES.STATE_TAX.DELHI_TO_HARYANA[lowerCategory];
   } else if (pickupState === "Delhi" && dropState === "Uttar Pradesh") {
-    // Delhi to UP route
     stateTax = CHARGES.STATE_TAX.DELHI_TO_UP[lowerCategory];
-  } else if (pickupState === "Haryana" && dropState === "Uttar Pradesh") {
-    // Haryana to UP via Delhi route (both MCD and state tax apply)
-    stateTax = CHARGES.STATE_TAX.HARYANA_TO_UP[lowerCategory];
-    mcdCharges = CHARGES.MCD_CHARGE; // Since the route goes through Delhi
+  } else if (pickupState !== "Delhi" && dropState === "Delhi") {
+    // Any state to Delhi route
+    mcdCharges = CHARGES.MCD_CHARGE;
   }
 
   // Apply airport charges if applicable

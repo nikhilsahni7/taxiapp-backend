@@ -580,6 +580,7 @@ router.post(
             vehicleNumber,
             vehicleName,
             vehicleCategory,
+            carCategory: vehicleCategory,
             dlUrl,
             permitUrls,
             carFrontUrl,
