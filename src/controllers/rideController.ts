@@ -184,11 +184,9 @@ async function calculateTaxAndCharges(
   if (pickupState === "Haryana" && dropState === "Uttar Pradesh") {
     // Haryana to UP route (includes both taxes since it goes via Delhi)
     stateTax = CHARGES.STATE_TAX.HARYANA_TO_UP[lowerCategory];
-    mcdCharges = CHARGES.MCD_CHARGE;
   } else if (pickupState === "Uttar Pradesh" && dropState === "Haryana") {
     // UP to Haryana route (includes both taxes since it goes via Delhi)
     stateTax = CHARGES.STATE_TAX.UP_TO_HARYANA[lowerCategory];
-    mcdCharges = CHARGES.MCD_CHARGE;
   } else if (pickupState === "Delhi" && dropState === "Haryana") {
     stateTax = CHARGES.STATE_TAX.DELHI_TO_HARYANA[lowerCategory];
   } else if (pickupState === "Delhi" && dropState === "Uttar Pradesh") {
