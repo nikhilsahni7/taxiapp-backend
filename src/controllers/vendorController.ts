@@ -174,7 +174,7 @@ export const createVendorBooking = async (req: Request, res: Response) => {
     dropLng,
     vehicleCategory,
     serviceType,
-    vendorPrice,
+    vendorPrice, // This is the total booking amount (e.g., Rs 5000)
     tripType,
     startDate,
     endDate,
@@ -189,7 +189,7 @@ export const createVendorBooking = async (req: Request, res: Response) => {
       { lat: dropLat, lng: dropLng }
     );
 
-    // Calculate app base price
+    // Calculate app base price (our rate, e.g., Rs 3000)
     const appBasePrice = calculateAppBasePrice(
       distance,
       vehicleCategory,
@@ -197,12 +197,11 @@ export const createVendorBooking = async (req: Request, res: Response) => {
       tripType
     );
 
-    const vendorCommission = vendorPrice - appBasePrice;
-    const appCommissionFromBase = appBasePrice * 0.12;
-    const appCommissionFromVendor = vendorCommission * 0.1;
-    const totalAppCommission = appCommissionFromBase + appCommissionFromVendor;
-    const driverPayout = appBasePrice - appCommissionFromBase;
-    const vendorPayout = vendorCommission - appCommissionFromVendor;
+    // Calculate commissions
+    const vendorCommission = vendorPrice - appBasePrice; // e.g., Rs 2000
+    const appCommission = Math.round(appBasePrice * 0.12); // 12% of app base price (e.g., Rs 360)
+    const totalCommission = vendorCommission + appCommission; // Total commission (e.g., Rs 2360)
+    const driverPayout = vendorPrice - totalCommission; // Amount driver receives (e.g., Rs 2640)
 
     const booking = await prisma.vendorBooking.create({
       data: {
@@ -230,15 +229,26 @@ export const createVendorBooking = async (req: Request, res: Response) => {
         appBasePrice,
         vendorPrice,
         vendorCommission,
-        appCommission: totalAppCommission,
+        appCommission,
         driverPayout,
-        vendorPayout,
+        vendorPayout: vendorCommission, // Vendor gets their full commission
         status: "PENDING",
         notes,
       },
     });
 
-    res.json({ booking });
+    res.json({
+      booking,
+      breakdown: {
+        totalAmount: vendorPrice,
+        appBasePrice,
+        vendorCommission,
+        appCommission,
+        totalCommission,
+        driverPayout,
+        vendorPayout: vendorCommission,
+      },
+    });
   } catch (error) {
     console.error("Error creating vendor booking:", error);
     res.status(500).json({ error: "Failed to create booking" });
@@ -265,33 +275,35 @@ export const createDriverCommissionPayment = async (
       return res.status(404).json({ error: "Booking not found" });
     }
 
-    // Only collect app's total commission (from base price and vendor markup)
-    const totalAppCommission = booking.appCommission;
+    // Driver pays both vendor commission and app commission
+    const totalCommissionAmount =
+      booking.vendorCommission + booking.appCommission;
 
     const shortBookingId = bookingId.slice(-8);
     const receiptId = `comm_${shortBookingId}`;
 
+    // Add await here
     const order = await razorpay.orders.create({
-      amount: Math.round(totalAppCommission * 100),
+      amount: Math.round(totalCommissionAmount * 100), // Convert to paise
       currency: "INR",
       receipt: receiptId,
       notes: {
         bookingId,
         type: "driver_commission",
-        amount: totalAppCommission,
+        amount: totalCommissionAmount,
+        breakdown: {
+          vendorCommission: booking.vendorCommission,
+          appCommission: booking.appCommission,
+        },
       },
     });
 
     res.json({ order });
   } catch (error) {
     console.error("Error creating payment order:", error);
-    res.status(500).json({
-      error: "Failed to create payment order",
-      details: error instanceof Error ? error.message : "Unknown error",
-    });
+    res.status(500).json({ error: "Failed to create payment order" });
   }
 };
-
 // Update verify payment to handle commission
 export const verifyDriverCommissionPayment = async (
   req: Request,
@@ -318,7 +330,54 @@ export const verifyDriverCommissionPayment = async (
     }
 
     const updatedBooking = await prisma.$transaction(async (prisma) => {
-      const booking = await prisma.vendorBooking.update({
+      const booking = await prisma.vendorBooking.findUnique({
+        where: { id: bookingId },
+      });
+
+      if (!booking) {
+        throw new Error("Booking not found");
+      }
+
+      // Add vendor commission to vendor's wallet
+      await prisma.wallet.upsert({
+        where: { userId: booking.vendorId },
+        create: {
+          userId: booking.vendorId,
+          balance: booking.vendorCommission,
+        },
+        update: {
+          balance: { increment: booking.vendorCommission },
+        },
+      });
+
+      // Add app commission to app wallet
+      await createAppWalletTransaction(
+        booking.appCommission,
+        "App commission from driver",
+        {
+          bookingId,
+          senderId: req.user!.userId,
+          type: "APP_COMMISSION",
+          razorpayPaymentId: razorpay_payment_id,
+          razorpayOrderId: razorpay_order_id,
+        }
+      );
+
+      // Record vendor commission transaction
+      await prisma.vendorBookingTransaction.create({
+        data: {
+          bookingId,
+          amount: booking.vendorCommission,
+          type: VendorBookingTransactionType.VENDOR_PAYOUT,
+          status: TransactionStatus.COMPLETED,
+          senderId: req.user!.userId,
+          receiverId: booking.vendorId,
+          description: "Vendor commission from driver",
+        },
+      });
+
+      // Update booking status
+      return prisma.vendorBooking.update({
         where: { id: bookingId },
         data: {
           status: "DRIVER_ACCEPTED",
@@ -327,21 +386,6 @@ export const verifyDriverCommissionPayment = async (
           driverCommissionPaid: true,
         },
       });
-
-      // Add app commission to app wallet
-      await createAppWalletTransaction(
-        booking.appCommission,
-        "Driver commission payment",
-        {
-          bookingId,
-          senderId: req.user!.userId,
-          type: "DRIVER_COMMISSION",
-          razorpayPaymentId: razorpay_payment_id,
-          razorpayOrderId: razorpay_order_id,
-        }
-      );
-
-      return booking;
     });
 
     res.json({ success: true, booking: updatedBooking });
@@ -495,97 +539,55 @@ export const completeVendorRide = async (req: Request, res: Response) => {
           driverId: req.user!.userId,
           status: VendorBookingStatus.STARTED,
         },
-        include: {
-          vendor: {
-            select: {
-              wallet: true,
-            },
-          },
-        },
       });
 
       if (!booking) {
         throw new Error("Booking not found or invalid status");
       }
 
-      // Calculate all amounts
-      const driverCommission = booking.appBasePrice * 0.12; // Already paid by driver
-      const driverPayout = booking.appBasePrice - driverCommission; // Amount driver should receive
-      const vendorMarkup = booking.vendorPrice - booking.appBasePrice; // Vendor's markup
-      const vendorCommissionToApp = vendorMarkup * 0.1; // 10% of vendor markup which we already got from driver
-      const vendorFinalPayout = vendorMarkup * 0.9; // 90% of vendor markup
-
-      // 1. Deduct total amount from vendor's wallet
-      const totalDeduction = driverPayout + vendorCommissionToApp;
-      await prisma.wallet.update({
-        where: { userId: booking.vendorId },
-        data: {
-          balance: {
-            decrement: totalDeduction,
-          },
-        },
-      });
-
-      // 2. Pay driver their share
+      // Driver receives their payout amount (total amount minus commissions)
       await prisma.wallet.upsert({
         where: { userId: req.user!.userId },
         create: {
           userId: req.user!.userId,
-          balance: driverPayout,
+          balance: booking.driverPayout,
         },
         update: {
-          balance: {
-            increment: driverPayout,
-          },
+          balance: { increment: booking.driverPayout },
         },
       });
 
-      // 3. Record driver payout transaction
+      // Record driver payout transaction
       await prisma.vendorBookingTransaction.create({
         data: {
           bookingId,
-          amount: driverPayout,
+          amount: booking.driverPayout,
           type: VendorBookingTransactionType.DRIVER_PAYOUT,
           status: TransactionStatus.COMPLETED,
           senderId: booking.vendorId,
           receiverId: req.user!.userId,
-          description: "Driver payout from vendor",
+          description: "Driver payout for completed ride",
         },
       });
 
-      // 4. Add vendor's commission to app wallet
-      await createAppWalletTransaction(
-        vendorCommissionToApp,
-        "Vendor commission (10% of markup)",
-        {
-          bookingId,
-          senderId: booking.vendorId,
-          type: "VENDOR_COMMISSION",
-        }
-      );
-
-      // 5. Update booking status
+      // Update booking status
       const updatedBooking = await prisma.vendorBooking.update({
         where: { id: bookingId },
         data: {
           status: VendorBookingStatus.COMPLETED,
           rideEndedAt: new Date(),
-          vendorPaidAt: new Date(),
         },
       });
 
       return {
         booking: updatedBooking,
         payoutDetails: {
-          totalPrice: booking.vendorPrice,
-          appBasePrice: booking.appBasePrice,
-          breakdown: {
-            driverCommission, // Paid by driver initially
-            driverPayout, // Paid from vendor's wallet
-            vendorMarkup,
-            vendorCommissionToApp,
-            vendorFinalPayout,
-            totalDeductionFromVendor: totalDeduction,
+          totalAmount: booking.vendorPrice,
+          driverPayout: booking.driverPayout,
+          commissionBreakdown: {
+            vendorCommission: booking.vendorCommission,
+            appCommission: booking.appCommission,
+            totalCommission: booking.vendorCommission + booking.appCommission,
           },
         },
       };
@@ -593,7 +595,7 @@ export const completeVendorRide = async (req: Request, res: Response) => {
 
     res.json({
       success: true,
-      message: "Ride completed and all payouts processed successfully",
+      message: "Ride completed and payment processed successfully",
       ...result,
     });
   } catch (error) {

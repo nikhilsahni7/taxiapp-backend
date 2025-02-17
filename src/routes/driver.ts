@@ -1,16 +1,20 @@
 import type { Request, Response } from "express";
 import express from "express";
 import { PrismaClient } from "@prisma/client";
+import multer from "multer";
 
 import { verifyToken } from "../middlewares/auth";
 import {
   getDriverRideHistory,
   getDriverCurrentRide,
 } from "../controllers/driverController";
+import { uploadImage } from "../config/cloudinary";
 
 const router = express.Router();
 const prisma = new PrismaClient();
 import { io } from "../server";
+
+const upload = multer();
 
 // Get all drivers
 router.get("/", verifyToken, async (req: Request, res: Response) => {
@@ -67,37 +71,52 @@ router.get("/:id", verifyToken, async (req: Request, res: Response) => {
 });
 
 // Update driver
-router.put("/:id", verifyToken, async (req: Request, res: Response) => {
-  try {
-    const driverId = req.params.id;
-    const { name, email, state, city } = req.body;
+router.put(
+  "/:id",
+  verifyToken,
+  upload.single("selfie"),
+  async (req: Request, res: Response) => {
+    try {
+      const driverId = req.params.id;
+      const { name, email, state, city } = req.body;
 
-    const updatedDriver = await prisma.user.update({
-      where: { id: driverId },
-      data: {
-        name,
-        email,
-        state,
-        city,
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        selfieUrl: true,
-        state: true,
-        city: true,
-        userType: true,
-        updatedAt: true,
-      },
-    });
+      let selfieUrl;
 
-    res.json(updatedDriver);
-  } catch (error) {
-    res.status(500).json({ error: "Failed to update driver" });
+      // Check if a new selfie file is uploaded
+      if (req.file) {
+        // Upload the new selfie to Cloudinary
+        selfieUrl = await uploadImage(req.file.buffer);
+      }
+
+      const updatedDriver = await prisma.user.update({
+        where: { id: driverId },
+        data: {
+          name,
+          email,
+          state,
+          city,
+          ...(selfieUrl && { selfieUrl }), // Only update selfieUrl if a new image was uploaded
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          selfieUrl: true,
+          state: true,
+          city: true,
+          userType: true,
+          updatedAt: true,
+        },
+      });
+
+      res.json(updatedDriver);
+    } catch (error) {
+      console.error("Error updating driver:", error);
+      res.status(500).json({ error: "Failed to update driver" });
+    }
   }
-});
+);
 
 // Delete driver
 router.delete("/:id", verifyToken, async (req: Request, res: Response) => {
@@ -190,5 +209,103 @@ router.get("/:driverId/ride-history", getDriverRideHistory);
 
 // Get driver's current ride
 router.get("/:driverId/current-ride", getDriverCurrentRide);
+
+// Get detailed driver information
+router.get(
+  "/:driverId/details",
+  verifyToken,
+  async (req: Request, res: Response) => {
+    try {
+      const { driverId } = req.params;
+
+      const driverDetails = await prisma.user.findUnique({
+        where: {
+          id: driverId,
+          userType: "DRIVER",
+        },
+        select: {
+          id: true,
+          name: true,
+          phone: true,
+          email: true,
+          selfieUrl: true,
+          state: true,
+          city: true,
+          createdAt: true,
+          updatedAt: true,
+          userType: true,
+
+          driverDetails: {
+            select: {
+              vehicleNumber: true,
+              vehicleName: true,
+              vehicleCategory: true,
+              dlNumber: true,
+              carCategory: true,
+              carFrontUrl: true,
+              carBackUrl: true,
+            },
+          },
+          ridesAsDriver: {
+            select: {
+              id: true,
+              status: true,
+              createdAt: true,
+              rideType: true,
+            },
+          },
+          longDistanceBookingsAsDriver: {
+            select: {
+              id: true,
+              status: true,
+              createdAt: true,
+              serviceType: true,
+            },
+          },
+        },
+      });
+
+      if (!driverDetails) {
+        return res.status(404).json({ error: "Driver not found" });
+      }
+
+      // Calculate total and completed local rides
+      const completedLocalRides = driverDetails.ridesAsDriver.filter(
+        (ride) =>
+          ride.status === "RIDE_ENDED" || ride.status === "PAYMENT_COMPLETED"
+      ).length;
+
+      // Calculate total and completed long distance rides
+      const completedLongDistanceRides =
+        driverDetails.longDistanceBookingsAsDriver.filter(
+          (booking) => booking.status === "COMPLETED"
+        ).length;
+
+      const response = {
+        ...driverDetails,
+        totalTrips:
+          driverDetails.ridesAsDriver.length +
+          driverDetails.longDistanceBookingsAsDriver.length,
+        completedTrips: completedLocalRides + completedLongDistanceRides,
+        localTrips: {
+          total: driverDetails.ridesAsDriver.length,
+          completed: completedLocalRides,
+        },
+        longDistanceTrips: {
+          total: driverDetails.longDistanceBookingsAsDriver.length,
+          completed: completedLongDistanceRides,
+        },
+        // Remove detailed ride information from response
+        ridesAsDriver: undefined,
+        longDistanceBookingsAsDriver: undefined,
+      };
+
+      res.json(response);
+    } catch (error) {
+      console.error("Error fetching driver details:", error);
+      res.status(500).json({ error: "Failed to fetch driver details" });
+    }
+  }
+);
 
 export { router as driverRouter };
