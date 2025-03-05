@@ -24,7 +24,7 @@ const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY!;
 const prisma = new PrismaClient();
 const WAIT_TIME_THRESHOLD = 5; // minutes
 const EXTRA_CHARGE_PER_MINUTE = 2;
-const DRIVER_REQUEST_TIMEOUT = 5000;
+const DRIVER_REQUEST_TIMEOUT = 15000;
 const MAX_SEARCH_RADIUS = 15; // kilometers
 const INITIAL_SEARCH_RADIUS = 3; // kilometers
 
