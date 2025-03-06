@@ -8,6 +8,7 @@ import {
   TransactionType,
   TransactionStatus,
   RideType,
+  CancelledBy,
 } from "@prisma/client";
 import { searchAvailableDrivers } from "../lib/driverService";
 
@@ -1111,6 +1112,8 @@ const handleRideCancellation = async (
         status: RideStatus.CANCELLED,
         cancellationReason,
         cancellationFee,
+        cancelledBy: userType as CancelledBy,
+
         totalAmount: {
           // If totalAmount might be null, ensure it's a number first.
           increment: cancellationFee,
