@@ -21,6 +21,7 @@ import {
   validateRideChatAccess,
 } from "./controllers/rideController";
 import { driverEarningsRoutes } from "./routes/driverEarningRoutes";
+import { chardhamRoutes } from "./routes/chardhamRoutes";
 
 const app = express();
 const server = http.createServer(app);
@@ -65,6 +66,7 @@ app.use("/api/outstation", outstationRouter);
 app.use("/api/hill-station", hillStationRouter);
 app.use("/api/vendor", vendorRouter);
 app.use("/api/all-india", allIndiaRoutes);
+app.use("/api/chardham", chardhamRoutes);
 app.use("/", (req, res) => {
   res.send("Welcome to the taxiSure API");
 });

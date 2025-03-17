@@ -104,37 +104,7 @@ async function getCoordinates(address: string): Promise<Location> {
     throw new Error("Failed to get coordinates");
   }
 }
-async function isNearAirport(location: Location): Promise<boolean> {
-  try {
-    const response = await axios.get(
-      `https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=${location.lat},${location.lng}&radius=2000&type=airport&keyword=airport&key=${process.env.GOOGLE_MAPS_API_KEY}`
-    );
 
-    // Check if any results exist and verify they are actually airports
-    if (response.data.results.length > 0) {
-      // Filter for major airports only by checking types and name
-      const majorAirports = response.data.results.filter((place: any) => {
-        const isAirport = place.types.includes("airport");
-        const name = place.name.toLowerCase();
-        // Check for major Delhi-NCR airports
-        return (
-          isAirport &&
-          (name.includes("indira gandhi") ||
-            name.includes("igi") ||
-            name.includes("noida international") ||
-            name.includes("hindon"))
-        );
-      });
-
-      return majorAirports.length > 0;
-    }
-    return false;
-  } catch (error) {
-    console.error("Error checking airport proximity:", error);
-    // In case of API error, default to false to avoid overcharging
-    return false;
-  }
-}
 async function getStateFromCoordinates(location: Location): Promise<string> {
   try {
     const response = await axios.get(
@@ -201,7 +171,10 @@ async function calculateTaxAndCharges(
   if (
     pickupLocation.toLowerCase().includes("terminal 1") ||
     pickupLocation.toLowerCase().includes("terminal 2") ||
-    pickupLocation.toLowerCase().includes("terminal 3")
+    pickupLocation.toLowerCase().includes("terminal 3") ||
+    pickupLocation.toLowerCase().includes("t1") ||
+    pickupLocation.toLowerCase().includes("t2") ||
+    pickupLocation.toLowerCase().includes("t3")
   ) {
     airportCharges = CHARGES.AIRPORT_PARKING;
   }
