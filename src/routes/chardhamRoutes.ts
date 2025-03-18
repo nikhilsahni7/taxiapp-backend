@@ -8,6 +8,9 @@ import {
   acceptChardhamBooking,
   startDriverPickup,
   driverArrived,
+  startRide,
+  getBookingStatus,
+  getAcceptedBookings,
 } from "../controllers/chardhamController";
 
 const router = express.Router();
@@ -27,8 +30,13 @@ router.post(
 
 // Driver routes
 router.get("/available-bookings", getAvailableChardhamBookings);
+router.get("/bookings/accepted", getAcceptedBookings);
 router.post("/bookings/:bookingId/accept", acceptChardhamBooking);
 router.post("/bookings/:bookingId/start-pickup", startDriverPickup);
 router.post("/bookings/:bookingId/arrived", driverArrived);
+router.post("/bookings/:bookingId/start", startRide);
+
+// Common routes
+router.get("/bookings/:bookingId", getBookingStatus);
 
 export { router as chardhamRoutes };

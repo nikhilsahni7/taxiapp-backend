@@ -834,3 +834,152 @@ export const driverArrived = async (req: Request, res: Response) => {
     res.status(500).json({ error: "Failed to update driver arrival" });
   }
 };
+
+// Start ride after OTP verification
+export const startRide = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+  const { otp } = req.body;
+
+  if (!req.user?.userId || req.user.userType !== "DRIVER") {
+    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+  }
+
+  try {
+    // First verify the booking exists with the correct OTP and status
+    const booking = await prisma.longDistanceBooking.findFirst({
+      where: {
+        id: bookingId,
+        driverId: req.user.userId,
+        status: "DRIVER_ARRIVED",
+        otp,
+      },
+    });
+
+    if (!booking) {
+      return res.status(400).json({ error: "Invalid booking ID or OTP" });
+    }
+
+    // Update booking status to STARTED (not ONGOING)
+    const updatedBooking = await prisma.longDistanceBooking.update({
+      where: { id: bookingId },
+      data: {
+        status: "STARTED", // Using STARTED instead of ONGOING
+        rideStartedAt: new Date(),
+      },
+      include: {
+        user: {
+          select: {
+            name: true,
+            phone: true,
+          },
+        },
+        driver: {
+          select: {
+            name: true,
+            phone: true,
+            driverDetails: {
+              select: {
+                vehicleName: true,
+                vehicleNumber: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    res.json({ booking: updatedBooking });
+  } catch (error) {
+    console.error("Error starting ride:", error);
+    res.status(500).json({ error: "Failed to start ride" });
+  }
+};
+
+// Get accepted bookings for a driver
+export const getAcceptedBookings = async (req: Request, res: Response) => {
+  if (!req.user?.userId || req.user.userType !== "DRIVER") {
+    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+  }
+
+  try {
+    const bookings = await prisma.longDistanceBooking.findMany({
+      where: {
+        driverId: req.user.userId,
+        serviceType: "CHARDHAM_YATRA",
+        status: {
+          in: [
+            "DRIVER_ACCEPTED",
+            "DRIVER_PICKUP_STARTED",
+            "DRIVER_ARRIVED",
+            "STARTED", // Using STARTED instead of ONGOING
+          ],
+        },
+      },
+      include: {
+        user: {
+          select: {
+            name: true,
+            phone: true,
+          },
+        },
+      },
+      orderBy: {
+        startDate: "asc",
+      },
+    });
+
+    res.json({ bookings });
+  } catch (error) {
+    console.error("Error fetching accepted bookings:", error);
+    res.status(500).json({ error: "Failed to fetch accepted bookings" });
+  }
+};
+
+export const getBookingStatus = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+
+  if (!req.user?.userId) {
+    return res.status(401).json({ error: "User not authenticated" });
+  }
+
+  try {
+    const booking = await prisma.longDistanceBooking.findFirst({
+      where: {
+        id: bookingId,
+        OR: [{ userId: req.user.userId }, { driverId: req.user.userId }],
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+          },
+        },
+        driver: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+            driverDetails: {
+              select: {
+                vehicleName: true,
+                vehicleNumber: true,
+                vehicleCategory: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    res.json({ booking });
+  } catch (error) {
+    console.error("Error fetching booking status:", error);
+    res.status(500).json({ error: "Failed to fetch booking status" });
+  }
+};
