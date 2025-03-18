@@ -1098,3 +1098,412 @@ export const cancelBooking = async (req: Request, res: Response) => {
     res.status(500).json({ error: "Failed to cancel booking" });
   }
 };
+
+// Driver ends the ride
+export const endRide = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+  const { endOdometerReading } = req.body;
+
+  if (!req.user?.userId || req.user.userType !== "DRIVER") {
+    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+  }
+
+  try {
+    // Verify the booking exists and is in STARTED status
+    const booking = await prisma.longDistanceBooking.findFirst({
+      where: {
+        id: bookingId,
+        driverId: req.user.userId,
+        status: "STARTED",
+      },
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        error: "Booking not found or not in the correct status for ending",
+      });
+    }
+
+    // Update booking status to PAYMENT_PENDING
+    const updatedBooking = await prisma.longDistanceBooking.update({
+      where: { id: bookingId },
+      data: {
+        status: "PAYMENT_PENDING",
+        rideEndedAt: new Date(),
+        metadata: {
+          ...(booking.metadata as any),
+          endOdometerReading,
+        },
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+          },
+        },
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "Ride ended successfully, waiting for payment",
+      booking: updatedBooking,
+    });
+  } catch (error) {
+    console.error("Error ending ride:", error);
+    res.status(500).json({ error: "Failed to end ride" });
+  }
+};
+
+// User selects payment method
+export const selectPaymentMethod = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+  const { paymentMethod } = req.body;
+
+  if (!req.user?.userId) {
+    return res.status(401).json({ error: "User not authenticated" });
+  }
+
+  if (!paymentMethod || !["CASH", "RAZORPAY"].includes(paymentMethod)) {
+    return res
+      .status(400)
+      .json({ error: "Invalid payment method. Must be CASH or RAZORPAY" });
+  }
+
+  try {
+    // Verify the booking exists and is in PAYMENT_PENDING status
+    const booking = await prisma.longDistanceBooking.findFirst({
+      where: {
+        id: bookingId,
+        userId: req.user.userId,
+        status: "PAYMENT_PENDING",
+      },
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        error: "Booking not found or not in the correct status for payment",
+      });
+    }
+
+    // Update the final payment mode
+    await prisma.longDistanceBooking.update({
+      where: { id: bookingId },
+      data: {
+        finalPaymentMode: paymentMethod as PaymentMode,
+      },
+    });
+
+    if (paymentMethod === "RAZORPAY") {
+      // Create Razorpay order for online payment
+      const order = await razorpay.orders.create({
+        amount: Math.round(booking.remainingAmount * 100),
+        currency: "INR",
+        receipt: `CDFP${booking.id.slice(-8)}`, // Chardham Final Payment
+        notes: {
+          bookingId: booking.id,
+          userId: req.user.userId,
+          type: "chardham_final_payment",
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: "Razorpay payment initiated",
+        paymentDetails: {
+          order,
+          amount: booking.remainingAmount,
+          key: process.env.RAZORPAY_KEY_ID,
+        },
+      });
+    } else {
+      // For CASH payment, update the booking metadata
+      await prisma.longDistanceBooking.update({
+        where: { id: bookingId },
+        data: {
+          metadata: {
+            ...(booking.metadata as any),
+            cashPaymentSelected: true,
+            cashPaymentSelectedAt: new Date(),
+          },
+        },
+      });
+
+      return res.json({
+        success: true,
+        message: "Cash payment selected. Please pay the driver directly.",
+        paymentDetails: {
+          amount: booking.remainingAmount,
+          paymentMethod: "CASH",
+        },
+      });
+    }
+  } catch (error) {
+    console.error("Error selecting payment method:", error);
+    res.status(500).json({ error: "Failed to select payment method" });
+  }
+};
+
+// Verify Razorpay payment
+export const verifyRazorpayPayment = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+  const { razorpay_payment_id, razorpay_order_id, razorpay_signature } =
+    req.body;
+
+  if (!req.user?.userId) {
+    return res.status(401).json({ error: "User not authenticated" });
+  }
+
+  try {
+    // Verify payment signature
+    const body = razorpay_order_id + "|" + razorpay_payment_id;
+    const expectedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_SECRET!)
+      .update(body.toString())
+      .digest("hex");
+
+    if (expectedSignature !== razorpay_signature) {
+      return res.status(400).json({ error: "Invalid payment signature" });
+    }
+
+    const result = await prisma.$transaction(async (prisma) => {
+      // Get booking details
+      const booking = await prisma.longDistanceBooking.findFirst({
+        where: {
+          id: bookingId,
+          userId: req.user!.userId,
+          status: "PAYMENT_PENDING",
+          finalPaymentMode: "RAZORPAY",
+        },
+        include: {
+          driver: {
+            select: {
+              id: true,
+            },
+          },
+        },
+      });
+
+      if (!booking) {
+        throw new Error(
+          "Booking not found or invalid status for payment verification"
+        );
+      }
+
+      // Update booking status
+      const updatedBooking = await prisma.longDistanceBooking.update({
+        where: { id: bookingId },
+        data: {
+          status: "COMPLETED",
+          finalPaymentId: razorpay_payment_id,
+          finalPaymentStatus: "COMPLETED",
+        },
+      });
+
+      // Create transaction record
+      await prisma.longDistanceTransaction.create({
+        data: {
+          bookingId,
+          amount: booking.remainingAmount,
+          type: "BOOKING_FINAL",
+          status: "COMPLETED",
+          senderId: booking.userId,
+          receiverId: booking.driverId,
+          razorpayOrderId: razorpay_order_id,
+          razorpayPaymentId: razorpay_payment_id,
+          description: `Final payment for Chardham Yatra ${bookingId}`,
+        },
+      });
+
+      // Update driver's wallet
+      if (booking.driverId) {
+        const driverPayout = booking.totalAmount - booking.commission;
+        await prisma.wallet.upsert({
+          where: { userId: booking.driverId },
+          create: {
+            userId: booking.driverId,
+            balance: driverPayout,
+          },
+          update: {
+            balance: {
+              increment: driverPayout,
+            },
+          },
+        });
+      }
+
+      return updatedBooking;
+    });
+
+    res.json({
+      success: true,
+      message: "Payment verified successfully",
+      booking: result,
+    });
+  } catch (error) {
+    console.error("Error verifying Razorpay payment:", error);
+    res.status(500).json({ error: "Failed to verify payment" });
+  }
+};
+
+// Driver confirms cash collection
+export const confirmCashCollection = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+  const { collected } = req.body;
+
+  if (!req.user?.userId || req.user.userType !== "DRIVER") {
+    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+  }
+
+  if (collected === undefined) {
+    return res
+      .status(400)
+      .json({ error: "Missing 'collected' field (true/false)" });
+  }
+
+  try {
+    const booking = await prisma.longDistanceBooking.findFirst({
+      where: {
+        id: bookingId,
+        driverId: req.user.userId,
+        status: "PAYMENT_PENDING",
+        finalPaymentMode: "CASH",
+      },
+    });
+
+    if (!booking) {
+      return res.status(404).json({
+        error: "Booking not found or not eligible for cash confirmation",
+      });
+    }
+
+    if (collected) {
+      // Cash collected successfully
+      const result = await prisma.$transaction(async (prisma) => {
+        // Update booking status
+        const updatedBooking = await prisma.longDistanceBooking.update({
+          where: { id: bookingId },
+          data: {
+            status: "COMPLETED",
+            finalPaymentStatus: "COMPLETED",
+          },
+        });
+
+        // Create transaction record
+        await prisma.longDistanceTransaction.create({
+          data: {
+            bookingId,
+            amount: booking.remainingAmount,
+            type: "BOOKING_FINAL",
+            status: "COMPLETED",
+            senderId: booking.userId,
+            receiverId: booking.driverId,
+            description: `Final cash payment for Chardham Yatra ${bookingId}`,
+          },
+        });
+
+        // Update driver's wallet
+        const driverPayout = booking.totalAmount - booking.commission;
+        await prisma.wallet.upsert({
+          where: { userId: booking.driverId! },
+          create: {
+            userId: booking.driverId!,
+            balance: driverPayout,
+          },
+          update: {
+            balance: {
+              increment: driverPayout,
+            },
+          },
+        });
+
+        return updatedBooking;
+      });
+
+      res.json({
+        success: true,
+        message: "Cash payment confirmed and ride completed",
+        booking: result,
+      });
+    } else {
+      // Cash not collected
+      await prisma.longDistanceBooking.update({
+        where: { id: bookingId },
+        data: {
+          metadata: {
+            ...(booking.metadata as any),
+            cashPaymentFailed: true,
+            cashPaymentFailedAt: new Date(),
+          },
+        },
+      });
+
+      res.json({
+        success: false,
+        message: "Cash payment not collected. User needs to try again.",
+      });
+    }
+  } catch (error) {
+    console.error("Error confirming cash collection:", error);
+    res.status(500).json({ error: "Failed to confirm cash collection" });
+  }
+};
+
+// Get payment status (for driver to check if user has selected payment method)
+export const getPaymentStatus = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+
+  if (!req.user?.userId) {
+    return res.status(401).json({ error: "User not authenticated" });
+  }
+
+  try {
+    const booking = await prisma.longDistanceBooking.findFirst({
+      where: {
+        id: bookingId,
+        OR: [{ userId: req.user.userId }, { driverId: req.user.userId }],
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+          },
+        },
+        driver: {
+          select: {
+            id: true,
+            name: true,
+            phone: true,
+          },
+        },
+      },
+    });
+
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    // Extract payment-related information
+    const metadata = (booking.metadata as any) || {};
+
+    res.json({
+      bookingId: booking.id,
+      status: booking.status,
+      finalPaymentMode: booking.finalPaymentMode,
+      finalPaymentStatus: booking.finalPaymentStatus,
+      remainingAmount: booking.remainingAmount,
+      cashPaymentSelected: metadata.cashPaymentSelected || false,
+      cashPaymentSelectedAt: metadata.cashPaymentSelectedAt || null,
+      cashPaymentFailed: metadata.cashPaymentFailed || false,
+      user: booking.user,
+      driver: booking.driver,
+    });
+  } catch (error) {
+    console.error("Error getting payment status:", error);
+    res.status(500).json({ error: "Failed to get payment status" });
+  }
+};
