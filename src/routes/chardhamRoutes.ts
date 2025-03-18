@@ -11,6 +11,7 @@ import {
   startRide,
   getBookingStatus,
   getAcceptedBookings,
+  cancelBooking,
 } from "../controllers/chardhamController";
 
 const router = express.Router();
@@ -38,5 +39,6 @@ router.post("/bookings/:bookingId/start", startRide);
 
 // Common routes
 router.get("/bookings/:bookingId", getBookingStatus);
+router.post("/bookings/:bookingId/cancel", cancelBooking);
 
 export { router as chardhamRoutes };

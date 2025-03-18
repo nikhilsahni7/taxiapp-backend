@@ -983,3 +983,102 @@ export const getBookingStatus = async (req: Request, res: Response) => {
     res.status(500).json({ error: "Failed to fetch booking status" });
   }
 };
+
+// Cancel booking
+export const cancelBooking = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+  const { reason } = req.body;
+
+  if (!req.user?.userId) {
+    return res.status(401).json({ error: "User not authenticated" });
+  }
+
+  try {
+    const booking = await prisma.longDistanceBooking.findUnique({
+      where: { id: bookingId },
+    });
+
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    // Check if user is authorized to cancel (either user or driver)
+    if (
+      booking.userId !== req.user.userId &&
+      booking.driverId !== req.user.userId
+    ) {
+      return res
+        .status(403)
+        .json({ error: "Unauthorized to cancel this booking" });
+    }
+
+    const cancellationFee = 300; // Fixed cancellation fee
+
+    // Use a transaction to update booking and handle cancellation fee if applicable.
+    const updatedBooking = await prisma.$transaction(async (tx) => {
+      // Update booking status to CANCELLED with the provided reason.
+      const updated = await tx.longDistanceBooking.update({
+        where: { id: bookingId },
+        data: {
+          status: "CANCELLED",
+          cancelReason: reason,
+          cancelledAt: new Date(),
+          cancelledBy: req.user!.userId === booking.userId ? "USER" : "DRIVER",
+        },
+      });
+
+      /**
+       * Process cancellation fee transaction only if:
+       * - The booking is not in the initial PENDING state AND
+       * - A driver is assigned.
+       *
+       * This ensures that if the advance is paid but no driver is assigned,
+       * the cancellation fee logic is bypassed.
+       */
+      if (booking.status !== "PENDING" && booking.driverId) {
+        // Create a transaction record for the cancellation fee.
+        await tx.longDistanceTransaction.create({
+          data: {
+            bookingId,
+            amount: cancellationFee,
+            type: "REFUND",
+            status: "COMPLETED",
+            senderId: req.user?.userId,
+            receiverId:
+              req.user?.userId === booking.userId
+                ? booking.driverId
+                : booking.userId,
+            description: "Cancellation fee for Chardham Yatra booking",
+          },
+        });
+
+        // Determine the receiving party and update (or create) their wallet.
+        const receiverId =
+          req.user?.userId === booking.userId
+            ? booking.driverId
+            : booking.userId;
+        await tx.wallet.upsert({
+          where: {
+            userId: receiverId,
+          },
+          create: {
+            userId: receiverId,
+            balance: cancellationFee,
+          },
+          update: {
+            balance: {
+              increment: cancellationFee,
+            },
+          },
+        });
+      }
+
+      return updated;
+    });
+
+    res.json({ success: true, booking: updatedBooking });
+  } catch (error) {
+    console.error("Error cancelling booking:", error);
+    res.status(500).json({ error: "Failed to cancel booking" });
+  }
+};

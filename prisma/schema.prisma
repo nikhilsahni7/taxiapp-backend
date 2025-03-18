@@ -377,6 +377,8 @@ model LongDistanceBooking {
   driverArrivedAt   DateTime?
   rideStartedAt     DateTime?
   rideEndedAt       DateTime?
+  cancelledAt       DateTime?
+  cancelledBy       CancelledBy? 
   
   // Relations
   user            User          @relation("UserLongDistanceBookings", fields: [userId], references: [id])
