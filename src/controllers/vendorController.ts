@@ -198,10 +198,13 @@ export const createVendorBooking = async (req: Request, res: Response) => {
     );
 
     // Calculate commissions
-    const vendorCommission = vendorPrice - appBasePrice; // e.g., Rs 2000
-    const appCommission = Math.round(appBasePrice * 0.12); // 12% of app base price (e.g., Rs 360)
-    const totalCommission = vendorCommission + appCommission; // Total commission (e.g., Rs 2360)
-    const driverPayout = vendorPrice - totalCommission; // Amount driver receives (e.g., Rs 2640)
+    const vendorCommission = vendorPrice - appBasePrice;
+
+    const appCommission = Math.round(appBasePrice * 0.12);
+
+    const totalCommission = vendorCommission + appCommission;
+
+    const driverPayout = vendorPrice - totalCommission;
 
     const booking = await prisma.vendorBooking.create({
       data: {
@@ -629,20 +632,20 @@ export const getVendorBookings = async (req: Request, res: Response) => {
             vendorId: req.user.userId,
           }
         : req.user.userType === "DRIVER"
-        ? {
-            // For drivers: show only pending bookings if no status specified
-            // AND match their vehicle category
-            ...(status
-              ? {
-                  status: status as VendorBookingStatus,
-                  driverId: req.user.userId,
-                }
-              : {
-                  status: VendorBookingStatus.PENDING,
-                  vehicleCategory: driverVehicleCategory, // Only show bookings matching driver's vehicle
-                }),
-          }
-        : {}),
+          ? {
+              // For drivers: show only pending bookings if no status specified
+              // AND match their vehicle category
+              ...(status
+                ? {
+                    status: status as VendorBookingStatus,
+                    driverId: req.user.userId,
+                  }
+                : {
+                    status: VendorBookingStatus.PENDING,
+                    vehicleCategory: driverVehicleCategory, // Only show bookings matching driver's vehicle
+                  }),
+            }
+          : {}),
     };
 
     const bookings = await prisma.vendorBooking.findMany({

@@ -1,8 +1,10 @@
 import type { Request, Response } from "express";
 import {
   LongDistanceBookingStatus,
+  LongDistanceServiceType,
   PrismaClient,
   RideStatus,
+  RideType,
 } from "@prisma/client";
 import express from "express";
 
@@ -148,7 +150,7 @@ router.delete("/:id", verifyToken, async (req: Request, res: Response) => {
   }
 });
 
-// Get all rides for a user (local and long distance rides)
+// Get all rides for a user (all services)
 router.get("/:id/rides", verifyToken, async (req: Request, res: Response) => {
   try {
     if (!req.user) {
@@ -156,9 +158,30 @@ router.get("/:id/rides", verifyToken, async (req: Request, res: Response) => {
     }
     const userId = req.user.userId;
 
+    // Get service filter from query params
+    const serviceFilter = req.query.service as string | undefined;
+    const rideType = req.query.rideType as RideType | undefined;
+
+    // Build filter conditions for local rides
+    const localRideFilter: any = { userId };
+    if (rideType) {
+      localRideFilter.rideType = rideType;
+    }
+
+    // Build filter conditions for long distance rides
+    const longDistanceFilter: any = { userId };
+    if (
+      serviceFilter &&
+      Object.values(LongDistanceServiceType).includes(
+        serviceFilter as LongDistanceServiceType
+      )
+    ) {
+      longDistanceFilter.serviceType = serviceFilter;
+    }
+
     // Get local rides with full details
     const localRides = await prisma.ride.findMany({
-      where: { userId },
+      where: localRideFilter,
       include: {
         driver: {
           select: {
@@ -201,7 +224,7 @@ router.get("/:id/rides", verifyToken, async (req: Request, res: Response) => {
 
     // Get long distance rides with full details
     const longDistanceRides = await prisma.longDistanceBooking.findMany({
-      where: { userId },
+      where: longDistanceFilter,
       include: {
         driver: {
           select: {
@@ -242,10 +265,67 @@ router.get("/:id/rides", verifyToken, async (req: Request, res: Response) => {
       },
     });
 
-    res.json({
-      localRides,
-      longDistanceRides,
-    });
+    // Transform rides to include service type information
+    const formattedLocalRides = localRides.map((ride) => ({
+      ...ride,
+      serviceCategory: "LOCAL",
+      serviceType: ride.rideType,
+      isCarRental: ride.isCarRental,
+      rentalDetails: ride.isCarRental
+        ? {
+            packageHours: ride.rentalPackageHours,
+            packageKms: ride.rentalPackageKms,
+            basePrice: ride.rentalBasePrice,
+            actualKmsTravelled: ride.actualKmsTravelled,
+            actualMinutes: ride.actualMinutes,
+            extraKmCharges: ride.extraKmCharges,
+            extraMinuteCharges: ride.extraMinuteCharges,
+          }
+        : null,
+      outstationDetails:
+        ride.rideType === "OUTSTATION"
+          ? {
+              tripType: ride.outstationType,
+            }
+          : null,
+    }));
+
+    const formattedLongDistanceRides = longDistanceRides.map((ride) => ({
+      ...ride,
+      serviceCategory: "LONG_DISTANCE",
+      serviceType: ride.serviceType,
+      tripDetails: {
+        startDate: ride.startDate,
+        endDate: ride.endDate,
+        totalDays: ride.totalDays,
+        tripType: ride.tripType,
+        advanceAmount: ride.advanceAmount,
+        remainingAmount: ride.remainingAmount,
+      },
+    }));
+
+    // Combine all rides
+    const allRides = {
+      localRides: formattedLocalRides,
+      longDistanceRides: formattedLongDistanceRides,
+    };
+
+    // If a specific service filter is applied, return only that service
+    if (serviceFilter === "LOCAL" || rideType) {
+      return res.json({ rides: formattedLocalRides });
+    } else if (
+      serviceFilter === "LONG_DISTANCE" ||
+      [
+        "OUTSTATION",
+        "HILL_STATION",
+        "CHARDHAM_YATRA",
+        "ALL_INDIA_TOUR",
+      ].includes(serviceFilter || "")
+    ) {
+      return res.json({ rides: formattedLongDistanceRides });
+    }
+
+    res.json(allRides);
   } catch (error) {
     console.error("Error fetching rides:", error);
     res.status(500).json({ error: "Failed to fetch rides" });
