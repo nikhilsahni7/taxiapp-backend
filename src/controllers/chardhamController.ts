@@ -844,14 +844,26 @@ export const startRide = async (req: Request, res: Response) => {
     return res.status(403).json({ error: "Unauthorized. Driver access only." });
   }
 
+  if (!otp) {
+    return res.status(400).json({ error: "OTP is required" });
+  }
+
   try {
-    // First verify the booking exists with the correct OTP and status
+    // First verify the booking exists and has the correct OTP
     const booking = await prisma.longDistanceBooking.findFirst({
       where: {
         id: bookingId,
         driverId: req.user.userId,
         status: "DRIVER_ARRIVED",
-        otp,
+        otp: otp, // Verify OTP matches
+      },
+      include: {
+        user: {
+          select: {
+            name: true,
+            phone: true,
+          },
+        },
       },
     });
 
@@ -859,11 +871,11 @@ export const startRide = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid booking ID or OTP" });
     }
 
-    // Update booking status to STARTED (not ONGOING)
+    // Update booking status to STARTED
     const updatedBooking = await prisma.longDistanceBooking.update({
       where: { id: bookingId },
       data: {
-        status: "STARTED", // Using STARTED instead of ONGOING
+        status: "STARTED",
         rideStartedAt: new Date(),
       },
       include: {
@@ -888,7 +900,11 @@ export const startRide = async (req: Request, res: Response) => {
       },
     });
 
-    res.json({ booking: updatedBooking });
+    res.json({
+      success: true,
+      message: "Ride started successfully",
+      booking: updatedBooking,
+    });
   } catch (error) {
     console.error("Error starting ride:", error);
     res.status(500).json({ error: "Failed to start ride" });
@@ -911,7 +927,7 @@ export const getAcceptedBookings = async (req: Request, res: Response) => {
             "DRIVER_ACCEPTED",
             "DRIVER_PICKUP_STARTED",
             "DRIVER_ARRIVED",
-            "STARTED", // Using STARTED instead of ONGOING
+            "STARTED",
           ],
         },
       },
