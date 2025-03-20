@@ -6,6 +6,8 @@ import { io } from "../server";
 import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
 
 const prisma = new PrismaClient();
+
+
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID!,
   key_secret: process.env.RAZORPAY_SECRET!,
@@ -16,6 +18,9 @@ interface Location {
   lat: number;
   lng: number;
 }
+
+
+
 
 // Updated base rates including tempo travellers
 const ALL_INDIA_RATES = {

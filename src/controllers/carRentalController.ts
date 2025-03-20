@@ -1,18 +1,18 @@
-import type { Request, Response } from "express";
 import {
-  PrismaClient,
-  RideStatus,
+  CancelledBy,
   PaymentMode,
   Prisma,
-  CancelledBy,
+  PrismaClient,
+  RideStatus,
   TransactionStatus,
   TransactionType,
 } from "@prisma/client";
-import { searchAvailableDrivers } from "../lib/driverService";
-import { calculateDistance, calculateDuration } from "./rideController";
-import { getCoordinatesAndAddress } from "../lib/locationService";
-import Razorpay from "razorpay";
 import crypto from "crypto";
+import type { Request, Response } from "express";
+import Razorpay from "razorpay";
+import { searchAvailableDrivers } from "../lib/driverService";
+import { getCoordinatesAndAddress } from "../lib/locationService";
+import { calculateDistance, calculateDuration } from "./rideController";
 
 const prisma = new PrismaClient();
 const razorpay = new Razorpay({
