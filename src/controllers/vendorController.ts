@@ -615,7 +615,7 @@ export const completeVendorRide = async (req: Request, res: Response) => {
         throw new Error("Booking not found or invalid status");
       }
 
-      // Pay vendor commission from app wallet to vendor's wallet
+      // Pay vendor payout from app wallet to vendor's wallet
       await prisma.wallet.upsert({
         where: { userId: booking.vendorId },
         create: {
