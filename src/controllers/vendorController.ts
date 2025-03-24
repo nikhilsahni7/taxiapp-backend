@@ -682,7 +682,7 @@ export const getVendorBookings = async (req: Request, res: Response) => {
     return res.status(401).json({ error: "User not authenticated" });
   }
 
-  const { status, statuses, page = 1, limit = 10 } = req.query;
+  const { status, statuses, page = 1, limit = 10, date } = req.query;
 
   try {
     // For drivers, first get their vehicle category
@@ -711,11 +711,27 @@ export const getVendorBookings = async (req: Request, res: Response) => {
       };
     }
 
+    // Add date filter if provided
+    let dateFilter = {};
+    if (date) {
+      const targetDate = new Date(date as string);
+      const nextDay = new Date(targetDate);
+      nextDay.setDate(nextDay.getDate() + 1);
+
+      dateFilter = {
+        startDate: {
+          gte: targetDate,
+          lt: nextDay,
+        },
+      };
+    }
+
     const where = {
       ...(req.user.userType === "VENDOR"
         ? {
             vendorId: req.user.userId,
             ...statusFilter,
+            ...dateFilter,
           }
         : req.user.userType === "DRIVER"
           ? {
@@ -725,10 +741,12 @@ export const getVendorBookings = async (req: Request, res: Response) => {
                 ? {
                     ...statusFilter,
                     driverId: req.user.userId,
+                    ...dateFilter,
                   }
                 : {
                     status: VendorBookingStatus.PENDING,
                     vehicleCategory: driverVehicleCategory, // Only show bookings matching driver's vehicle
+                    ...dateFilter,
                   }),
             }
           : {}),
