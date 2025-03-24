@@ -5,7 +5,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-} 
+}
 
 enum RideType {
   LOCAL
@@ -108,7 +108,7 @@ model User {
   ridesAsUser   Ride[]         @relation("UserRides")
   ridesAsDriver Ride[]         @relation("DriverRides")
   driverStatus  DriverStatus?
-  
+
   // Payment Relations
   sentTransactions     Transaction[] @relation("SenderTransactions")
   receivedTransactions Transaction[] @relation("ReceiverTransactions")
@@ -195,7 +195,7 @@ model Ride {
   requestExpiresAt DateTime?
   cancellationReason String?      // Add cancellation reason
   cancellationFee   Float?        // Add cancellation fee
-  cancelledBy       CancelledBy? 
+  cancelledBy       CancelledBy?
 
   user         User          @relation("UserRides", fields: [userId], references: [id])
   driver       User?         @relation("DriverRides", fields: [driverId], references: [id])
@@ -205,7 +205,7 @@ model Ride {
   chatMessages ChatMessage[]
 
   // New fields for car rental
-   metadata          Json?  
+   metadata          Json?
   isCarRental        Boolean        @default(false)
   rentalPackageHours Int?          // 1-8 hours package
   rentalPackageKms   Float?        // Package kilometers
@@ -214,26 +214,26 @@ model Ride {
   actualMinutes      Int?          // Actual minutes used
   extraKmCharges     Float?        // Charges for extra kms
   extraMinuteCharges Float?        // Charges for extra minutes
-  
+
   // Timestamps for rental
   rideStartedAt     DateTime?     // When ride actually starts (after OTP)
   rideEndedAt       DateTime?     // When ride ends
-  
-  
-  
+
+
+
   // Location tracking
   currentLat        Float?        // Current latitude of driver
   currentLng        Float?        // Current longitude of driver
   lastLocationUpdate DateTime?    // Last time location was updated
-  
-  
+
+
 
   otpVerified      Boolean          @default(false)
-  
+
   // Driver assignment
   driverAssignedAt DateTime?        // When driver was assigned
   driverArrivedAt  DateTime?        // When driver marked arrival
-  
+
   // Extra fields for better tracking
   estimatedStartKms Float?          // Initial odometer reading
   estimatedEndKms   Float?          // Final odometer reading
@@ -241,9 +241,9 @@ model Ride {
   // Car Rental specific fields
   startOdometer      Float?    // Initial odometer reading
   endOdometer        Float?    // Final odometer reading
-  
+
   // Tracking fields
- 
+
   locationLogs       RideLocationLog[]
 
   // Add new location fields
@@ -273,13 +273,13 @@ model DriverDetails {
   permitUrls      String[]
   carFrontUrl     String?
   carBackUrl      String?
-  
-  
+
+
   rcUrl           String?
   fitnessUrl      String?
   pollutionUrl    String?
   insuranceUrl    String?
- 
+
 
   carCategory     String?
   registrationFeePaid Boolean @default(false)
@@ -338,37 +338,37 @@ model LongDistanceBooking {
   dropLng            Float?
   vehicleCategory String
   distance        Float?        // Total trip distance in kilometers
-  duration        Int?   
+  duration        Int?
   startDate       DateTime
   endDate         DateTime
   pickupTime      String
   totalDays       Int
-  
+
   // Distance and duration from driver to pickup
   pickupDistance  Float?
   pickupDuration  Int?         // in minutes
-  
+
   // Payment related
   baseAmount      Float
   taxAmount       Float
   totalAmount     Float
-  advanceAmount   Float        // 25% of total 
+  advanceAmount   Float        // 25% of total
   remainingAmount Float        // 75% of total
   commission      Float    @default(0)   // 12% of total
-  
+
   // Payment tracking
   advancePaymentId      String?
   finalPaymentId        String?
   finalPaymentMode      PaymentMode? @default(CASH)
   advancePaymentStatus  TransactionStatus @default(PENDING)
   finalPaymentStatus    TransactionStatus @default(PENDING)
-  
+
   status          LongDistanceBookingStatus @default(PENDING)
   otp             String?
-  
+
   // For outstation specific
   tripType        OutstationTripType? @default(ONE_WAY)
-  paymentMode      PaymentMode    @default(CASH) 
+  paymentMode      PaymentMode    @default(CASH)
   // Timestamps
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
@@ -378,13 +378,13 @@ model LongDistanceBooking {
   rideStartedAt     DateTime?
   rideEndedAt       DateTime?
   cancelledAt       DateTime?
-  cancelledBy       CancelledBy? 
-  
+  cancelledBy       CancelledBy?
+
   // Relations
   user            User          @relation("UserLongDistanceBookings", fields: [userId], references: [id])
   driver          User?         @relation("DriverLongDistanceBookings", fields: [driverId], references: [id])
   transactions    LongDistanceTransaction[]
-  
+
   // Metadata
   notes           String?
   cancelReason    String?
@@ -403,7 +403,7 @@ model LongDistanceTransaction {
   receiverId       String?
   razorpayOrderId  String?           @unique
   razorpayPaymentId String?
-  
+
   description      String?
   metadata         Json?
   createdAt        DateTime          @default(now())
@@ -452,7 +452,7 @@ model VendorBooking {
   // Payment tracking
   driverCommissionPaid Boolean @default(false)
   vendorPaidAt         DateTime?
-  
+
   status          VendorBookingStatus @default(PENDING)
   notes           String?
 
@@ -463,9 +463,12 @@ model VendorBooking {
   rideStartedAt     DateTime?
   rideEndedAt       DateTime?
   cancelledAt       DateTime?
-  cancelledBy       CancelledBy? 
+  cancelledBy       CancelledBy?
   cancelReason      String?
 
+  // Add these fields
+  otp              String?
+  driverArrivedAt  DateTime?
 
   // Relations
   vendor           User     @relation("VendorBookings", fields: [vendorId], references: [id])
@@ -481,7 +484,7 @@ model VendorBookingTransaction {
   id                String    @id @default(uuid())
   bookingId         String
   amount            Float
-  type              VendorBookingTransactionType 
+  type              VendorBookingTransactionType
   status            TransactionStatus @default(PENDING)
   senderId          String
   receiverId        String
@@ -500,6 +503,8 @@ model VendorBookingTransaction {
 enum VendorBookingStatus {
   PENDING
   DRIVER_ACCEPTED
+  DRIVER_PICKUP_STARTED
+  DRIVER_ARRIVED
   STARTED
   COMPLETED
   CANCELLED

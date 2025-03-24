@@ -498,10 +498,9 @@ export const cancelVendorBooking = async (req: Request, res: Response) => {
   }
 };
 
-// Start ride
-export const startVendorRide = async (req: Request, res: Response) => {
+// Driver starts journey to pickup location
+export const startDriverPickup = async (req: Request, res: Response) => {
   const { bookingId } = req.params;
-
   if (!req.user?.userId || req.user.userType !== "DRIVER") {
     return res.status(403).json({ error: "Unauthorized. Driver access only." });
   }
@@ -514,12 +513,80 @@ export const startVendorRide = async (req: Request, res: Response) => {
         status: "DRIVER_ACCEPTED",
       },
       data: {
-        status: "STARTED",
-        rideStartedAt: new Date(),
+        status: VendorBookingStatus.DRIVER_PICKUP_STARTED,
       },
     });
 
     res.json({ booking });
+  } catch (error) {
+    console.error("Error starting pickup:", error);
+    res.status(500).json({ error: "Failed to start pickup" });
+  }
+};
+
+// Driver arrived at pickup location
+export const driverArrived = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+  if (!req.user?.userId || req.user.userType !== "DRIVER") {
+    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+  }
+
+  try {
+    const booking = await prisma.vendorBooking.update({
+      where: {
+        id: bookingId,
+        driverId: req.user.userId,
+        status: VendorBookingStatus.DRIVER_PICKUP_STARTED,
+      },
+      data: {
+        status: VendorBookingStatus.DRIVER_ARRIVED,
+        driverArrivedAt: new Date(),
+        otp: Math.floor(1000 + Math.random() * 9000).toString(), // 4-digit OTP
+      },
+    });
+
+    res.json({ booking });
+  } catch (error) {
+    console.error("Error updating driver arrival:", error);
+    res.status(500).json({ error: "Failed to update driver arrival" });
+  }
+};
+
+// Start ride with OTP verification
+export const startVendorRide = async (req: Request, res: Response) => {
+  const { bookingId } = req.params;
+  const { otp } = req.body;
+
+  if (!req.user?.userId || req.user.userType !== "DRIVER") {
+    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+  }
+
+  try {
+    const booking = await prisma.vendorBooking.findFirst({
+      where: {
+        id: bookingId,
+        driverId: req.user.userId,
+        status: VendorBookingStatus.DRIVER_ARRIVED,
+      },
+    });
+
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+
+    if (booking.otp !== otp) {
+      return res.status(400).json({ error: "Invalid OTP" });
+    }
+
+    const updatedBooking = await prisma.vendorBooking.update({
+      where: { id: bookingId },
+      data: {
+        status: VendorBookingStatus.STARTED,
+        rideStartedAt: new Date(),
+      },
+    });
+
+    res.json({ booking: updatedBooking });
   } catch (error) {
     console.error("Error starting ride:", error);
     res.status(500).json({ error: "Failed to start ride" });
@@ -548,28 +615,36 @@ export const completeVendorRide = async (req: Request, res: Response) => {
         throw new Error("Booking not found or invalid status");
       }
 
-      // Driver receives their payout amount (total amount minus commissions)
+      // Pay vendor commission from app wallet to vendor's wallet
       await prisma.wallet.upsert({
-        where: { userId: req.user!.userId },
+        where: { userId: booking.vendorId },
         create: {
-          userId: req.user!.userId,
-          balance: booking.driverPayout,
+          userId: booking.vendorId,
+          balance: booking.vendorPayout,
         },
         update: {
-          balance: { increment: booking.driverPayout },
+          balance: { increment: booking.vendorPayout },
         },
       });
 
-      // Record driver payout transaction
+      // Deduct from app wallet
+      await prisma.wallet.update({
+        where: { userId: process.env.ADMIN_USER_ID! },
+        data: {
+          balance: { decrement: booking.vendorPayout },
+        },
+      });
+
+      // Record vendor payout transaction
       await prisma.vendorBookingTransaction.create({
         data: {
           bookingId,
-          amount: booking.driverPayout,
-          type: VendorBookingTransactionType.DRIVER_PAYOUT,
+          amount: booking.vendorPayout,
+          type: VendorBookingTransactionType.VENDOR_PAYOUT,
           status: TransactionStatus.COMPLETED,
-          senderId: booking.vendorId,
-          receiverId: req.user!.userId,
-          description: "Driver payout for completed ride",
+          senderId: process.env.ADMIN_USER_ID!,
+          receiverId: booking.vendorId,
+          description: "Vendor payout for completed ride",
         },
       });
 
@@ -585,20 +660,14 @@ export const completeVendorRide = async (req: Request, res: Response) => {
       return {
         booking: updatedBooking,
         payoutDetails: {
-          totalAmount: booking.vendorPrice,
-          driverPayout: booking.driverPayout,
-          commissionBreakdown: {
-            vendorCommission: booking.vendorCommission,
-            appCommission: booking.appCommission,
-            totalCommission: booking.vendorCommission + booking.appCommission,
-          },
+          vendorPayout: booking.vendorPayout,
         },
       };
     });
 
     res.json({
       success: true,
-      message: "Ride completed and payment processed successfully",
+      message: "Ride completed successfully",
       ...result,
     });
   } catch (error) {
