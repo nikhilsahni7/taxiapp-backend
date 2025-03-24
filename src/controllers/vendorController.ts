@@ -1,14 +1,14 @@
-import type { Request, Response } from "express";
 import {
+  CancelledBy,
+  LongDistanceServiceType,
   PrismaClient,
+  TransactionStatus,
   VendorBookingStatus,
   VendorBookingTransactionType,
-  LongDistanceServiceType,
-  TransactionStatus,
-  CancelledBy,
 } from "@prisma/client";
-import Razorpay from "razorpay";
 import crypto from "crypto";
+import type { Request, Response } from "express";
+import Razorpay from "razorpay";
 import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
 
 const prisma = new PrismaClient();
@@ -613,10 +613,10 @@ export const getVendorBookings = async (req: Request, res: Response) => {
     return res.status(401).json({ error: "User not authenticated" });
   }
 
-  const { status, page = 1, limit = 10 } = req.query;
+  const { status, statuses, page = 1, limit = 10 } = req.query;
 
   try {
-    //For drivers, first get their vehicle category
+    // For drivers, first get their vehicle category
     let driverVehicleCategory;
     if (req.user.userType === "DRIVER") {
       const driverDetails = await prisma.driverDetails.findUnique({
@@ -626,18 +626,35 @@ export const getVendorBookings = async (req: Request, res: Response) => {
       driverVehicleCategory = driverDetails?.vehicleCategory;
     }
 
+    // Handle the new 'statuses' parameter
+    let statusFilter = {};
+    if (statuses) {
+      // Parse comma-separated statuses
+      const statusArray = (statuses as string).split(",");
+      statusFilter = {
+        status: {
+          in: statusArray as VendorBookingStatus[],
+        },
+      };
+    } else if (status) {
+      statusFilter = {
+        status: status as VendorBookingStatus,
+      };
+    }
+
     const where = {
       ...(req.user.userType === "VENDOR"
         ? {
             vendorId: req.user.userId,
+            ...statusFilter,
           }
         : req.user.userType === "DRIVER"
           ? {
               // For drivers: show only pending bookings if no status specified
               // AND match their vehicle category
-              ...(status
+              ...(status || statuses
                 ? {
-                    status: status as VendorBookingStatus,
+                    ...statusFilter,
                     driverId: req.user.userId,
                   }
                 : {

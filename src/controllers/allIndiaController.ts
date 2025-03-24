@@ -1,12 +1,11 @@
-import type { Request, Response } from "express";
-import { PrismaClient, PaymentMode } from "@prisma/client";
-import Razorpay from "razorpay";
+import { PaymentMode, PrismaClient } from "@prisma/client";
 import crypto from "crypto";
+import type { Request, Response } from "express";
+import Razorpay from "razorpay";
 import { io } from "../server";
 import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
 
 const prisma = new PrismaClient();
-
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID!,
@@ -18,9 +17,6 @@ interface Location {
   lat: number;
   lng: number;
 }
-
-
-
 
 // Updated base rates including tempo travellers
 const ALL_INDIA_RATES = {
