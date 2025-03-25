@@ -1,10 +1,12 @@
-import express from "express";
-import type { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
+import type { Request, Response } from "express";
+import express from "express";
+import jwt from "jsonwebtoken";
+import twilio from "twilio";
 import {
+  checkRegistrationStatus,
   createRegistrationOrder,
   verifyRegistrationPayment,
-  checkRegistrationStatus,
 } from "../controllers/driverRegistrationController";
 
 interface AuthRequest extends Request {
@@ -14,12 +16,10 @@ interface AuthRequest extends Request {
     selfieUrl: string;
   };
 }
-import twilio from "twilio";
-import jwt from "jsonwebtoken";
 
-import { verifyToken } from "../middlewares/auth";
-import { uploadImage } from "../config/cloudinary";
 import multer from "multer";
+import { uploadImage } from "../config/cloudinary";
+import { verifyToken } from "../middlewares/auth";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -49,16 +49,23 @@ router.post("/send-otp", async (req, res) => {
   try {
     const { phone } = req.body;
 
-    const phoneNumber = await prisma.user.findFirst({
+    // Check if user already exists and is verified
+    const existingUser = await prisma.user.findFirst({
       where: {
         phone,
       },
     });
-    if (phoneNumber) {
-      return res.status(400).json({ error: "Phone number already exists" });
+
+    if (existingUser) {
+      // If user exists and is verified, return success with existingUser flag
+      return res.json({
+        message: "User already exists",
+        existingUser: true,
+        userType: existingUser.userType,
+      });
     }
 
-    // Send OTP via Twilio Verify Service
+    // If user doesn't exist or isn't verified, send OTP
     await twilioClient.verify.v2
       .services(process.env.TWILIO_VERIFY_SID!)
       .verifications.create({
@@ -66,7 +73,10 @@ router.post("/send-otp", async (req, res) => {
         channel: "sms",
       });
 
-    res.json({ message: "OTP sent successfully" });
+    res.json({
+      message: "OTP sent successfully",
+      existingUser: false,
+    });
   } catch (error) {
     console.error("Send OTP error:", error);
     res.status(500).json({ error: "Failed to send OTP" });
