@@ -37,11 +37,17 @@ const CHARDHAM_DAYS = {
     3: 7, // 3 dhams - 7 days
     4: 10, // 4 dhams - 10 days
   },
+  delhi: {
+    1: 5, // 1 dham - 5 days
+    2: 7, // 2 dhams - 7 days
+    3: 9, // 3 dhams - 9 days
+    4: 12, // 4 dhams - 12 days
+  },
   other: {
-    1: 3,
-    2: 5,
-    3: 7,
-    4: 10,
+    1: 3, // 1 dham - 3 days
+    2: 5, // 2 dhams - 5 days
+    3: 7, // 3 dhams - 7 days
+    4: 10, //4 dhams -10 days
   },
 };
 
@@ -187,25 +193,37 @@ export const getChardhamFareEstimate = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid vehicle type" });
     }
 
-    // Calculate distance from pickup to Haridwar
-    const distanceToHaridwar = await getCachedDistanceAndDuration(
-      { lat: pickupLocation.lat, lng: pickupLocation.lng },
-      { lat: 29.9457, lng: 78.1642 } // Haridwar coordinates
-    );
+    // Determine starting point type (Haridwar/Rishikesh or Delhi or Other)
+    let startingPointType: "haridwar_rishikesh" | "delhi" | "other" = "other";
 
-    // Determine starting point type
-    let startingPointType: "haridwar_rishikesh" | "other" = "other";
     if (await isHaridwarRishikeshArea(pickupLocation)) {
       startingPointType = "haridwar_rishikesh";
+    } else if (await isDelhiArea(pickupLocation)) {
+      startingPointType = "delhi";
     }
 
-    // Calculate base number of days
+    // Calculate base number of days based on starting point and number of dhams
     let numberOfDays =
       CHARDHAM_DAYS[startingPointType][numberOfDhams as 1 | 2 | 3 | 4];
 
-    // Add extra days based on distance if not in Haridwar/Rishikesh area
+    // Add extra days based on distance if location is "other" (not Haridwar/Rishikesh or Delhi)
+    let extraKmCharges = 0;
+
     if (startingPointType === "other") {
+      // Calculate distance to Haridwar for extra days and charges
+      const distanceToHaridwar = await getCachedDistanceAndDuration(
+        { lat: pickupLocation.lat, lng: pickupLocation.lng },
+        { lat: 29.9457, lng: 78.1642 } // Haridwar coordinates
+      );
+
+      // Add extra days based on distance
       numberOfDays += calculateExtraDays(distanceToHaridwar.distance);
+
+      // Calculate extra km charges
+      extraKmCharges = calculateExtraKmCharges(
+        distanceToHaridwar.distance,
+        vehicleType
+      );
     }
 
     // Add any user-requested extra days
@@ -213,15 +231,6 @@ export const getChardhamFareEstimate = async (req: Request, res: Response) => {
 
     // Calculate base fare
     const baseFare = rates.perDayRate * numberOfDays;
-
-    // Calculate extra km charges if applicable
-    let extraKmCharges = 0;
-    if (startingPointType === "other") {
-      extraKmCharges = calculateExtraKmCharges(
-        distanceToHaridwar.distance,
-        vehicleType
-      );
-    }
 
     // Calculate total fare
     const totalFare = baseFare + extraKmCharges;
@@ -250,6 +259,16 @@ export const getChardhamFareEstimate = async (req: Request, res: Response) => {
       endDateTime.setDate(endDateTime.getDate() + numberOfDays - 1);
     }
 
+    // Additional information for response
+    let distanceToHaridwar = 0;
+    if (startingPointType === "other") {
+      const result = await getCachedDistanceAndDuration(
+        { lat: pickupLocation.lat, lng: pickupLocation.lng },
+        { lat: 29.9457, lng: 78.1642 } // Haridwar coordinates
+      );
+      distanceToHaridwar = result.distance;
+    }
+
     res.json({
       estimate: {
         baseFare,
@@ -267,7 +286,8 @@ export const getChardhamFareEstimate = async (req: Request, res: Response) => {
         vehicleCapacity: getVehicleCapacity(vehicleType),
         numberOfDhams,
         startingPointType,
-        distanceToHaridwar: distanceToHaridwar.distance,
+        distanceToHaridwar:
+          startingPointType === "other" ? distanceToHaridwar : 0,
         tripDetails: {
           startDateTime: startDateTime.toISOString(),
           endDateTime: endDateTime.toISOString(),
@@ -370,33 +390,38 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
     }
 
     // Determine starting point type
-    let startingPointType: "haridwar_rishikesh" | "other" = "other";
+    let startingPointType: "haridwar_rishikesh" | "delhi" | "other" = "other";
 
     if (await isHaridwarRishikeshArea(pickupLocation)) {
       startingPointType = "haridwar_rishikesh";
+    } else if (await isDelhiArea(pickupLocation)) {
+      startingPointType = "delhi";
     }
 
-    let numberOfDays: number;
-
     // Calculate number of days based on starting point and number of dhams
-    if (startingPointType === "haridwar_rishikesh") {
-      numberOfDays =
-        CHARDHAM_DAYS.haridwar_rishikesh[numberOfDhams as 1 | 2 | 3 | 4] +
-        extraDays;
-    } else {
-      // For other locations, calculate based on distance
-      numberOfDays =
-        CHARDHAM_DAYS.other[numberOfDhams as 1 | 2 | 3 | 4] + extraDays;
+    let numberOfDays =
+      CHARDHAM_DAYS[startingPointType][numberOfDhams as 1 | 2 | 3 | 4] +
+      extraDays;
 
-      // Calculate distance to Haridwar and add extra days if far
+    // Calculate extra kilometers charges
+    let extraKmCharges = 0;
+
+    // For other locations (not Delhi/Haridwar), calculate based on distance to Haridwar
+    if (startingPointType === "other") {
       try {
         const distanceToHaridwar = await getCachedDistanceAndDuration(
           { lat: pickupLocation.lat, lng: pickupLocation.lng },
           { lat: 29.9457, lng: 78.1642 } // Haridwar coordinates
         );
 
-        // Add extra days based on distance
+        // Add extra days based on the new logic (2 days per 250km)
         numberOfDays += calculateExtraDays(distanceToHaridwar.distance);
+
+        // Calculate extra charges for distance up to 200km
+        extraKmCharges = calculateExtraKmCharges(
+          distanceToHaridwar.distance,
+          vehicleType
+        );
       } catch (error) {
         console.error("Error calculating distance to Haridwar:", error);
         // Keep default days if distance calculation fails
@@ -405,7 +430,7 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
 
     // Parse dates
     const [pickupHours, pickupMinutes] = pickupTime.split(":").map(Number);
-    const startDateTime = startDate ? new Date(startDate) : new Date(); // Use current date if not provided
+    const startDateTime = startDate ? new Date(startDate) : new Date();
     startDateTime.setHours(pickupHours, pickupMinutes, 0, 0);
 
     let endDateTime;
@@ -418,13 +443,16 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
       endDateTime.setDate(endDateTime.getDate() + numberOfDays - 1);
     }
 
-    // Calculate fare
+    // Calculate base fare and total fare
     const baseFare = rates.perDayRate * numberOfDays;
-    const appCommission = baseFare * 0.12;
-    const totalFare = baseFare;
+    const totalFare = baseFare + extraKmCharges;
+
+    // Calculate advance amount (25%) and remaining amount (75%)
     const advanceAmount = totalFare * 0.25;
     const remainingAmount = totalFare * 0.75;
-    const driverPayout = totalFare - appCommission;
+
+    // Calculate commission (12%)
+    const commission = totalFare * 0.12;
 
     // Determine if booking should be immediately visible to drivers
     const isImmediatePickup =
@@ -450,7 +478,7 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
         totalAmount: totalFare,
         advanceAmount,
         remainingAmount,
-        commission: appCommission,
+        commission: commission,
         taxAmount: 0,
         status: "PENDING",
         metadata: {
@@ -458,7 +486,7 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
           startingPointType,
           extraDays,
           perDayRate: rates.perDayRate,
-          driverPayout,
+          driverPayout: totalFare - commission,
           isVisibleToDrivers: isImmediatePickup,
           bookingExpiresAt: null, // Will be set after payment
         },
@@ -487,8 +515,8 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
         totalFare,
         advanceAmount,
         remainingAmount,
-        appCommission,
-        driverPayout,
+        appCommission: commission,
+        driverPayout: totalFare - commission,
         numberOfDays,
         numberOfDhams,
       },
@@ -521,69 +549,69 @@ export const verifyAdvancePayment = async (req: Request, res: Response) => {
     }
 
     const updatedBooking = await prisma.$transaction(async (prisma) => {
-      // Get booking details first
-      const booking = await prisma.longDistanceBooking.findFirst({
+      // Update booking status
+      const updateResult = await prisma.longDistanceBooking.updateMany({
         where: {
           id: bookingId,
           userId: req.user!.userId,
           status: "PENDING",
         },
-      });
-
-      if (!booking) {
-        throw new Error("Booking not found or invalid status for verification");
-      }
-
-      // Calculate expiry time (60 minutes from now)
-      const expiryTime = new Date();
-      expiryTime.setMinutes(expiryTime.getMinutes() + 60);
-
-      // Update booking status
-      const updatedBooking = await prisma.longDistanceBooking.update({
-        where: { id: bookingId },
         data: {
           status: "ADVANCE_PAID",
           advancePaidAt: new Date(),
           advancePaymentId: razorpay_payment_id,
           advancePaymentStatus: "COMPLETED",
-          metadata: {
-            ...(booking.metadata as any),
-            bookingExpiresAt: expiryTime,
-          },
         },
+      });
+
+      if (updateResult.count === 0) {
+        throw new Error("Booking not found or invalid status");
+      }
+
+      // Get updated booking details
+      const booking = await prisma.longDistanceBooking.findUnique({
+        where: { id: bookingId },
       });
 
       // Create transaction record
       await prisma.longDistanceTransaction.create({
         data: {
           bookingId,
-          amount: booking.advanceAmount,
+          amount: booking!.advanceAmount,
           type: "BOOKING_ADVANCE",
           status: "COMPLETED",
-          senderId: booking.userId,
-          receiverId: null, // Will be assigned to driver later
+          senderId: req.user!.userId,
           razorpayOrderId: razorpay_order_id,
           razorpayPaymentId: razorpay_payment_id,
-          description: `Advance payment for Chardham Yatra ${bookingId}`,
+          description: "Advance payment for Chardham Yatra booking",
         },
       });
 
-      return updatedBooking;
+      return booking;
     });
 
-    // Schedule booking expiry (60 minutes)
-    scheduleBookingExpiry(bookingId);
-
-    // Schedule booking visibility if it's a future booking
-    const pickupDateTime = new Date(updatedBooking.startDate);
+    // Schedule booking to be visible to drivers 2 hours before pickup
+    const pickupDateTime = new Date(updatedBooking!.startDate);
+    // Fix the spread operator issue by using individual values
+    const timeComponents = updatedBooking!.pickupTime.split(":").map(Number);
     pickupDateTime.setHours(
-      ...updatedBooking.pickupTime.split(":").map(Number),
+      timeComponents[0] || 0,
+      timeComponents[1] || 0,
       0,
       0
     );
+
+    // Schedule booking visibility
     scheduleBookingVisibility(bookingId, pickupDateTime);
 
-    res.json({ success: true, booking: updatedBooking });
+    // Schedule booking expiry if no driver accepts within 60 minutes
+    scheduleBookingExpiry(bookingId);
+
+    res.json({
+      success: true,
+      booking: updatedBooking,
+      message: "Payment verified successfully",
+    });
   } catch (error) {
     console.error("Error verifying payment:", error);
     res.status(500).json({ error: "Failed to verify payment" });
@@ -1498,12 +1526,36 @@ const isHaridwarRishikeshArea = async (
       { lat: 29.9457, lng: 78.1642 } // Haridwar coordinates
     );
 
-    return haridwarDistance.distance <= 30;
+    const rishikeshDistance = await getCachedDistanceAndDuration(
+      { lat: location.lat, lng: location.lng },
+      { lat: 30.0869, lng: 78.2676 } // Rishikesh coordinates
+    );
+
+    return haridwarDistance.distance <= 30 || rishikeshDistance.distance <= 30;
   } catch (error) {
     // Fallback to string matching if distance calculation fails
     const lowerLocation = location.address.toLowerCase();
     return (
       lowerLocation.includes("haridwar") || lowerLocation.includes("rishikesh")
+    );
+  }
+};
+
+// Helper function to determine if location is in Delhi area
+const isDelhiArea = async (location: Location): Promise<boolean> => {
+  try {
+    // Use distance calculator to check if location is within 30km of Delhi
+    const delhiDistance = await getCachedDistanceAndDuration(
+      { lat: location.lat, lng: location.lng },
+      { lat: 28.6139, lng: 77.209 } // Delhi coordinates
+    );
+
+    return delhiDistance.distance <= 30;
+  } catch (error) {
+    // Fallback to string matching if distance calculation fails
+    const lowerLocation = location.address.toLowerCase();
+    return (
+      lowerLocation.includes("delhi") || lowerLocation.includes("new delhi")
     );
   }
 };
