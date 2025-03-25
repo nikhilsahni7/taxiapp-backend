@@ -199,12 +199,11 @@ export const createVendorBooking = async (req: Request, res: Response) => {
 
     // Calculate commissions
     const vendorCommission = vendorPrice - appBasePrice;
-
-    const appCommission = Math.round(appBasePrice * 0.12);
-
-    const totalCommission = vendorCommission + appCommission;
-
-    const driverPayout = vendorPrice - totalCommission;
+    const appCommissionFromBase = Math.round(appBasePrice * 0.12);
+    const appCommissionFromVendor = Math.round(vendorCommission * 0.1); // 10% of vendor markup
+    const totalAppCommission = appCommissionFromBase + appCommissionFromVendor;
+    const driverPayout = vendorPrice - totalAppCommission;
+    const vendorPayout = vendorCommission - appCommissionFromVendor; // Correct calculation matching estimate
 
     const booking = await prisma.vendorBooking.create({
       data: {
@@ -232,9 +231,9 @@ export const createVendorBooking = async (req: Request, res: Response) => {
         appBasePrice,
         vendorPrice,
         vendorCommission,
-        appCommission,
+        appCommission: totalAppCommission,
         driverPayout,
-        vendorPayout: vendorCommission, // Vendor gets their full commission
+        vendorPayout, // Now using the corrected value
         status: "PENDING",
         notes,
       },
@@ -246,10 +245,10 @@ export const createVendorBooking = async (req: Request, res: Response) => {
         totalAmount: vendorPrice,
         appBasePrice,
         vendorCommission,
-        appCommission,
-        totalCommission,
+        appCommission: totalAppCommission,
+        totalCommission: vendorCommission + totalAppCommission,
         driverPayout,
-        vendorPayout: vendorCommission,
+        vendorPayout,
       },
     });
   } catch (error) {
