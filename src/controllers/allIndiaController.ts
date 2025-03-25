@@ -29,7 +29,7 @@ const ALL_INDIA_RATES = {
   tempo_16: { baseFare: 8000, extraKm: 22 },
   tempo_20: { baseFare: 9000, extraKm: 24 },
   tempo_26: { baseFare: 10000, extraKm: 26 },
-};
+}; 
 
 // Helper function to get vehicle capacity
 const getVehicleCapacity = (vehicleType: string): string => {

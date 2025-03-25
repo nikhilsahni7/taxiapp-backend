@@ -49,16 +49,18 @@ router.post("/send-otp", async (req, res) => {
   try {
     const { phone } = req.body;
 
-    // Check if user already exists and is verified
+    // ww are checking here if the user already exists
     const existingUser = await prisma.user.findFirst({
       where: {
         phone,
+
       },
     });
 
     if (existingUser) {
       // If user exists and is verified, return success with existingUser flag
       return res.json({
+        
         message: "User already exists",
         existingUser: true,
         userType: existingUser.userType,
