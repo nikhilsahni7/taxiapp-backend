@@ -20,41 +20,44 @@ interface DailyEarnings {
 
 // Helper function to get IST date with proper timezone offset
 function getISTDateTime(): Date {
-  // Create a date object with the current UTC time
+  // Create a direct IST date using the timezone offset
   const now = new Date();
 
-  // Get the UTC timestamp
-  const utcTime = now.getTime();
-
-  // Get the local timezone offset in minutes
-  const localOffset = now.getTimezoneOffset();
-
-  // IST offset is +5:30 (330 minutes)
-  const istOffset = -330;
-
-  // Calculate the total offset in milliseconds
-  const totalOffset = (localOffset + istOffset) * 60 * 1000;
-
-  // Create new date with IST time
-  return new Date(utcTime + totalOffset);
+  // For direct IST time calculation
+  const istTime = new Date(
+    now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
+  );
+  return istTime;
 }
 
 // Helper function to convert UTC to IST
 function utcToIST(date: Date): Date {
-  const utcTime = date.getTime();
-  const localOffset = date.getTimezoneOffset();
-  const istOffset = -330; // IST is UTC+5:30 (330 minutes)
-  const totalOffset = (localOffset + istOffset) * 60 * 1000;
-  return new Date(utcTime + totalOffset);
+  return new Date(date.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
 }
 
 // Helper function to convert IST to UTC
 function istToUTC(date: Date): Date {
-  const time = date.getTime();
-  const localOffset = date.getTimezoneOffset();
-  const istOffset = -330;
-  const totalOffset = (localOffset + istOffset) * 60 * 1000;
-  return new Date(time - totalOffset);
+  // Get ISO string components for the IST date
+  const istYear = date.getFullYear();
+  const istMonth = date.getMonth();
+  const istDay = date.getDate();
+  const istHours = date.getHours();
+  const istMinutes = date.getMinutes();
+  const istSeconds = date.getSeconds();
+
+  // Create a string representation in ISO format with IST offset
+  const istDateString = new Date(
+    istYear,
+    istMonth,
+    istDay,
+    istHours,
+    istMinutes,
+    istSeconds
+  ).toLocaleString("en-US", {
+    timeZone: "UTC",
+  });
+
+  return new Date(istDateString);
 }
 
 // Get current day's earnings
