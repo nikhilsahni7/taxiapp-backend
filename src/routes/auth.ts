@@ -49,6 +49,15 @@ router.post("/send-otp", async (req, res) => {
   try {
     const { phone } = req.body;
 
+    const phoneNumber = await prisma.user.findFirst({
+      where: {
+        phone,
+      },
+    });
+    if (phoneNumber) {
+      return res.status(400).json({ error: "Phone number already exists" });
+    }
+
     // Send OTP via Twilio Verify Service
     await twilioClient.verify.v2
       .services(process.env.TWILIO_VERIFY_SID!)
