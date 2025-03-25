@@ -70,22 +70,10 @@ const getVehicleCapacity = (vehicleType: string): string => {
 const calculateExtraDays = (distance: number): number => {
   if (distance <= 0) return 0;
 
-  let extraDays = 0;
-  const remainingDistance = Math.max(0, distance - 50); // Subtract initial 50km buffer
+  // Only add days for complete 250km chunks
+  const extraDaysForDistance = Math.floor(distance / 250) * 2;
 
-  if (remainingDistance > 0) {
-    // For every complete 250km chunk, add 2 days
-    extraDays += Math.floor(remainingDistance / 250) * 2;
-
-    // For remaining distance
-    const remainingKms = remainingDistance % 250;
-    if (remainingKms > 200) {
-      // If remaining distance is more than 200km, add 2 more days
-      extraDays += 2;
-    }
-  }
-
-  return extraDays;
+  return extraDaysForDistance;
 };
 
 // Helper function to calculate extra km charges
@@ -95,15 +83,16 @@ const calculateExtraKmCharges = (
 ): number => {
   if (distance <= 0) return 0;
 
-  const remainingDistance = Math.max(0, distance - 50); // Subtract initial 50km buffer
-  if (remainingDistance <= 0) return 0;
-
   // Get per km rate for vehicle type
   //@ts-ignore
   const { perKmRate } = CHARDHAM_RATES[vehicleType];
 
-  // Calculate charges only for distance up to 200km
-  const chargeableDistance = Math.min(remainingDistance, 200);
+  // Calculate the remaining km after last complete 250km chunk
+  const remainingKm = distance % 250;
+
+  // Charge per km for the remaining distance up to 200km
+  const chargeableDistance = Math.min(remainingKm, 200);
+
   return chargeableDistance * perKmRate;
 };
 
