@@ -70,10 +70,19 @@ const getVehicleCapacity = (vehicleType: string): string => {
 const calculateExtraDays = (distance: number): number => {
   if (distance <= 0) return 0;
 
-  // Only add days for complete 250km chunks
-  const extraDaysForDistance = Math.floor(distance / 250) * 2;
+  // Add 2 days for every complete 250km
+  const completeChunks = Math.floor(distance / 250);
+  let extraDays = completeChunks * 2;
 
-  return extraDaysForDistance;
+  // Get remaining kilometers after complete chunks
+  const remainingKm = distance % 250;
+
+  // If remaining km is 200 or more, add 2 more days instead of per-km charge
+  if (remainingKm >= 200) {
+    extraDays += 2;
+  }
+
+  return extraDays;
 };
 
 // Helper function to calculate extra km charges
@@ -90,10 +99,15 @@ const calculateExtraKmCharges = (
   // Calculate the remaining km after last complete 250km chunk
   const remainingKm = distance % 250;
 
-  // Charge per km for the remaining distance up to 200km
-  const chargeableDistance = Math.min(remainingKm, 200);
+  // Only charge per km if remaining distance is less than 200km
+  // Otherwise, it will be covered by extra days
+  if (remainingKm < 200) {
+    // For all remaining km, double the actual distance and then apply per km rate
+    // (88 km * 2 = 176 * perKmRate) as per the requirement
+    return remainingKm * 2 * perKmRate;
+  }
 
-  return chargeableDistance * perKmRate;
+  return 0; // If remainingKm >= 200, we add extra days instead of charging per km
 };
 
 // Schedule job to make bookings visible to drivers 2 hours before pickup time
