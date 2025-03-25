@@ -38,10 +38,10 @@ const CHARDHAM_DAYS = {
     4: 10, // 4 dhams - 10 days
   },
   other: {
-    1: 5, // 1 dham - 5 days
-    2: 7, // 2 dhams - 7 days
-    3: 9, // 3 dhams - 9 days
-    4: 12, // 4 dhams - 12 days
+    1: 3,
+    2: 5,
+    3: 7,
+    4: 10,
   },
 };
 
