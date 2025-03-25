@@ -10,7 +10,6 @@ import crypto from "crypto";
 import type { Request, Response } from "express";
 import Razorpay from "razorpay";
 import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
-
 const prisma = new PrismaClient();
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID!,

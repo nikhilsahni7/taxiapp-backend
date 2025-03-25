@@ -1,6 +1,6 @@
-import type { Request, Response } from "express";
 import { PrismaClient, RideStatus } from "@prisma/client";
-import { startOfDay, endOfDay, format, subDays } from "date-fns";
+import { endOfDay, format, startOfDay, subDays } from "date-fns";
+import type { Request, Response } from "express";
 
 const prisma = new PrismaClient();
 
@@ -221,13 +221,19 @@ async function calculateEarningsForDateRange(
   startDate: Date,
   endDate: Date
 ): Promise<Omit<DailyEarnings, "date">> {
+  // Convert input dates from IST to UTC for database query
+  const utcStartDate = istToUTC(startDate);
+  const utcEndDate = istToUTC(endDate);
+
   const rides = await prisma.ride.findMany({
     where: {
       driverId,
-      status: RideStatus.RIDE_ENDED || RideStatus.PAYMENT_COMPLETED,
+      status: {
+        in: [RideStatus.PAYMENT_COMPLETED, RideStatus.RIDE_ENDED],
+      },
       createdAt: {
-        gte: startDate,
-        lte: endDate,
+        gte: utcStartDate,
+        lte: utcEndDate,
       },
     },
   });
