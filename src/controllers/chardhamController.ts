@@ -97,14 +97,17 @@ const calculateExtraKmCharges = (
   const { perKmRate } = CHARDHAM_RATES[vehicleType];
 
   // Calculate the remaining km after last complete 250km chunk
-  const remainingKm = distance % 250;
+  const remainingKm = Math.floor(distance % 250); // Floor to ensure exact calculation
 
   // Only charge per km if remaining distance is less than 200km
   // Otherwise, it will be covered by extra days
   if (remainingKm < 200) {
     // For all remaining km, double the actual distance and then apply per km rate
-    // (88 km * 2 = 176 * perKmRate) as per the requirement
-    return remainingKm * 2 * perKmRate;
+    const doubledDistance = remainingKm * 2;
+    const charge = doubledDistance * perKmRate;
+
+    // Return rounded value to avoid floating point issues
+    return Math.round(charge);
   }
 
   return 0; // If remainingKm >= 200, we add extra days instead of charging per km
