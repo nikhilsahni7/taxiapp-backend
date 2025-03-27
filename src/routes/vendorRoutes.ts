@@ -4,9 +4,11 @@ import {
   completeVendorRide,
   createDriverCommissionPayment,
   createVendorBooking,
+  createVendorChardhamBooking,
   driverArrived,
   getVendorBookingDetails,
   getVendorBookings,
+  getVendorChardhamFareEstimate,
   getVendorEarnings,
   getVendorFareEstimate,
   getVendorTransactions,
@@ -21,6 +23,7 @@ const router = express.Router();
 
 // Public routes
 router.post("/estimate", getVendorFareEstimate);
+router.post("/chardham/estimate", getVendorChardhamFareEstimate);
 
 // Protected routes
 router.use(verifyToken);
@@ -30,6 +33,7 @@ router.get("/wallet", getVendorWallet);
 router.get("/transactions", getVendorTransactions);
 router.get("/earnings", getVendorEarnings);
 router.post("/bookings", createVendorBooking);
+router.post("/chardham/bookings", createVendorChardhamBooking);
 router.get("/bookings", getVendorBookings);
 router.get("/bookings/:bookingId", getVendorBookingDetails);
 
