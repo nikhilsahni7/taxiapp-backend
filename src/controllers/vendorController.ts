@@ -1483,6 +1483,29 @@ export const createVendorChardhamBooking = async (
       tripDistance = 350 + distanceToHaridwar;
     }
 
+    // Create metadata object for booking
+    const bookingMetadata = {
+      numberOfDhams,
+      dhamsToVisit,
+      startingPointType,
+      baseFare,
+      extraKmCharges,
+      distanceToHaridwar:
+        startingPointType === "other" ? distanceToHaridwar : 0,
+      perDayRate: rates.perDayRate,
+      perKmRate: rates.perKmRate,
+      vehicleCapacity: getVehicleCapacity(vehicleCategory),
+      includedInFare: [
+        "Driver charges",
+        "Fuel charges",
+        "Vehicle rental",
+        `${numberOfDhams} Dham Yatra for ${numberOfDays} days`,
+        vehicleCategory.includes("tempo")
+          ? "Tempo Traveller with Push Back Seats"
+          : "Car with AC",
+      ],
+    };
+
     // Create the booking
     const booking = await prisma.vendorBooking.create({
       data: {
@@ -1517,27 +1540,7 @@ export const createVendorChardhamBooking = async (
         vendorPayout,
         status: "PENDING",
         notes,
-        metadata: {
-          numberOfDhams,
-          dhamsToVisit,
-          startingPointType,
-          baseFare,
-          extraKmCharges,
-          distanceToHaridwar:
-            startingPointType === "other" ? distanceToHaridwar : 0,
-          perDayRate: rates.perDayRate,
-          perKmRate: rates.perKmRate,
-          vehicleCapacity: getVehicleCapacity(vehicleCategory),
-          includedInFare: [
-            "Driver charges",
-            "Fuel charges",
-            "Vehicle rental",
-            `${numberOfDhams} Dham Yatra for ${numberOfDays} days`,
-            vehicleCategory.includes("tempo")
-              ? "Tempo Traveller with Push Back Seats"
-              : "Car with AC",
-          ],
-        },
+        metadata: bookingMetadata,
       },
     });
 

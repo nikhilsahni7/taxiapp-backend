@@ -469,6 +469,7 @@ model VendorBooking {
   // Add these fields
   otp              String?
   driverArrivedAt  DateTime?
+  metadata         Json?    // Add this field for storing Chardham Yatra specific data
 
   // Relations
   vendor           User     @relation("VendorBookings", fields: [vendorId], references: [id])
