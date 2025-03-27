@@ -1,15 +1,14 @@
-import type { Request, Response } from "express";
 import {
-  PrismaClient,
-  PaymentMode,
-  OutstationTripType,
   LongDistanceServiceType,
+  OutstationTripType,
+  PaymentMode,
+  PrismaClient,
 } from "@prisma/client";
-import Razorpay from "razorpay";
 import crypto from "crypto";
-import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
+import type { Request, Response } from "express";
+import Razorpay from "razorpay";
 import { io } from "../server";
-
+import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
 const prisma = new PrismaClient();
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID!,
@@ -62,8 +61,6 @@ const HILL_STATION_RATES: Record<string, CarRate | TempoRate> = {
   ertiga: { base: 30 },
   innova: { base: 35 },
 };
-
-
 
 export const getOutstationFareEstimate = async (
   req: Request,
@@ -199,6 +196,10 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
       serviceType
     );
 
+    // Calculate app commission (12% of total fare)
+    const commission = Math.round(fare * 0.12);
+    const driverEarnings = fare - commission;
+
     const booking = await prisma.longDistanceBooking.create({
       data: {
         userId: req.user.userId,
@@ -223,6 +224,7 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
         totalAmount: fare,
         advanceAmount: fare * 0.25,
         remainingAmount: fare * 0.75,
+        commission: commission, // Store the commission amount
         status: "PENDING",
       },
     });
@@ -251,6 +253,8 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
         fare,
         advanceAmount: booking.advanceAmount,
         remainingAmount: booking.remainingAmount,
+        commission,
+        driverEarnings,
       },
     });
   } catch (error) {
@@ -587,6 +591,8 @@ export const getAvailableBookings = async (req: Request, res: Response) => {
       totalDays: booking.totalDays,
       baseAmount: booking.baseAmount,
       totalAmount: booking.totalAmount,
+      driverEarnings: booking.totalAmount - booking.commission, // Show driver earnings after commission
+      commission: booking.commission, // Show commission amount
       advanceAmount: booking.advanceAmount,
       remainingAmount: booking.remainingAmount,
       paymentMode: booking.paymentMode,
@@ -662,6 +668,9 @@ export const getBookingStatus = async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Booking not found" });
     }
 
+    // Calculate driver's earnings after commission
+    const driverEarnings = booking.totalAmount - booking.commission;
+
     // Format response based on user type
     const response = {
       id: booking.id,
@@ -694,6 +703,12 @@ export const getBookingStatus = async (req: Request, res: Response) => {
       paymentMode: booking.paymentMode,
       advancePaymentStatus: booking.advancePaymentStatus,
       finalPaymentStatus: booking.finalPaymentStatus,
+
+      // Commission details - only show to drivers
+      ...(req.user.userType === "DRIVER" && {
+        commission: booking.commission,
+        driverEarnings: driverEarnings,
+      }),
 
       // Timestamps
       createdAt: booking.createdAt,

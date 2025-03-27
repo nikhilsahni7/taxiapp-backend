@@ -49,14 +49,14 @@ const VENDOR_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
     tempo_26: { perDay: 10700, extraKm: 29 },
   },
   CHARDHAM_YATRA: {
-    mini: { base: 28 },
-    sedan: { base: 33 },
-    ertiga: { base: 38 },
-    innova: { base: 43 },
-    tempo_12: { fixed: 8700, extra: 28 },
-    tempo_16: { fixed: 9700, extra: 31 },
-    tempo_20: { fixed: 10700, extra: 35 },
-    tempo_26: { fixed: 11700, extra: 40 },
+    mini: { haridwar: 16500, delhi: 27000, base: 27 },
+    sedan: { haridwar: 19500, delhi: 32500, base: 33 },
+    ertiga: { haridwar: 22000, delhi: 37000, base: 37 },
+    innova: { haridwar: 24000, delhi: 42000, base: 42 },
+    tempo_12: { haridwar: 52000, delhi: 70000, extra: 26 },
+    tempo_16: { haridwar: 58000, delhi: 78000, extra: 29 },
+    tempo_20: { haridwar: 64000, delhi: 87000, extra: 33 },
+    tempo_26: { haridwar: 70000, delhi: 95000, extra: 38 },
   },
 };
 
@@ -102,26 +102,79 @@ export const getVendorFareEstimate = async (req: Request, res: Response) => {
     serviceType,
     vendorPrice,
     tripType,
+    numberOfDhams, // New field for Chardham service
   } = req.body;
 
   try {
-    const { distance, duration } = await getCachedDistanceAndDuration(
-      { lat: pickupLocation.lat, lng: pickupLocation.lng },
-      { lat: dropLocation.lat, lng: dropLocation.lng }
-    );
+    let distance = 0;
+    let duration = 0;
+    let baseFare = 0;
 
-    if (vehicleType.startsWith("tempo_") && tripType !== "ROUND_TRIP") {
-      return res.status(400).json({
-        error: "Tempo vehicles are only available for round trips",
+    if (serviceType === "CHARDHAM_YATRA") {
+      if (!numberOfDhams) {
+        return res.status(400).json({
+          error: "Number of dhams is required for Chardham Yatra service",
+        });
+      }
+
+      // Determine pickup area
+      const pickupArea = await determinePickupArea({
+        address: pickupLocation.address || pickupLocation,
+        lat: pickupLocation.lat,
+        lng: pickupLocation.lng,
       });
-    }
 
-    const baseFare = calculateAppBasePrice(
-      distance,
-      vehicleType,
-      serviceType,
-      tripType
-    );
+      // Set distance based on number of dhams
+      switch (numberOfDhams) {
+        case 1:
+          distance = 550;
+          break;
+        case 2:
+          distance = 750;
+          break;
+        case 3:
+          distance = 950;
+          break;
+        case 4:
+          distance = 1250;
+          break;
+        default:
+          distance = 1250;
+      }
+
+      // Duration in minutes
+      duration = numberOfDhams * 1440; // 1 day per dham
+
+      // Calculate base fare for Chardham
+      baseFare = calculateChardhamBasePrice(
+        vehicleType,
+        pickupArea,
+        numberOfDhams
+      );
+    } else {
+      // For other service types
+      if (vehicleType.startsWith("tempo_") && tripType !== "ROUND_TRIP") {
+        return res.status(400).json({
+          error: "Tempo vehicles are only available for round trips",
+        });
+      }
+
+      const { distance: calculatedDistance, duration: calculatedDuration } =
+        await getCachedDistanceAndDuration(
+          { lat: pickupLocation.lat, lng: pickupLocation.lng },
+          { lat: dropLocation.lat, lng: dropLocation.lng }
+        );
+
+      distance = calculatedDistance;
+      duration = calculatedDuration;
+
+      baseFare = calculateAppBasePrice(
+        distance,
+        vehicleType,
+        serviceType,
+        tripType
+      );
+    }
 
     // Calculate commissions and payouts
     const appCommissionFromBase = Math.round(baseFare * 0.12); // 12% commission
@@ -149,6 +202,9 @@ export const getVendorFareEstimate = async (req: Request, res: Response) => {
         tripDetails: {
           type: tripType || "ONE_WAY",
           isTempoVehicle: vehicleType.startsWith("tempo_"),
+          isChardham: serviceType === "CHARDHAM_YATRA",
+          numberOfDhams:
+            serviceType === "CHARDHAM_YATRA" ? numberOfDhams : undefined,
         },
       },
     });
@@ -173,28 +229,80 @@ export const createVendorBooking = async (req: Request, res: Response) => {
     dropLng,
     vehicleCategory,
     serviceType,
-    vendorPrice, // This is the total booking amount (e.g., Rs 5000)
+    vendorPrice, // This is the total booking amount
     tripType,
     startDate,
     endDate,
     pickupTime,
     notes,
+    numberOfDhams, // New field for Chardham service
   } = req.body;
 
   try {
-    // Get distance and duration
-    const { distance, duration } = await getCachedDistanceAndDuration(
-      { lat: pickupLat, lng: pickupLng },
-      { lat: dropLat, lng: dropLng }
-    );
+    // For Chardham service, we need special handling
+    let distance = 0;
+    let duration = 0;
+    let appBasePrice = 0;
 
-    // Calculate app base price (our rate, e.g., Rs 3000)
-    const appBasePrice = calculateAppBasePrice(
-      distance,
-      vehicleCategory,
-      serviceType,
-      tripType
-    );
+    if (serviceType === "CHARDHAM_YATRA") {
+      // For Chardham, base price depends on pickup location and number of dhams
+      const pickupArea = await determinePickupArea({
+        address: pickupLocation,
+        lat: pickupLat,
+        lng: pickupLng,
+      });
+
+      if (!numberOfDhams) {
+        return res.status(400).json({
+          error: "Number of dhams is required for Chardham Yatra service",
+        });
+      }
+
+      // Set distance based on number of dhams (similar to chardhamController)
+      switch (numberOfDhams) {
+        case 1:
+          distance = 550;
+          break;
+        case 2:
+          distance = 750;
+          break;
+        case 3:
+          distance = 950;
+          break;
+        case 4:
+          distance = 1250;
+          break;
+        default:
+          distance = 1250;
+      }
+
+      // Duration in minutes (same as chardhamController)
+      duration = numberOfDhams * 1440; // 1 day per dham in minutes
+
+      // Calculate base price for Chardham
+      appBasePrice = calculateChardhamBasePrice(
+        vehicleCategory,
+        pickupArea,
+        numberOfDhams
+      );
+    } else {
+      // For other service types, use the existing distance calculation
+      const distanceDuration = await getCachedDistanceAndDuration(
+        { lat: pickupLat, lng: pickupLng },
+        { lat: dropLat, lng: dropLng }
+      );
+
+      distance = distanceDuration.distance;
+      duration = distanceDuration.duration;
+
+      // Calculate app base price (our rate)
+      appBasePrice = calculateAppBasePrice(
+        distance,
+        vehicleCategory,
+        serviceType,
+        tripType
+      );
+    }
 
     // Calculate commissions
     const vendorCommission = vendorPrice - appBasePrice;
@@ -202,7 +310,7 @@ export const createVendorBooking = async (req: Request, res: Response) => {
     const appCommissionFromVendor = Math.round(vendorCommission * 0.1); // 10% of vendor markup
     const totalAppCommission = appCommissionFromBase + appCommissionFromVendor;
     const driverPayout = vendorPrice - totalAppCommission;
-    const vendorPayout = vendorCommission - appCommissionFromVendor; // Correct calculation matching estimate
+    const vendorPayout = vendorCommission - appCommissionFromVendor;
 
     const booking = await prisma.vendorBooking.create({
       data: {
@@ -212,11 +320,12 @@ export const createVendorBooking = async (req: Request, res: Response) => {
         serviceType,
         tripType,
         pickupLocation,
-        dropLocation,
+        dropLocation:
+          serviceType === "CHARDHAM_YATRA" ? "Chardham Yatra" : dropLocation,
         pickupLat,
         pickupLng,
-        dropLat,
-        dropLng,
+        dropLat: serviceType === "CHARDHAM_YATRA" ? null : dropLat,
+        dropLng: serviceType === "CHARDHAM_YATRA" ? null : dropLng,
         vehicleCategory,
         distance,
         duration,
@@ -232,9 +341,11 @@ export const createVendorBooking = async (req: Request, res: Response) => {
         vendorCommission,
         appCommission: totalAppCommission,
         driverPayout,
-        vendorPayout, // Now using the corrected value
+        vendorPayout,
         status: "PENDING",
         notes,
+        metadata:
+          serviceType === "CHARDHAM_YATRA" ? { numberOfDhams } : undefined,
       },
     });
 
@@ -976,7 +1087,172 @@ export const getVendorEarnings = async (req: Request, res: Response) => {
   }
 };
 
-// Helper function to calculate base price
+// Helper function to determine pickup area for Chardham service
+async function determinePickupArea(location: {
+  address: string;
+  lat: number;
+  lng: number;
+}): Promise<string> {
+  // Check if pickup location is in Haridwar/Rishikesh area
+  if (await isHaridwarRishikeshArea(location)) {
+    return "haridwar";
+  }
+
+  // Check if pickup location is in Delhi area
+  if (await isDelhiArea(location)) {
+    return "delhi";
+  }
+
+  // Default to "other" for other pickup locations
+  return "other";
+}
+
+// Helper function to check if location is in Haridwar/Rishikesh area
+const isHaridwarRishikeshArea = async (location: {
+  address: string;
+  lat: number;
+  lng: number;
+}): Promise<boolean> => {
+  // Define the Haridwar/Rishikesh area boundaries (approximate)
+  const haridwarCenter = { lat: 29.9457, lng: 78.1642 };
+  const rishikeshCenter = { lat: 30.0869, lng: 78.2676 };
+
+  // Calculate distance from both centers
+  const haridwarDistance = calculateHaversineDistance(
+    location.lat,
+    location.lng,
+    haridwarCenter.lat,
+    haridwarCenter.lng
+  );
+
+  const rishikeshDistance = calculateHaversineDistance(
+    location.lat,
+    location.lng,
+    rishikeshCenter.lat,
+    rishikeshCenter.lng
+  );
+
+  // Return true if location is within 30km of either center
+  return haridwarDistance <= 30 || rishikeshDistance <= 30;
+};
+
+// Helper function to check if location is in Delhi area
+const isDelhiArea = async (location: {
+  address: string;
+  lat: number;
+  lng: number;
+}): Promise<boolean> => {
+  // Define Delhi area center (approximate)
+  const delhiCenter = { lat: 28.6139, lng: 77.209 };
+
+  // Calculate distance from Delhi center
+  const delhiDistance = calculateHaversineDistance(
+    location.lat,
+    location.lng,
+    delhiCenter.lat,
+    delhiCenter.lng
+  );
+
+  // Return true if location is within 50km of Delhi center
+  return delhiDistance <= 50;
+};
+
+// Helper function to calculate distance between two coordinates using Haversine formula
+function calculateHaversineDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const R = 6371; // Earth's radius in kilometers
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+// Helper function to calculate base price for Chardham Yatra
+function calculateChardhamBasePrice(
+  vehicleType: string,
+  pickupArea: string,
+  numberOfDhams: number
+): number {
+  // Get rates for vehicle
+  const rates = VENDOR_RATES.CHARDHAM_YATRA[vehicleType];
+  if (!rates) {
+    throw new Error(`Invalid vehicle type: ${vehicleType}`);
+  }
+
+  let baseFare = 0;
+
+  // Calculate base fare based on pickup area
+  if (pickupArea === "haridwar" && rates.haridwar) {
+    baseFare = rates.haridwar;
+  } else if (pickupArea === "delhi" && rates.delhi) {
+    baseFare = rates.delhi;
+  } else {
+    // For other pickup locations, calculate based on distance
+    // Distance is set based on number of dhams
+    let distance = 0;
+    switch (numberOfDhams) {
+      case 1:
+        distance = 550;
+        break;
+      case 2:
+        distance = 750;
+        break;
+      case 3:
+        distance = 950;
+        break;
+      case 4:
+        distance = 1250;
+        break;
+      default:
+        distance = 1250;
+    }
+
+    // Calculate fare based on per-km rate
+    if (vehicleType.startsWith("tempo_")) {
+      // For tempo vehicles, determine base and extra charges
+      const baseDistance = 250;
+      if (distance <= baseDistance) {
+        baseFare = rates.haridwar; // Use Haridwar rate as base for shorter distances
+      } else {
+        baseFare = rates.haridwar + (distance - baseDistance) * rates.extra;
+      }
+    } else {
+      // For other vehicles, use per-km rate
+      baseFare = distance * rates.base;
+    }
+  }
+
+  // Adjust pricing based on number of dhams (for cases not from Delhi/Haridwar)
+  if (pickupArea === "other") {
+    switch (numberOfDhams) {
+      case 1:
+        baseFare = baseFare * 0.5;
+        break; // 50% for 1 dham
+      case 2:
+        baseFare = baseFare * 0.7;
+        break; // 70% for 2 dhams
+      case 3:
+        baseFare = baseFare * 0.85;
+        break; // 85% for 3 dhams
+      default:
+        break; // 100% for 4 dhams
+    }
+  }
+
+  return Math.round(baseFare);
+}
+
+// Modify the main calculation function to include Chardham handling
 function calculateAppBasePrice(
   distance: number,
   vehicleType: string,
@@ -1030,8 +1306,10 @@ function calculateAppBasePrice(
       break;
 
     case "CHARDHAM_YATRA":
+      // For Chardham, the calculation is done in calculateChardhamBasePrice
+      // This branch should not be reached when calling from Chardham endpoints
       if (vehicleType.startsWith("tempo_")) {
-        baseFare = rate.fixed;
+        baseFare = rate.haridwar; // Use Haridwar rate as base
         if (distance > 250) {
           baseFare += (distance - 250) * rate.extra;
         }
