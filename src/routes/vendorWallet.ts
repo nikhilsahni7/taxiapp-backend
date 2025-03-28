@@ -10,7 +10,7 @@ const router = express.Router();
 const prisma = new PrismaClient();
 
 // Get vendor wallet balance and transactions
-router.get("/vendor-wallet", verifyToken, async (req, res) => {
+router.get("/wallet", verifyToken, async (req, res) => {
   try {
     const vendorId = req.user?.userId;
 
