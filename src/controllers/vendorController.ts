@@ -335,6 +335,7 @@ export const createDriverCommissionPayment = async (
     res.status(500).json({ error: "Failed to create payment order" });
   }
 };
+
 // Update verify payment to handle commission
 export const verifyDriverCommissionPayment = async (
   req: Request,
@@ -369,22 +370,10 @@ export const verifyDriverCommissionPayment = async (
         throw new Error("Booking not found");
       }
 
-      // Add vendor commission to vendor's wallet
-      await prisma.wallet.upsert({
-        where: { userId: booking.vendorId },
-        create: {
-          userId: booking.vendorId,
-          balance: booking.vendorCommission,
-        },
-        update: {
-          balance: { increment: booking.vendorCommission },
-        },
-      });
-
       // Add app commission to app wallet
       await createAppWalletTransaction(
-        booking.appCommission,
-        "App commission from driver",
+        booking.appCommission + booking.vendorCommission, // The app collects total commission
+        "Total commission from driver",
         {
           bookingId,
           senderId: req.user!.userId,
@@ -394,16 +383,16 @@ export const verifyDriverCommissionPayment = async (
         }
       );
 
-      // Record vendor commission transaction
+      // Record commission transaction (for tracking only)
       await prisma.vendorBookingTransaction.create({
         data: {
           bookingId,
-          amount: booking.vendorCommission,
-          type: VendorBookingTransactionType.VENDOR_PAYOUT,
+          amount: booking.vendorCommission + booking.appCommission,
+          type: VendorBookingTransactionType.APP_COMMISSION,
           status: TransactionStatus.COMPLETED,
           senderId: req.user!.userId,
-          receiverId: booking.vendorId,
-          description: "Vendor commission from driver",
+          receiverId: process.env.ADMIN_USER_ID!,
+          description: "Total commission from driver",
         },
       });
 
@@ -459,65 +448,16 @@ export const cancelVendorBooking = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Booking cannot be cancelled" });
     }
 
-    // If driver has paid commission, initiate refund process
-    if (booking.driverCommissionPaid) {
-      await prisma.$transaction(async (prisma) => {
-        // Refund app commission to driver's wallet
-        await prisma.wallet.upsert({
-          where: { userId: booking.driverId! },
-          create: {
-            userId: booking.driverId!,
-            balance: booking.appCommission,
-          },
-          update: {
-            balance: { increment: booking.appCommission },
-          },
-        });
-
-        // Deduct from app wallet
-        await prisma.wallet.update({
-          where: { userId: process.env.ADMIN_USER_ID! },
-          data: {
-            balance: { decrement: booking.appCommission },
-          },
-        });
-
-        // Add refund transaction record
-        await prisma.vendorBookingTransaction.create({
-          data: {
-            bookingId,
-            amount: booking.appCommission,
-            type: VendorBookingTransactionType.DRIVER_PAYOUT,
-            status: TransactionStatus.COMPLETED,
-            senderId: process.env.ADMIN_USER_ID!,
-            receiverId: booking.driverId!,
-            description: "Commission refund for cancelled booking",
-          },
-        });
-
-        // Update booking status
-        await prisma.vendorBooking.update({
-          where: { id: bookingId },
-          data: {
-            status: "CANCELLED",
-            cancelledBy: CancelledBy.USER || CancelledBy.DRIVER,
-            cancelReason: reason || "No reason provided",
-            cancelledAt: new Date(),
-          },
-        });
-      });
-    } else {
-      // If no commission paid, simply cancel the booking
-      await prisma.vendorBooking.update({
-        where: { id: bookingId },
-        data: {
-          status: "CANCELLED",
-          cancelledBy: CancelledBy.USER || CancelledBy.DRIVER,
-          cancelReason: reason,
-          cancelledAt: new Date(),
-        },
-      });
-    }
+    // Simply update the booking status - no wallet operations
+    await prisma.vendorBooking.update({
+      where: { id: bookingId },
+      data: {
+        status: "CANCELLED",
+        cancelledBy: CancelledBy.USER || CancelledBy.DRIVER,
+        cancelReason: reason || "No reason provided",
+        cancelledAt: new Date(),
+      },
+    });
 
     res.json({ success: true, message: "Booking cancelled successfully" });
   } catch (error) {
@@ -621,7 +561,7 @@ export const startVendorRide = async (req: Request, res: Response) => {
   }
 };
 
-// Complete ride
+// Complete ride - keep only vendor wallet update
 export const completeVendorRide = async (req: Request, res: Response) => {
   const { bookingId } = req.params;
 
@@ -643,7 +583,7 @@ export const completeVendorRide = async (req: Request, res: Response) => {
         throw new Error("Booking not found or invalid status");
       }
 
-      // Pay vendor payout from app wallet to vendor's wallet
+      // Pay vendor payout to vendor's wallet - KEEP THIS
       await prisma.wallet.upsert({
         where: { userId: booking.vendorId },
         create: {
@@ -652,14 +592,6 @@ export const completeVendorRide = async (req: Request, res: Response) => {
         },
         update: {
           balance: { increment: booking.vendorPayout },
-        },
-      });
-
-      // Deduct from app wallet
-      await prisma.wallet.update({
-        where: { userId: process.env.ADMIN_USER_ID! },
-        data: {
-          balance: { decrement: booking.vendorPayout },
         },
       });
 
@@ -673,6 +605,14 @@ export const completeVendorRide = async (req: Request, res: Response) => {
           senderId: process.env.ADMIN_USER_ID!,
           receiverId: booking.vendorId,
           description: "Vendor payout for completed ride",
+        },
+      });
+
+      // Deduct from app wallet
+      await prisma.wallet.update({
+        where: { userId: process.env.ADMIN_USER_ID! },
+        data: {
+          balance: { decrement: booking.vendorPayout },
         },
       });
 
