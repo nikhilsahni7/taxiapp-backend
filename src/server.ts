@@ -1,28 +1,28 @@
+import { PrismaClient, RideStatus } from "@prisma/client";
+import cors from "cors";
 import express from "express";
 import http from "http";
-import cors from "cors";
 import { Server, Socket } from "socket.io";
-import { authRouter } from "./routes/auth";
-import { userRouter } from "./routes/user";
-import { rideRouter } from "./routes/ride";
-import { PrismaClient, RideStatus } from "@prisma/client";
-import { driverRouter } from "./routes/driver";
-import { paymentRouter } from "./routes/payment";
-import { walletRouter } from "./routes/wallet";
-import { adminRouter } from "./routes/admin";
 import { setupPaymentSocketEvents } from "./controllers/paymentController";
-import { outstationRouter } from "./routes/outstationRoutes";
-import { hillStationRouter } from "./routes/hillStationRoutes";
-import { vendorRouter } from "./routes/vendorRoutes";
-import { allIndiaRoutes } from "./routes/allIndiaRoutes";
 import {
   calculateDistance,
   calculateDuration,
   validateRideChatAccess,
 } from "./controllers/rideController";
-import { driverEarningsRoutes } from "./routes/driverEarningRoutes";
+import { adminRouter } from "./routes/admin";
+import { allIndiaRoutes } from "./routes/allIndiaRoutes";
+import { authRouter } from "./routes/auth";
 import { chardhamRoutes } from "./routes/chardhamRoutes";
-
+import { driverRouter } from "./routes/driver";
+import { driverEarningsRoutes } from "./routes/driverEarningRoutes";
+import { hillStationRouter } from "./routes/hillStationRoutes";
+import { outstationRouter } from "./routes/outstationRoutes";
+import { paymentRouter } from "./routes/payment";
+import { rideRouter } from "./routes/ride";
+import { userRouter } from "./routes/user";
+import { vendorRouter } from "./routes/vendorRoutes";
+import { vendorWalletRouter } from "./routes/vendorWallet";
+import { walletRouter } from "./routes/wallet";
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -65,6 +65,7 @@ app.use("/api/driver-earnings", driverEarningsRoutes);
 app.use("/api/outstation", outstationRouter);
 app.use("/api/hill-station", hillStationRouter);
 app.use("/api/vendor", vendorRouter);
+app.use("/api/vendor-wallet", vendorWalletRouter);
 app.use("/api/all-india", allIndiaRoutes);
 app.use("/api/chardham", chardhamRoutes);
 app.use("/", (req, res) => {
