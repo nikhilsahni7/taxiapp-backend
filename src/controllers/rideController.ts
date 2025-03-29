@@ -1,15 +1,15 @@
 // ride-controller.ts
-import type { Request, Response } from "express";
 import {
+  CancelledBy,
+  PaymentMode,
   PrismaClient,
   RideStatus,
-  PaymentMode,
-  UserType,
-  TransactionType,
-  TransactionStatus,
   RideType,
-  CancelledBy,
+  TransactionStatus,
+  TransactionType,
+  UserType,
 } from "@prisma/client";
+import type { Request, Response } from "express";
 import { searchAvailableDrivers } from "../lib/driverService";
 
 import {
@@ -17,8 +17,8 @@ import {
   initiateRazorpayPayment,
 } from "./paymentController";
 
-import { io } from "../server";
 import axios from "axios";
+import { io } from "../server";
 
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY!;
 
@@ -1086,9 +1086,7 @@ const handleRideCancellation = async (
         cancellationReason,
         cancellationFee,
         cancelledBy: userType as CancelledBy,
-
         totalAmount: {
-          // If totalAmount might be null, ensure it's a number first.
           increment: cancellationFee,
         },
       },
@@ -1111,7 +1109,16 @@ const handleRideCancellation = async (
     });
     console.log("Ride updated:", updatedRide);
 
+    // Immediate notification to both users and drivers
     emitRideStatusUpdate(updatedRide, "CANCELLED");
+
+    // Broadcast cancellation to all connected clients
+    io.emit("ride_cancelled", {
+      rideId: ride.id,
+      status: "CANCELLED",
+      cancelledBy: userType,
+      reason: cancellationReason,
+    });
 
     if (cancellationFee > 0) {
       if (userType === "USER") {

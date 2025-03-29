@@ -242,6 +242,14 @@ io.on("connection", (socket: Socket) => {
             status: updatedStatus,
           });
         }
+
+        // Broadcast cancellation event to all connected clients if cancelled
+        if (updatedStatus === RideStatus.CANCELLED) {
+          io.emit("ride_cancelled", {
+            rideId,
+            status: updatedStatus,
+          });
+        }
       } catch (error) {
         console.error("Error updating ride status:", error);
       }
