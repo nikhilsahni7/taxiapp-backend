@@ -44,8 +44,7 @@ export const geocodeAddress = async (
 
 export const searchAvailableDrivers = async (
   pickupLocation: string,
-  radius: number,
-  additionalFilters: Record<string, any> = {}
+  radius: number
 ) => {
   const { lat, lng } = await geocodeAddress(pickupLocation);
 
@@ -61,27 +60,18 @@ export const searchAvailableDrivers = async (
         gte: lng - radius / (111 * Math.cos((lat * Math.PI) / 180)),
         lte: lng + radius / (111 * Math.cos((lat * Math.PI) / 180)),
       },
-      driver: {
-        // Apply additional filters (like carrier availability)
-        driverDetails: additionalFilters.hasCarrier
-          ? { hasCarrier: true }
-          : undefined,
-        // Uncomment if you want to exclude drivers on other rides
-        // ridesAsDriver: {
-        //   none: {
-        //     status: {
-        //       in: ["ACCEPTED", "DRIVER_ARRIVED", "RIDE_STARTED"],
-        //     },
-        //   },
-        // },
-      },
+      // driver: {
+      //   ridesAsDriver: {
+      //     none: {
+      //       status: {
+      //         in: ["ACCEPTED", "DRIVER_ARRIVED", "RIDE_STARTED"],
+      //       },
+      //     },
+      //   },
+      // },
     },
     include: {
-      driver: {
-        include: {
-          driverDetails: true,
-        },
-      },
+      driver: true,
     },
     orderBy: [
       {
@@ -93,7 +83,7 @@ export const searchAvailableDrivers = async (
     ],
   });
 
-  console.log("Found drivers:", drivers.length);
+  console.log(drivers);
 
   // Calculate exact distance for each driver
   const driversWithDistance = await Promise.all(
@@ -102,16 +92,11 @@ export const searchAvailableDrivers = async (
         `${driver.locationLat},${driver.locationLng}`,
         pickupLocation
       );
-      return {
-        driverId: driver.driverId,
-        distance,
-        locationLat: driver.locationLat,
-        locationLng: driver.locationLng,
-        driverDetails: driver.driver.driverDetails,
-      };
+      return { ...driver, distance };
     })
   );
 
   // Sort by actual distance
   return driversWithDistance.sort((a, b) => a.distance - b.distance);
 };
+
