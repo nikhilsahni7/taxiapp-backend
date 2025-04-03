@@ -349,7 +349,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
       transaction: result.transaction,
     });
   } catch (error) {
-    console.error("Error in payment verification:", error);
+    console.error("Error in payment verifications:", error);
     return res.status(500).json({ error: "Failed to verify payment" });
   }
 };
