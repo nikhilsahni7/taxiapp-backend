@@ -186,6 +186,7 @@ async function calculateTaxAndCharges(
     mcdCharges,
   };
 }
+
 interface FareEstimate {
   baseFare: number;
   totalFare: number;
@@ -193,6 +194,7 @@ interface FareEstimate {
   distance: number;
   duration: number;
   currency: string;
+  carrierCharge?: number;
 }
 
 // Enhanced fare calculation function
@@ -264,7 +266,8 @@ export const calculateFare = async (
 
 // Update the getFareEstimation endpoint
 export const getFareEstimation = async (req: Request, res: Response) => {
-  const { pickupLocation, dropLocation } = req.body;
+  const { pickupLocation, dropLocation, carrierRequested } = req.body;
+  const carrierCharge = carrierRequested ? 30 : 0;
 
   try {
     const distance = await calculateDistance(pickupLocation, dropLocation);
@@ -290,15 +293,21 @@ export const getFareEstimation = async (req: Request, res: Response) => {
         distance,
         duration,
         currency: "INR",
+        totalFare: fareDetails.totalFare + carrierCharge,
+        carrierCharge,
       };
     }
 
-    res.json({ estimates });
+    res.json({
+      estimates,
+      carrierRequested: carrierRequested || false,
+    });
   } catch (error) {
     console.error("Error in fare estimation:", error);
     res.status(500).json({ error: "Failed to calculate fare estimation" });
   }
 };
+
 async function calculatePickupMetrics(driver: any, pickupLocation: string) {
   const pickupDistance = await calculateDistance(
     `${driver.locationLat},${driver.locationLng}`,
@@ -389,9 +398,13 @@ async function findAndRequestDrivers(ride: any) {
       };
     }
 
+    // Add filter for carrier if requested
+    const filterOptions = ride.carrierRequested ? { hasCarrier: true } : {};
+
     const drivers = await searchAvailableDrivers(
       ride.pickupLocation,
-      currentRadius
+      currentRadius,
+      filterOptions // Pass carrier filter
     );
     const newDrivers = drivers.filter((d) => !attemptedDrivers.has(d.driverId));
 
@@ -654,6 +667,7 @@ export const createRide = async (req: Request, res: Response) => {
     paymentMode,
     isCarRental,
     rentalPackageHours,
+    carrierRequested,
   } = req.body;
 
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
@@ -668,6 +682,8 @@ export const createRide = async (req: Request, res: Response) => {
       paymentMode: paymentMode || PaymentMode.CASH,
       otp: generateOTP().toString(),
       rideType: isCarRental ? RideType.CAR_RENTAL : RideType.LOCAL,
+      carrierRequested: carrierRequested || false,
+      carrierCharge: carrierRequested ? 30 : 0,
     };
 
     if (isCarRental) {
@@ -693,7 +709,7 @@ export const createRide = async (req: Request, res: Response) => {
         isCarRental: true,
         rentalPackageHours,
         rentalPackageKms: packageDetails.km,
-        rentalBasePrice: packageDetails.price,
+        rentalBasePrice: packageDetails.price + rideData.carrierCharge,
         dropLocation: "", // Initially empty for rentals
       };
     } else {
@@ -712,7 +728,7 @@ export const createRide = async (req: Request, res: Response) => {
         ...rideData,
         distance,
         duration,
-        fare: fareDetails.totalFare,
+        fare: fareDetails.totalFare + rideData.carrierCharge,
       };
     }
 
@@ -861,6 +877,7 @@ const calculateWaitingCharges = async (ride: any) => {
     }
   }
 };
+
 export const handleRideCompletion = async (req: Request, res: Response) => {
   const { rideId } = req.params;
   const { finalLocation, actualKmsTravelled, actualMinutes } = req.body;
@@ -913,6 +930,7 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
       finalAmount = rentalCalculation.totalAmount;
     } else {
       finalAmount = calculateFinalAmount(ride);
+      // Ensure carrier charge is included in final amount
       updateData.totalAmount = finalAmount;
     }
 
@@ -925,13 +943,15 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
       },
     });
 
-    // Emit ride completion event
+    // Emit ride completion event with carrier details if applicable
     io.to(ride.userId).emit("ride_completed", {
       rideId: ride.id,
       finalLocation,
       amount: finalAmount,
       paymentMode: ride.paymentMode,
       isCarRental: ride.isCarRental,
+      carrierRequested: ride.carrierRequested,
+      carrierCharge: ride.carrierCharge,
       ...(ride.isCarRental && {
         actualKmsTravelled,
         actualMinutes,
@@ -1183,6 +1203,7 @@ const handleRideCancellation = async (
     res.status(500).json({ error: "Failed to cancel ride" });
   }
 };
+
 // calculateDistance and calculateDuration functions -> Delhi/ncr rides
 
 export const calculateDistance = async (

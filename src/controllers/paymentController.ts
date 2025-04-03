@@ -1,12 +1,12 @@
 // paymentController.ts
-import type { Request, Response } from "express";
 import {
+  PaymentMode,
   PrismaClient,
   RideStatus,
-  PaymentMode,
   TransactionStatus,
   TransactionType,
 } from "@prisma/client";
+import type { Request, Response } from "express";
 import Razorpay from "razorpay";
 import { io } from "../server";
 
@@ -357,6 +357,11 @@ export const verifyPayment = async (req: Request, res: Response) => {
 // Calculate final amount
 export const calculateFinalAmount = (ride: any): number => {
   let finalAmount = ride.fare || 0;
+
+  // Include carrier charge if available
+  if (ride.carrierCharge) {
+    finalAmount += ride.carrierCharge;
+  }
 
   if (ride.extraCharges) {
     finalAmount += ride.extraCharges;
