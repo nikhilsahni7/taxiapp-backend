@@ -35,10 +35,12 @@ export const initiateUserTopUp = async (req: Request, res: Response) => {
       create: { userId: userId, balance: 0, currency: "INR" },
     });
 
+    const receiptId = `tp_${userId.substring(0, 8)}_${Date.now().toString().substring(6)}`;
+
     const orderOptions = {
       amount: Math.round(amount * 100), // Amount in paise
       currency: "INR",
-      receipt: `user_topup_${userId}_${Date.now()}`,
+      receipt: receiptId,
       notes: {
         userId: userId,
         type: "WALLET_TOPUP",
