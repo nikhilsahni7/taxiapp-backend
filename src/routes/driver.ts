@@ -57,6 +57,14 @@ router.get("/:id", verifyToken, async (req: Request, res: Response) => {
         userType: true,
         createdAt: true,
         updatedAt: true,
+        driverDetails: {
+          select: {
+            hasCarrier: true,
+            vehicleNumber: true,
+            vehicleName: true,
+            vehicleCategory: true,
+          },
+        },
       },
     });
 
