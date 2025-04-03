@@ -44,7 +44,8 @@ export const geocodeAddress = async (
 
 export const searchAvailableDrivers = async (
   pickupLocation: string,
-  radius: number
+  radius: number,
+  additionalFilters: Record<string, any> = {}
 ) => {
   const { lat, lng } = await geocodeAddress(pickupLocation);
 
@@ -60,18 +61,27 @@ export const searchAvailableDrivers = async (
         gte: lng - radius / (111 * Math.cos((lat * Math.PI) / 180)),
         lte: lng + radius / (111 * Math.cos((lat * Math.PI) / 180)),
       },
-      // driver: {
-      //   ridesAsDriver: {
-      //     none: {
-      //       status: {
-      //         in: ["ACCEPTED", "DRIVER_ARRIVED", "RIDE_STARTED"],
-      //       },
-      //     },
-      //   },
-      // },
+      driver: {
+        // Apply additional filters (like carrier availability)
+        driverDetails: additionalFilters.hasCarrier
+          ? { hasCarrier: true }
+          : undefined,
+        // Uncomment if you want to exclude drivers on other rides
+        // ridesAsDriver: {
+        //   none: {
+        //     status: {
+        //       in: ["ACCEPTED", "DRIVER_ARRIVED", "RIDE_STARTED"],
+        //     },
+        //   },
+        // },
+      },
     },
     include: {
-      driver: true,
+      driver: {
+        include: {
+          driverDetails: true,
+        },
+      },
     },
     orderBy: [
       {
@@ -83,7 +93,7 @@ export const searchAvailableDrivers = async (
     ],
   });
 
-  console.log(drivers);
+  console.log("Found drivers:", drivers.length);
 
   // Calculate exact distance for each driver
   const driversWithDistance = await Promise.all(
@@ -92,7 +102,13 @@ export const searchAvailableDrivers = async (
         `${driver.locationLat},${driver.locationLng}`,
         pickupLocation
       );
-      return { ...driver, distance };
+      return {
+        driverId: driver.driverId,
+        distance,
+        locationLat: driver.locationLat,
+        locationLng: driver.locationLng,
+        driverDetails: driver.driver.driverDetails,
+      };
     })
   );
 

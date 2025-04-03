@@ -1,18 +1,18 @@
-import type { Request, Response } from "express";
 import {
-  PrismaClient,
-  RideStatus,
+  CancelledBy,
   PaymentMode,
   Prisma,
-  CancelledBy,
+  PrismaClient,
+  RideStatus,
   TransactionStatus,
   TransactionType,
 } from "@prisma/client";
-import { searchAvailableDrivers } from "../lib/driverService";
-import { calculateDistance, calculateDuration } from "./rideController";
-import { getCoordinatesAndAddress } from "../lib/locationService";
-import Razorpay from "razorpay";
 import crypto from "crypto";
+import type { Request, Response } from "express";
+import Razorpay from "razorpay";
+import { searchAvailableDrivers } from "../lib/driverService";
+import { getCoordinatesAndAddress } from "../lib/locationService";
+import { calculateDistance, calculateDuration } from "./rideController";
 
 const prisma = new PrismaClient();
 const razorpay = new Razorpay({
@@ -79,7 +79,7 @@ const EXTRA_MINUTE_RATE = 2;
 
 // Create a new car rental booking
 export const createCarRental = async (req: Request, res: Response) => {
-  const { carCategory, packageHours, paymentMode } = req.body;
+  const { carCategory, packageHours, paymentMode, carrierRequested } = req.body;
   let { pickupLocation, pickupLat, pickupLng } = req.body;
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
 
@@ -101,7 +101,11 @@ export const createCarRental = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid package selected" });
     }
 
-    // Create rental booking with coordinates
+    // Calculate carrier charge if requested
+    const carrierCharge = carrierRequested ? 30 : 0;
+    const totalBasePrice = packageDetails.price + carrierCharge;
+
+    // Create rental booking with coordinates and carrier option
     const rental = await prisma.ride.create({
       data: {
         userId: req.user.userId,
@@ -114,13 +118,15 @@ export const createCarRental = async (req: Request, res: Response) => {
         isCarRental: true,
         rentalPackageHours: packageHours,
         rentalPackageKms: packageDetails.km,
-        rentalBasePrice: packageDetails.price,
+        rentalBasePrice: totalBasePrice,
+        carrierRequested: carrierRequested || false,
+        carrierCharge: carrierCharge,
         dropLocation: "", // not needed for car rental
         otp: Math.floor(1000 + Math.random() * 9000).toString(),
       },
     });
 
-    // Start driver search process
+    // Start driver search process with carrier filter if required
     const searchResult = await findDriversForRental(rental);
 
     return res.status(201).json({
@@ -198,10 +204,15 @@ async function findDriversForRental(rental: any) {
   const attemptedDrivers = new Set<string>();
 
   while (currentRadius <= maxRadius) {
+    // Include carrier filter if requested
+    const filterOptions = rental.carrierRequested ? { hasCarrier: true } : {};
+
     const drivers = await searchAvailableDrivers(
       `${rental.pickupLat},${rental.pickupLng}`,
-      currentRadius
+      currentRadius,
+      filterOptions
     );
+
     const newDrivers = drivers.filter((d) => !attemptedDrivers.has(d.driverId));
 
     if (newDrivers.length > 0) {
@@ -250,7 +261,9 @@ async function findDriversForRental(rental: any) {
 
   return {
     success: false,
-    message: "No drivers found",
+    message: rental.carrierRequested
+      ? "No drivers with carrier available"
+      : "No drivers found",
     driversCount: 0,
   };
 }
@@ -537,8 +550,11 @@ export const requestEndRental = async (req: Request, res: Response) => {
     );
     const extraMinuteCharges = Math.round(extraMinutes * EXTRA_MINUTE_RATE);
 
+    // Include carrier charge in the breakdown but not in additional calculation since it's already in base price
+    const carrierCharge = rental.carrierCharge || 0;
+    const basePrice = (rental.rentalBasePrice || 0) - carrierCharge;
     const totalAmount =
-      (rental.rentalBasePrice || 0) + extraKmCharges + extraMinuteCharges;
+      basePrice + extraKmCharges + extraMinuteCharges + carrierCharge;
 
     if (rental.paymentMode === PaymentMode.CASH) {
       // Update rental status to wait for driver's cash confirmation
@@ -560,7 +576,8 @@ export const requestEndRental = async (req: Request, res: Response) => {
         rental: updatedRental,
         message: "Waiting for cash payment confirmation",
         charges: {
-          basePrice: rental.rentalBasePrice,
+          basePrice: basePrice,
+          carrierCharge: carrierCharge,
           extraKmCharges,
           extraMinuteCharges,
           totalAmount,
@@ -617,7 +634,8 @@ export const requestEndRental = async (req: Request, res: Response) => {
           amount: totalAmount,
         },
         charges: {
-          basePrice: rental.rentalBasePrice,
+          basePrice: basePrice,
+          carrierCharge: carrierCharge,
           extraKmCharges,
           extraMinuteCharges,
           totalAmount,

@@ -1,18 +1,18 @@
+import { PrismaClient } from "@prisma/client";
 import type { Request, Response } from "express";
 import express from "express";
-import { PrismaClient } from "@prisma/client";
 import multer from "multer";
 
-import { verifyToken } from "../middlewares/auth";
-import {
-  getDriverRideHistory,
-  getDriverCurrentRide,
-} from "../controllers/driverController";
 import { uploadImage } from "../config/cloudinary";
+import {
+  getDriverCurrentRide,
+  getDriverRideHistory,
+} from "../controllers/driverController";
+import { verifyToken } from "../middlewares/auth";
+import { io } from "../server";
 
 const router = express.Router();
 const prisma = new PrismaClient();
-import { io } from "../server";
 
 const upload = multer();
 
@@ -78,7 +78,7 @@ router.put(
   async (req: Request, res: Response) => {
     try {
       const driverId = req.params.id;
-      const { name, email, state, city } = req.body;
+      const { name, email, state, city, hasCarrier } = req.body;
 
       let selfieUrl;
 
@@ -88,29 +88,59 @@ router.put(
         selfieUrl = await uploadImage(req.file.buffer);
       }
 
-      const updatedDriver = await prisma.user.update({
-        where: { id: driverId },
-        data: {
-          name,
-          email,
-          state,
-          city,
-          ...(selfieUrl && { selfieUrl }), // Only update selfieUrl if a new image was uploaded
-        },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          phone: true,
-          selfieUrl: true,
-          state: true,
-          city: true,
-          userType: true,
-          updatedAt: true,
-        },
-      });
+      // Begin transaction to update both user and driver details
+      const [updatedDriver, updatedDriverDetails] = await prisma.$transaction([
+        prisma.user.update({
+          where: { id: driverId },
+          data: {
+            name,
+            email,
+            state,
+            city,
+            ...(selfieUrl && { selfieUrl }), // Only update selfieUrl if a new image was uploaded
+          },
+          select: {
+            id: true,
+            name: true,
+            email: true,
+            phone: true,
+            selfieUrl: true,
+            state: true,
+            city: true,
+            userType: true,
+            updatedAt: true,
+          },
+        }),
 
-      res.json(updatedDriver);
+        // Update driver details if hasCarrier is provided
+        hasCarrier !== undefined
+          ? prisma.driverDetails.update({
+              where: { userId: driverId },
+              data: {
+                hasCarrier: hasCarrier === "true" || hasCarrier === true,
+              },
+              select: {
+                hasCarrier: true,
+                vehicleCategory: true,
+                vehicleName: true,
+                vehicleNumber: true,
+              },
+            })
+          : prisma.driverDetails.findUnique({
+              where: { userId: driverId },
+              select: {
+                hasCarrier: true,
+                vehicleCategory: true,
+                vehicleName: true,
+                vehicleNumber: true,
+              },
+            }),
+      ]);
+
+      res.json({
+        ...updatedDriver,
+        driverDetails: updatedDriverDetails,
+      });
     } catch (error) {
       console.error("Error updating driver:", error);
       res.status(500).json({ error: "Failed to update driver" });

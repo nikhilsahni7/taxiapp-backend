@@ -250,6 +250,10 @@ model Ride {
   pickupLat        Float?
   pickupLng        Float?
   pickupAddress    String?   // Store formatted address
+
+  // New fields for carrier option
+  carrierRequested Boolean @default(false)
+  carrierCharge    Float   @default(0)
 }
 
 // Existing models remain unchanged
@@ -273,6 +277,7 @@ model DriverDetails {
   permitUrls      String[]
   carFrontUrl     String?
   carBackUrl      String?
+  hasCarrier      Boolean  @default(false) // New field for carrier option
 
 
   rcUrl           String?
