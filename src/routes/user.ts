@@ -1,16 +1,15 @@
-import type { Request, Response } from "express";
 import {
   LongDistanceBookingStatus,
   LongDistanceServiceType,
   PrismaClient,
   RideStatus,
-  RideType,
 } from "@prisma/client";
+import type { Request, Response } from "express";
 import express from "express";
 
-import { verifyToken } from "../middlewares/auth";
 import multer from "multer";
 import { uploadImage } from "../config/cloudinary";
+import { verifyToken } from "../middlewares/auth";
 
 const router = express.Router();
 
@@ -160,23 +159,32 @@ router.get("/:id/rides", verifyToken, async (req: Request, res: Response) => {
 
     // Get service filter from query params
     const serviceFilter = req.query.service as string | undefined;
-    const rideType = req.query.rideType as RideType | undefined;
 
-    // Build filter conditions for local rides
+    // Build filter conditions for local rides (city ride and car rental)
     const localRideFilter: any = { userId };
-    if (rideType) {
-      localRideFilter.rideType = rideType;
-    }
 
     // Build filter conditions for long distance rides
     const longDistanceFilter: any = { userId };
     if (
-      serviceFilter &&
-      Object.values(LongDistanceServiceType).includes(
-        serviceFilter as LongDistanceServiceType
-      )
+      serviceFilter === "OUTSTATION" ||
+      serviceFilter === "HILL_STATION" ||
+      serviceFilter === "CHARDHAM_YATRA" ||
+      serviceFilter === "ALL_INDIA_TOUR"
     ) {
-      longDistanceFilter.serviceType = serviceFilter;
+      longDistanceFilter.serviceType = serviceFilter as LongDistanceServiceType;
+    }
+
+    // Specific filters for car rental and city ride
+    let carRentalFilter = {};
+    let cityRideFilter = {};
+
+    if (serviceFilter === "CAR_RENTAL") {
+      carRentalFilter = { isCarRental: true };
+      localRideFilter.isCarRental = true;
+    } else if (serviceFilter === "CITY_RIDE") {
+      cityRideFilter = { isCarRental: false, rideType: "LOCAL" };
+      localRideFilter.isCarRental = false;
+      localRideFilter.rideType = "LOCAL";
     }
 
     // Get local rides with full details
@@ -265,66 +273,137 @@ router.get("/:id/rides", verifyToken, async (req: Request, res: Response) => {
       },
     });
 
-    // Transform rides to include service type information
-    const formattedLocalRides = localRides.map((ride) => ({
-      ...ride,
-      serviceCategory: "LOCAL",
-      serviceType: ride.rideType,
-      isCarRental: ride.isCarRental,
-      rentalDetails: ride.isCarRental
-        ? {
-            packageHours: ride.rentalPackageHours,
-            packageKms: ride.rentalPackageKms,
-            basePrice: ride.rentalBasePrice,
-            actualKmsTravelled: ride.actualKmsTravelled,
-            actualMinutes: ride.actualMinutes,
-            extraKmCharges: ride.extraKmCharges,
-            extraMinuteCharges: ride.extraMinuteCharges,
-          }
-        : null,
-      outstationDetails:
-        ride.rideType === "OUTSTATION"
-          ? {
-              tripType: ride.outstationType,
-            }
-          : null,
-    }));
+    // Transform and categorize rides
+    const cityRides = localRides
+      .filter((ride) => !ride.isCarRental && ride.rideType === "LOCAL")
+      .map((ride) => ({
+        ...ride,
+        serviceCategory: "LOCAL",
+        serviceType: "CITY_RIDE",
+      }));
 
-    const formattedLongDistanceRides = longDistanceRides.map((ride) => ({
-      ...ride,
-      serviceCategory: "LONG_DISTANCE",
-      serviceType: ride.serviceType,
-      tripDetails: {
-        startDate: ride.startDate,
-        endDate: ride.endDate,
-        totalDays: ride.totalDays,
-        tripType: ride.tripType,
-        advanceAmount: ride.advanceAmount,
-        remainingAmount: ride.remainingAmount,
-      },
-    }));
+    const carRentalRides = localRides
+      .filter((ride) => ride.isCarRental)
+      .map((ride) => ({
+        ...ride,
+        serviceCategory: "LOCAL",
+        serviceType: "CAR_RENTAL",
+        rentalDetails: {
+          packageHours: ride.rentalPackageHours,
+          packageKms: ride.rentalPackageKms,
+          basePrice: ride.rentalBasePrice,
+          actualKmsTravelled: ride.actualKmsTravelled,
+          actualMinutes: ride.actualMinutes,
+          extraKmCharges: ride.extraKmCharges,
+          extraMinuteCharges: ride.extraMinuteCharges,
+        },
+      }));
+
+    const outstationRides = longDistanceRides
+      .filter((ride) => ride.serviceType === "OUTSTATION")
+      .map((ride) => ({
+        ...ride,
+        serviceCategory: "LONG_DISTANCE",
+        serviceType: "OUTSTATION",
+        tripDetails: {
+          startDate: ride.startDate,
+          endDate: ride.endDate,
+          totalDays: ride.totalDays,
+          tripType: ride.tripType,
+          advanceAmount: ride.advanceAmount,
+          remainingAmount: ride.remainingAmount,
+        },
+      }));
+
+    const hillStationRides = longDistanceRides
+      .filter((ride) => ride.serviceType === "HILL_STATION")
+      .map((ride) => ({
+        ...ride,
+        serviceCategory: "LONG_DISTANCE",
+        serviceType: "HILL_STATION",
+        tripDetails: {
+          startDate: ride.startDate,
+          endDate: ride.endDate,
+          totalDays: ride.totalDays,
+          tripType: ride.tripType,
+          advanceAmount: ride.advanceAmount,
+          remainingAmount: ride.remainingAmount,
+        },
+      }));
+
+    const chardhamRides = longDistanceRides
+      .filter((ride) => ride.serviceType === "CHARDHAM_YATRA")
+      .map((ride) => ({
+        ...ride,
+        serviceCategory: "LONG_DISTANCE",
+        serviceType: "CHARDHAM_YATRA",
+        tripDetails: {
+          startDate: ride.startDate,
+          endDate: ride.endDate,
+          totalDays: ride.totalDays,
+          tripType: ride.tripType,
+          advanceAmount: ride.advanceAmount,
+          remainingAmount: ride.remainingAmount,
+        },
+      }));
+
+    const allIndiaRides = longDistanceRides
+      .filter((ride) => ride.serviceType === "ALL_INDIA_TOUR")
+      .map((ride) => ({
+        ...ride,
+        serviceCategory: "LONG_DISTANCE",
+        serviceType: "ALL_INDIA_TOUR",
+        tripDetails: {
+          startDate: ride.startDate,
+          endDate: ride.endDate,
+          totalDays: ride.totalDays,
+          tripType: ride.tripType,
+          advanceAmount: ride.advanceAmount,
+          remainingAmount: ride.remainingAmount,
+        },
+      }));
 
     // Combine all rides
     const allRides = {
-      localRides: formattedLocalRides,
-      longDistanceRides: formattedLongDistanceRides,
+      cityRides,
+      carRentalRides,
+      outstationRides,
+      hillStationRides,
+      chardhamRides,
+      allIndiaRides,
     };
 
-    // If a specific service filter is applied, return only that service
-    if (serviceFilter === "LOCAL" || rideType) {
-      return res.json({ rides: formattedLocalRides });
-    } else if (
-      serviceFilter === "LONG_DISTANCE" ||
-      [
-        "OUTSTATION",
-        "HILL_STATION",
-        "CHARDHAM_YATRA",
-        "ALL_INDIA_TOUR",
-      ].includes(serviceFilter || "")
-    ) {
-      return res.json({ rides: formattedLongDistanceRides });
+    // Return filtered results based on service type
+    if (serviceFilter === "CITY_RIDE") {
+      return res.json({ rides: cityRides });
+    } else if (serviceFilter === "CAR_RENTAL") {
+      return res.json({ rides: carRentalRides });
+    } else if (serviceFilter === "OUTSTATION") {
+      return res.json({ rides: outstationRides });
+    } else if (serviceFilter === "HILL_STATION") {
+      return res.json({ rides: hillStationRides });
+    } else if (serviceFilter === "CHARDHAM_YATRA") {
+      return res.json({ rides: chardhamRides });
+    } else if (serviceFilter === "ALL_INDIA_TOUR") {
+      return res.json({ rides: allIndiaRides });
+    } else if (serviceFilter === "LONG_DISTANCE") {
+      // Return all long distance rides combined
+      return res.json({
+        rides: [
+          ...outstationRides,
+          ...hillStationRides,
+          ...chardhamRides,
+          ...allIndiaRides,
+        ],
+      });
+    } else if (serviceFilter === "LOCAL") {
+      // Return all local rides combined
+      return res.json({
+        rides: [...cityRides, ...carRentalRides],
+      });
     }
 
+    // Return all rides if no specific filter is applied
     res.json(allRides);
   } catch (error) {
     console.error("Error fetching rides:", error);
@@ -437,8 +516,6 @@ router.put(
     }
   }
 );
-
-// Add this to your existing user router
 
 // Get recent rides for a user
 router.get(

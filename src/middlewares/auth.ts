@@ -1,4 +1,4 @@
-import type { Request, Response, NextFunction } from "express";
+import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 
 interface TokenPayload {
@@ -19,11 +19,12 @@ export const verifyToken = (
   req: Request,
   res: Response,
   next: NextFunction
-) => {
+): void => {
   const token = req.headers.authorization?.split(" ")[1];
 
   if (!token) {
-    return res.status(401).json({ error: "No token provided" });
+    res.status(401).json({ error: "No token provided" });
+    return;
   }
 
   try {
@@ -39,11 +40,12 @@ export const verifyAdmin = (
   req: Request,
   res: Response,
   next: NextFunction
-) => {
+): void => {
   const token = req.headers.authorization?.split(" ")[1];
 
   if (!token) {
-    return res.status(401).json({ error: "No token provided" });
+    res.status(401).json({ error: "No token provided" });
+    return;
   }
 
   try {
@@ -51,7 +53,8 @@ export const verifyAdmin = (
 
     // Check if user is an admin
     if (decoded.userType !== "ADMIN") {
-      return res.status(403).json({ error: "Access denied. Admin only." });
+      res.status(403).json({ error: "Access denied. Admin only." });
+      return;
     }
 
     req.user = decoded;
