@@ -90,11 +90,31 @@ export const getCachedDistanceAndDuration = async (
     return distanceCache.get(cacheKey)!;
   }
 
+  // Log the request coordinates for debugging
+  console.log(
+    `Distance calculation request for: ${JSON.stringify({ pickup, drop })}`
+  );
+
   try {
     // First attempt: Try with Google Distance Matrix API
     const response = await axios.get(
       `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${pickup.lat},${pickup.lng}&destinations=${drop.lat},${drop.lng}&key=${GOOGLE_MAPS_API_KEY}`
     );
+
+    // Log the Google API response for debugging
+    console.log(
+      `Google Distance Matrix API response status: ${response.data.status}`
+    );
+    if (
+      response.data.rows &&
+      response.data.rows[0] &&
+      response.data.rows[0].elements &&
+      response.data.rows[0].elements[0]
+    ) {
+      console.log(
+        `Element status: ${response.data.rows[0].elements[0].status}`
+      );
+    }
 
     if (
       response.data.status === "OK" &&
@@ -109,14 +129,22 @@ export const getCachedDistanceAndDuration = async (
         ),
       };
 
+      console.log(
+        `Google API success - distance: ${result.distance}km, duration: ${result.duration}min`
+      );
       distanceCache.set(cacheKey, result);
       return result;
     }
 
     // Second attempt: Try with alternative API endpoint
     try {
+      console.log("First API attempt failed, trying Directions API...");
       const altResponse = await axios.get(
         `https://maps.googleapis.com/maps/api/directions/json?origin=${pickup.lat},${pickup.lng}&destination=${drop.lat},${drop.lng}&key=${GOOGLE_MAPS_API_KEY}`
+      );
+
+      console.log(
+        `Google Directions API response status: ${altResponse.data.status}`
       );
 
       if (altResponse.data.status === "OK" && altResponse.data.routes?.[0]) {
@@ -126,6 +154,9 @@ export const getCachedDistanceAndDuration = async (
         );
         const duration = Math.ceil(route.legs[0].duration.value / 60);
         const result = { distance, duration };
+        console.log(
+          `Directions API success - distance: ${result.distance}km, duration: ${result.duration}min`
+        );
         distanceCache.set(cacheKey, result);
         return result;
       }
@@ -133,50 +164,111 @@ export const getCachedDistanceAndDuration = async (
       console.warn("Alternative API attempt failed:", altError);
     }
 
+    // Check for specific mountain route pairs
+    const specificRouteResult = getSpecificMountainRoute(pickup, drop);
+    if (specificRouteResult) {
+      console.log(
+        `Using specific mountain route data: ${JSON.stringify(specificRouteResult)}`
+      );
+      distanceCache.set(cacheKey, specificRouteResult);
+      return specificRouteResult;
+    }
+
     // Final fallback: Use haversine with adjusted factors for hilly terrain
     const haversineDistance = calculateHaversineDistance(pickup, drop);
-    const isHillyTerrain = isHillyRegion(pickup) || isHillyRegion(drop);
+    const isHillyTerrain = isHillyRegion(pickup, drop);
 
-    // Adjust distance and duration for hilly terrain
-    const adjustedDistance = isHillyTerrain
-      ? haversineDistance * 1.3
-      : haversineDistance;
-    const adjustedDuration = isHillyTerrain
-      ? Math.ceil(adjustedDistance * 2.5) // More time for hilly terrain
-      : Math.ceil(adjustedDistance * 2); // Standard time for flat terrain
+    // Enhanced distance adjustment based on terrain
+    let adjustedDistance = haversineDistance;
+    let adjustedDuration = 0;
+
+    if (isHillyTerrain === "high_mountains") {
+      // High mountain regions need more significant adjustments
+      adjustedDistance = haversineDistance * 1.5; // 50% longer due to winding roads
+      adjustedDuration = Math.ceil(adjustedDistance * 3); // Much slower in high mountains
+    } else if (isHillyTerrain === "hilly") {
+      // Normal hilly regions
+      adjustedDistance = haversineDistance * 1.3;
+      adjustedDuration = Math.ceil(adjustedDistance * 2.5);
+    } else {
+      // Flat terrain
+      adjustedDistance = haversineDistance;
+      adjustedDuration = Math.ceil(adjustedDistance * 2);
+    }
 
     const result = {
       distance: Number(adjustedDistance.toFixed(2)),
       duration: adjustedDuration,
     };
+
+    console.log(
+      `Using adjusted haversine - terrain type: ${isHillyTerrain}, distance: ${result.distance}km, duration: ${result.duration}min`
+    );
     distanceCache.set(cacheKey, result);
     return result;
   } catch (error) {
     console.error("Error calculating distance and duration:", error);
 
+    // Check for specific mountain route pairs even in error case
+    const specificRouteResult = getSpecificMountainRoute(pickup, drop);
+    if (specificRouteResult) {
+      console.log(
+        `Using specific mountain route data after error: ${JSON.stringify(specificRouteResult)}`
+      );
+      distanceCache.set(cacheKey, specificRouteResult);
+      return specificRouteResult;
+    }
+
     // Fallback to haversine with terrain adjustment
     const haversineDistance = calculateHaversineDistance(pickup, drop);
-    const isHillyTerrain = isHillyRegion(pickup) || isHillyRegion(drop);
+    const isHillyTerrain = isHillyRegion(pickup, drop);
 
-    const adjustedDistance = isHillyTerrain
-      ? haversineDistance * 1.3
-      : haversineDistance;
-    const adjustedDuration = isHillyTerrain
-      ? Math.ceil(adjustedDistance * 2.5)
-      : Math.ceil(adjustedDistance * 2);
+    // Enhanced distance adjustment based on terrain
+    let adjustedDistance = haversineDistance;
+    let adjustedDuration = 0;
+
+    if (isHillyTerrain === "high_mountains") {
+      adjustedDistance = haversineDistance * 1.5;
+      adjustedDuration = Math.ceil(adjustedDistance * 3);
+    } else if (isHillyTerrain === "hilly") {
+      adjustedDistance = haversineDistance * 1.3;
+      adjustedDuration = Math.ceil(adjustedDistance * 2.5);
+    } else {
+      adjustedDistance = haversineDistance;
+      adjustedDuration = Math.ceil(adjustedDistance * 2);
+    }
 
     const result = {
       distance: Number(adjustedDistance.toFixed(2)),
       duration: adjustedDuration,
     };
+
+    console.log(
+      `Using adjusted haversine after error - terrain type: ${isHillyTerrain}, distance: ${result.distance}km, duration: ${result.duration}min`
+    );
     distanceCache.set(cacheKey, result);
     return result;
   }
 };
 
-// Helper function to check if a location is in a hilly region
-function isHillyRegion(location: LatLng): boolean {
-  // Define approximate boundaries of hilly regions in India
+// Enhanced function to detect mountain regions with more granularity
+function isHillyRegion(
+  pickup: LatLng,
+  drop: LatLng
+): "flat" | "hilly" | "high_mountains" {
+  // Define specific high mountain regions
+  const highMountainRegions = [
+    // Nainital and surrounding areas
+    { minLat: 29.1, maxLat: 29.5, minLng: 79.2, maxLng: 79.7 },
+    // Mussoorie and surrounding areas
+    { minLat: 30.3, maxLat: 30.6, minLng: 77.9, maxLng: 78.2 },
+    // Shimla region
+    { minLat: 30.9, maxLat: 31.2, minLng: 77.0, maxLng: 77.4 },
+    // Darjeeling region
+    { minLat: 26.9, maxLat: 27.2, minLng: 88.1, maxLng: 88.4 },
+  ];
+
+  // Define general hilly regions
   const hillyRegions = [
     // Uttarakhand region
     { minLat: 28.5, maxLat: 31.5, minLng: 77.5, maxLng: 80.5 },
@@ -188,11 +280,85 @@ function isHillyRegion(location: LatLng): boolean {
     { minLat: 22.0, maxLat: 28.0, minLng: 89.0, maxLng: 97.0 },
   ];
 
-  return hillyRegions.some(
-    (region) =>
-      location.lat >= region.minLat &&
-      location.lat <= region.maxLat &&
-      location.lng >= region.minLng &&
-      location.lng <= region.maxLng
+  // Check if either pickup or drop is in a high mountain region
+  const isHighMountain = [pickup, drop].some((loc) =>
+    highMountainRegions.some(
+      (region) =>
+        loc.lat >= region.minLat &&
+        loc.lat <= region.maxLat &&
+        loc.lng >= region.minLng &&
+        loc.lng <= region.maxLng
+    )
   );
+
+  if (isHighMountain) {
+    return "high_mountains";
+  }
+
+  // Check if either pickup or drop is in a hilly region
+  const isHilly = [pickup, drop].some((loc) =>
+    hillyRegions.some(
+      (region) =>
+        loc.lat >= region.minLat &&
+        loc.lat <= region.maxLat &&
+        loc.lng >= region.minLng &&
+        loc.lng <= region.maxLng
+    )
+  );
+
+  return isHilly ? "hilly" : "flat";
+}
+
+// Function to handle specific mountain routes that need exact values
+function getSpecificMountainRoute(
+  pickup: LatLng,
+  drop: LatLng
+): { distance: number; duration: number } | null {
+  // Define specific problematic mountain routes with exact distances and durations
+  const specificRoutes = [
+    // Haldwani to Nainital
+    {
+      pickup: { lat: 29.2208, lng: 79.5286, radius: 0.1 }, // Haldwani
+      drop: { lat: 29.3919, lng: 79.4542, radius: 0.1 }, // Nainital
+      distance: 35,
+      duration: 90,
+    },
+    // Dehradun to Mussoorie
+    {
+      pickup: { lat: 30.3165, lng: 78.0322, radius: 0.1 }, // Dehradun
+      drop: { lat: 30.4598, lng: 78.064, radius: 0.1 }, // Mussoorie
+      distance: 35,
+      duration: 90,
+    },
+    // Can add more specific routes here as needed
+  ];
+
+  // Check if the route matches any specific route (in either direction)
+  for (const route of specificRoutes) {
+    if (
+      (isPointInRadius(pickup, route.pickup, route.pickup.radius) &&
+        isPointInRadius(drop, route.drop, route.drop.radius)) ||
+      (isPointInRadius(pickup, route.drop, route.drop.radius) &&
+        isPointInRadius(drop, route.pickup, route.pickup.radius))
+    ) {
+      return {
+        distance: route.distance,
+        duration: route.duration,
+      };
+    }
+  }
+
+  return null;
+}
+
+// Helper function to check if a point is within a radius of another point
+function isPointInRadius(
+  point: LatLng,
+  center: LatLng & { radius: number },
+  radiusOverride?: number
+): boolean {
+  const radius = radiusOverride || center.radius;
+  const latDiff = Math.abs(point.lat - center.lat);
+  const lngDiff = Math.abs(point.lng - center.lng);
+  return latDiff <= radius && lngDiff <= radius;
 }
