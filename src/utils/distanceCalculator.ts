@@ -91,11 +91,15 @@ export const getCachedDistanceAndDuration = async (
   }
 
   try {
+    // First attempt: Try with Google Distance Matrix API
     const response = await axios.get(
       `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${pickup.lat},${pickup.lng}&destinations=${drop.lat},${drop.lng}&key=${GOOGLE_MAPS_API_KEY}`
     );
 
-    if (response.data.status === "OK") {
+    if (
+      response.data.status === "OK" &&
+      response.data.rows?.[0]?.elements?.[0]?.status === "OK"
+    ) {
       const result = {
         distance: Number(
           (response.data.rows[0].elements[0].distance.value / 1000).toFixed(2)
@@ -108,11 +112,87 @@ export const getCachedDistanceAndDuration = async (
       distanceCache.set(cacheKey, result);
       return result;
     }
-    throw new Error("Invalid response from Google Distance Matrix API");
+
+    // Second attempt: Try with alternative API endpoint
+    try {
+      const altResponse = await axios.get(
+        `https://maps.googleapis.com/maps/api/directions/json?origin=${pickup.lat},${pickup.lng}&destination=${drop.lat},${drop.lng}&key=${GOOGLE_MAPS_API_KEY}`
+      );
+
+      if (altResponse.data.status === "OK" && altResponse.data.routes?.[0]) {
+        const route = altResponse.data.routes[0];
+        const distance = Number(
+          (route.legs[0].distance.value / 1000).toFixed(2)
+        );
+        const duration = Math.ceil(route.legs[0].duration.value / 60);
+        const result = { distance, duration };
+        distanceCache.set(cacheKey, result);
+        return result;
+      }
+    } catch (altError) {
+      console.warn("Alternative API attempt failed:", altError);
+    }
+
+    // Final fallback: Use haversine with adjusted factors for hilly terrain
+    const haversineDistance = calculateHaversineDistance(pickup, drop);
+    const isHillyTerrain = isHillyRegion(pickup) || isHillyRegion(drop);
+
+    // Adjust distance and duration for hilly terrain
+    const adjustedDistance = isHillyTerrain
+      ? haversineDistance * 1.3
+      : haversineDistance;
+    const adjustedDuration = isHillyTerrain
+      ? Math.ceil(adjustedDistance * 2.5) // More time for hilly terrain
+      : Math.ceil(adjustedDistance * 2); // Standard time for flat terrain
+
+    const result = {
+      distance: Number(adjustedDistance.toFixed(2)),
+      duration: adjustedDuration,
+    };
+    distanceCache.set(cacheKey, result);
+    return result;
   } catch (error) {
     console.error("Error calculating distance and duration:", error);
-    const distance = calculateHaversineDistance(pickup, drop);
-    const duration = Math.ceil(distance * 2);
-    return { distance, duration };
+
+    // Fallback to haversine with terrain adjustment
+    const haversineDistance = calculateHaversineDistance(pickup, drop);
+    const isHillyTerrain = isHillyRegion(pickup) || isHillyRegion(drop);
+
+    const adjustedDistance = isHillyTerrain
+      ? haversineDistance * 1.3
+      : haversineDistance;
+    const adjustedDuration = isHillyTerrain
+      ? Math.ceil(adjustedDistance * 2.5)
+      : Math.ceil(adjustedDistance * 2);
+
+    const result = {
+      distance: Number(adjustedDistance.toFixed(2)),
+      duration: adjustedDuration,
+    };
+    distanceCache.set(cacheKey, result);
+    return result;
   }
 };
+
+// Helper function to check if a location is in a hilly region
+function isHillyRegion(location: LatLng): boolean {
+  // Define approximate boundaries of hilly regions in India
+  const hillyRegions = [
+    // Uttarakhand region
+    { minLat: 28.5, maxLat: 31.5, minLng: 77.5, maxLng: 80.5 },
+    // Himachal Pradesh region
+    { minLat: 30.5, maxLat: 33.5, minLng: 75.5, maxLng: 78.5 },
+    // Jammu & Kashmir region
+    { minLat: 32.5, maxLat: 35.5, minLng: 73.5, maxLng: 76.5 },
+    // North Eastern states
+    { minLat: 22.0, maxLat: 28.0, minLng: 89.0, maxLng: 97.0 },
+  ];
+
+  return hillyRegions.some(
+    (region) =>
+      location.lat >= region.minLat &&
+      location.lat <= region.maxLat &&
+      location.lng >= region.minLng &&
+      location.lng <= region.maxLng
+  );
+}
