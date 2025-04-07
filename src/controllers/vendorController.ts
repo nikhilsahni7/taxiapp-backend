@@ -1511,13 +1511,9 @@ export const autoCancelPendingBookings = async () => {
     const now = new Date();
 
     // Find all pending bookings that haven't been accepted by a driver
-    // and whose start date + pickup time is in the past
     const pendingBookings = await prisma.vendorBooking.findMany({
       where: {
         status: VendorBookingStatus.PENDING,
-        startDate: {
-          lt: now,
-        },
       },
     });
 
@@ -1535,8 +1531,15 @@ export const autoCancelPendingBookings = async () => {
       const pickupDateTime = new Date(booking.startDate);
       pickupDateTime.setHours(hours, minutes, 0, 0);
 
-      // If pickup time has passed, add to cancel list
-      if (pickupDateTime < now) {
+      // Add a buffer of 30 minutes after pickup time before auto-cancelling
+      const bufferTime = new Date(pickupDateTime);
+      bufferTime.setMinutes(bufferTime.getMinutes() + 30);
+
+      // If pickup time (with buffer) has passed, add to cancel list
+      if (bufferTime < now) {
+        console.log(
+          `Booking ${booking.id} scheduled for ${pickupDateTime.toISOString()} will be cancelled`
+        );
         bookingsToCancel.push(booking.id);
       }
     }
@@ -1565,7 +1568,7 @@ export const autoCancelPendingBookings = async () => {
     return { autoCancel: true, count: bookingsToCancel.length };
   } catch (error) {
     console.error("Error auto-cancelling bookings:", error);
-    return { autoCancel: false, error: error.message };
+    return { autoCancel: false, error: (error as Error).message };
   }
 };
 
