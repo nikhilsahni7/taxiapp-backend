@@ -448,7 +448,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
   const { bookingId } = req.params;
   const { reason } = req.body;
 
-  if (!req.user?.userId) {
+  if (!req.user?.userId || !req.user?.userType) {
     return res.status(401).json({ error: "User not authenticated" });
   }
 
@@ -481,6 +481,8 @@ export const cancelBooking = async (req: Request, res: Response) => {
         data: {
           status: "CANCELLED",
           cancelReason: reason,
+          cancelledBy: req.user!.userType === "USER" ? "USER" : "DRIVER",
+          cancelledAt: new Date(),
         },
       });
 
@@ -493,38 +495,40 @@ export const cancelBooking = async (req: Request, res: Response) => {
        * the cancellation fee logic is bypassed.
        */
       if (booking.status !== "PENDING" && booking.driverId) {
-        // Create a transaction record for the cancellation fee.
+        // Determine who is cancelling and who should receive the fee
+        const isUserCancelling = req.user!.userId === booking.userId;
+        const senderId = isUserCancelling ? booking.userId : booking.driverId;
+        const receiverId = isUserCancelling ? booking.driverId : booking.userId;
+
+        // Get sender's wallet
+        const senderWallet = await tx.wallet.upsert({
+          where: { userId: senderId },
+          create: { userId: senderId, balance: -cancellationFee },
+          update: { balance: { decrement: cancellationFee } },
+        });
+
+        // Get or create receiver's wallet
+        const receiverWallet = await tx.wallet.upsert({
+          where: { userId: receiverId },
+          create: { userId: receiverId, balance: cancellationFee },
+          update: { balance: { increment: cancellationFee } },
+        });
+
+        // Create transaction record for the cancellation fee
         await tx.longDistanceTransaction.create({
           data: {
             bookingId,
             amount: cancellationFee,
             type: "REFUND",
             status: "COMPLETED",
-            senderId: req.user?.userId,
-            receiverId:
-              req.user?.userId === booking.userId
-                ? booking.driverId
-                : booking.userId,
-            description: "Cancellation fee",
-          },
-        });
-
-        // Determine the receiving party and update (or create) their wallet.
-        const receiverId =
-          req.user?.userId === booking.userId
-            ? booking.driverId
-            : booking.userId;
-        await tx.wallet.upsert({
-          where: {
-            userId: receiverId,
-          },
-          create: {
-            userId: receiverId,
-            balance: cancellationFee,
-          },
-          update: {
-            balance: {
-              increment: cancellationFee,
+            senderId,
+            receiverId,
+            description: `Cancellation fee - ${isUserCancelling ? "User" : "Driver"} cancelled the booking`,
+            metadata: {
+              cancellationFee,
+              cancelledBy: isUserCancelling ? "USER" : "DRIVER",
+              senderWalletBalance: senderWallet.balance,
+              receiverWalletBalance: receiverWallet.balance,
             },
           },
         });
