@@ -499,6 +499,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
         const isUserCancelling = req.user!.userId === booking.userId;
         const senderId = isUserCancelling ? booking.userId : booking.driverId;
         const receiverId = isUserCancelling ? booking.driverId : booking.userId;
+        const cancelledByRole = isUserCancelling ? "USER" : "DRIVER";
 
         // Get sender's wallet
         const senderWallet = await tx.wallet.upsert({
@@ -514,7 +515,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
           update: { balance: { increment: cancellationFee } },
         });
 
-        // Create transaction record for the cancellation fee
+        // Create DEBIT transaction record for the sender
         await tx.longDistanceTransaction.create({
           data: {
             bookingId,
@@ -522,13 +523,32 @@ export const cancelBooking = async (req: Request, res: Response) => {
             type: "REFUND",
             status: "COMPLETED",
             senderId,
-            receiverId,
-            description: `Cancellation fee - ${isUserCancelling ? "User" : "Driver"} cancelled the booking`,
+            receiverId: null, // No direct receiver for the debit transaction
+            description: `Cancellation fee deducted - ${cancelledByRole} cancelled the booking`,
             metadata: {
+              transactionType: "DEBIT",
               cancellationFee,
-              cancelledBy: isUserCancelling ? "USER" : "DRIVER",
-              senderWalletBalance: senderWallet.balance,
-              receiverWalletBalance: receiverWallet.balance,
+              cancelledBy: cancelledByRole,
+              walletBalance: senderWallet.balance,
+            },
+          },
+        });
+
+        // Create CREDIT transaction record for the receiver
+        await tx.longDistanceTransaction.create({
+          data: {
+            bookingId,
+            amount: cancellationFee,
+            type: "REFUND",
+            status: "COMPLETED",
+            senderId: null, // No direct sender for the credit transaction
+            receiverId,
+            description: `Cancellation fee received - ${cancelledByRole} cancelled the booking`,
+            metadata: {
+              transactionType: "CREDIT",
+              cancellationFee,
+              cancelledBy: cancelledByRole,
+              walletBalance: receiverWallet.balance,
             },
           },
         });
