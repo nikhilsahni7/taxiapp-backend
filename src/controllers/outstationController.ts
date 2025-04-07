@@ -86,8 +86,8 @@ export const getOutstationFareEstimate = async (
       { lat: dropLocation.lat, lng: dropLocation.lng }
     );
 
-    // Validate minimum distance for hill station (e.g., 50km)
-    if (serviceType === "HILL_STATION" && distance < 50) {
+    // Validate minimum distance for hill station (e.g., 10km)
+    if (serviceType === "HILL_STATION" && distance < 10) {
       return res.status(400).json({
         error: "Hill station bookings require minimum 50km distance",
       });
