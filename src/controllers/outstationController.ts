@@ -169,12 +169,18 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
     dropLocation,
     vehicleType,
     tripType,
+    startDate,
+    endDate,
+    pickupTime,
     serviceType = "OUTSTATION", // Default to outstation if not specified
   }: {
     pickupLocation: Location;
     dropLocation: Location;
     vehicleType: string;
     tripType: string;
+    startDate: string;
+    endDate: string;
+    pickupTime: string;
     serviceType?: LongDistanceServiceType;
     paymentMode: PaymentMode;
   } = req.body;
@@ -200,6 +206,32 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
     const commission = Math.round(fare * 0.12);
     const driverEarnings = fare - commission;
 
+    // Parse dates and calculate total days
+    const [pickupHours, pickupMinutes] = pickupTime.split(":").map(Number);
+    const startDateTime = new Date(startDate);
+    startDateTime.setHours(pickupHours, pickupMinutes, 0, 0);
+
+    // For one-way trips, end date is same as start date
+    // For round trips, use the provided end date
+    const endDateTime =
+      tripType === "ROUND_TRIP" && endDate
+        ? new Date(endDate)
+        : new Date(startDate);
+
+    if (tripType === "ROUND_TRIP" && endDate) {
+      endDateTime.setHours(pickupHours, pickupMinutes, 0, 0);
+    }
+
+    // Calculate total days for the trip
+    const totalDays =
+      tripType === "ROUND_TRIP" && endDate
+        ? Math.ceil(
+            (endDateTime.getTime() - startDateTime.getTime()) /
+              (1000 * 3600 * 24) +
+              1
+          ) || 1
+        : 1;
+
     const booking = await prisma.longDistanceBooking.create({
       data: {
         userId: req.user.userId,
@@ -215,10 +247,10 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
         distance,
         duration,
         paymentMode: PaymentMode.RAZORPAY,
-        startDate: new Date(),
-        endDate: new Date(),
-        pickupTime: new Date().toISOString(),
-        totalDays: 1,
+        startDate: startDateTime,
+        endDate: endDateTime,
+        pickupTime: pickupTime,
+        totalDays: totalDays,
         baseAmount: fare,
         taxAmount: 0,
         totalAmount: fare,
@@ -255,6 +287,10 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
         remainingAmount: booking.remainingAmount,
         commission,
         driverEarnings,
+        startDate: startDateTime,
+        endDate: endDateTime,
+        pickupTime,
+        totalDays,
       },
     });
   } catch (error) {
