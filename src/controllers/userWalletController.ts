@@ -161,7 +161,7 @@ export const getUserWalletDetails = async (req: Request, res: Response) => {
       where: { userId: userId },
     });
 
-    // Get all user transactions
+    // Get all regular user transactions
     const transactions = await prisma.transaction.findMany({
       where: {
         OR: [{ senderId: userId }, { receiverId: userId }],
@@ -171,10 +171,44 @@ export const getUserWalletDetails = async (req: Request, res: Response) => {
       },
     });
 
-    res.json({
-      balance: wallet?.balance || 0,
-      currency: wallet?.currency || "INR",
-      transactions: transactions.map((tx) => ({
+    // Get all long distance transactions
+    const longDistanceTransactions =
+      await prisma.longDistanceTransaction.findMany({
+        where: {
+          OR: [{ senderId: userId }, { receiverId: userId }],
+        },
+        include: {
+          booking: {
+            select: {
+              pickupLocation: true,
+              dropLocation: true,
+              serviceType: true,
+              vehicleCategory: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+      });
+
+    // Format regular transactions
+    const formattedTransactions = transactions.map((tx) => ({
+      id: tx.id,
+      amount: tx.amount,
+      type: tx.type,
+      status: tx.status,
+      description: tx.description,
+      createdAt: tx.createdAt,
+      paymentId: tx.razorpayPaymentId,
+      orderId: tx.razorpayOrderId,
+      metadata: tx.metadata,
+      transactionSource: "REGULAR",
+    }));
+
+    // Format long distance transactions
+    const formattedLongDistanceTransactions = longDistanceTransactions.map(
+      (tx) => ({
         id: tx.id,
         amount: tx.amount,
         type: tx.type,
@@ -184,7 +218,28 @@ export const getUserWalletDetails = async (req: Request, res: Response) => {
         paymentId: tx.razorpayPaymentId,
         orderId: tx.razorpayOrderId,
         metadata: tx.metadata,
-      })),
+        bookingDetails: tx.booking
+          ? {
+              pickupLocation: tx.booking.pickupLocation,
+              dropLocation: tx.booking.dropLocation,
+              serviceType: tx.booking.serviceType,
+              vehicleCategory: tx.booking.vehicleCategory,
+            }
+          : null,
+        transactionSource: "LONG_DISTANCE",
+      })
+    );
+
+    // Combine all transactions and sort by createdAt (newest first)
+    const allTransactions = [
+      ...formattedTransactions,
+      ...formattedLongDistanceTransactions,
+    ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+    res.json({
+      balance: wallet?.balance || 0,
+      currency: wallet?.currency || "INR",
+      transactions: allTransactions,
     });
   } catch (error) {
     console.error("Error fetching user wallet details:", error);
