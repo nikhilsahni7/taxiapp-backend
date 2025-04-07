@@ -605,6 +605,8 @@ export const getAvailableBookings = async (req: Request, res: Response) => {
       serviceType: booking.serviceType,
       tripType: booking.tripType,
       pickupLocation: booking.pickupLocation,
+      dhams: booking.selectedDhams ?? [],
+
       distance: booking.distance,
       duration: booking.duration,
       vehicleCategory: booking.vehicleCategory,
