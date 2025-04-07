@@ -520,7 +520,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
           data: {
             bookingId,
             amount: cancellationFee,
-            type: "REFUND",
+            type: "CANCELLATION_FEE",
             status: "COMPLETED",
             senderId,
             receiverId: null, // No direct receiver for the debit transaction

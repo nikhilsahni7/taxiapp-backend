@@ -424,6 +424,7 @@ enum LongDistanceTransactionType {
   BOOKING_ADVANCE
   BOOKING_FINAL
   REFUND
+  CANCELLATION_FEE
 }
 
 // Add new models for vendor bookings
