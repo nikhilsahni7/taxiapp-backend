@@ -348,6 +348,7 @@ model LongDistanceBooking {
   endDate         DateTime
   pickupTime      String
   totalDays       Int
+  selectedDhams   String[]      // Array to store selected dham names
 
   // Distance and duration from driver to pickup
   pickupDistance  Float?

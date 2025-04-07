@@ -178,6 +178,7 @@ export const getChardhamFareEstimate = async (req: Request, res: Response) => {
     pickupTime,
     numberOfDhams,
     extraDays = 0,
+    selectedDhams = [],
   } = req.body;
 
   try {
@@ -190,6 +191,27 @@ export const getChardhamFareEstimate = async (req: Request, res: Response) => {
       return res
         .status(400)
         .json({ error: "Number of dhams must be between 1 and 4" });
+    }
+
+    // Validate that the number of selected dhams matches numberOfDhams
+    if (selectedDhams.length > 0 && selectedDhams.length !== numberOfDhams) {
+      return res.status(400).json({
+        error:
+          "The number of selected dhams must match the numberOfDhams value",
+      });
+    }
+
+    // Validate that selected dhams are valid
+    const validDhams = ["Yamunotri", "Gangotri", "Kedarnath", "Badrinath"];
+    if (selectedDhams.length > 0) {
+      const invalidDhams = selectedDhams.filter(
+        (dham: string) => !validDhams.includes(dham)
+      );
+      if (invalidDhams.length > 0) {
+        return res.status(400).json({
+          error: `Invalid dham name(s): ${invalidDhams.join(", ")}. Valid dhams are: ${validDhams.join(", ")}`,
+        });
+      }
     }
 
     // Get rates for vehicle type
@@ -291,6 +313,7 @@ export const getChardhamFareEstimate = async (req: Request, res: Response) => {
         vehicleType,
         vehicleCapacity: getVehicleCapacity(vehicleType),
         numberOfDhams,
+        selectedDhams: selectedDhams.length > 0 ? selectedDhams : undefined,
         startingPointType,
         distanceToHaridwar:
           startingPointType === "other" ? distanceToHaridwar : 0,
@@ -362,6 +385,7 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
     pickupTime,
     numberOfDhams,
     extraDays = 0,
+    selectedDhams = [],
   }: {
     pickupLocation: Location;
     vehicleType: string;
@@ -370,6 +394,7 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
     pickupTime: string;
     numberOfDhams: number;
     extraDays?: number;
+    selectedDhams?: string[];
   } = req.body;
 
   if (!req.user?.userId) {
@@ -386,6 +411,27 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
       return res
         .status(400)
         .json({ error: "Number of dhams must be between 1 and 4" });
+    }
+
+    // Validate that the number of selected dhams matches numberOfDhams
+    if (selectedDhams.length > 0 && selectedDhams.length !== numberOfDhams) {
+      return res.status(400).json({
+        error:
+          "The number of selected dhams must match the numberOfDhams value",
+      });
+    }
+
+    // Validate that selected dhams are valid
+    const validDhams = ["Yamunotri", "Gangotri", "Kedarnath", "Badrinath"];
+    if (selectedDhams.length > 0) {
+      const invalidDhams = selectedDhams.filter(
+        (dham: string) => !validDhams.includes(dham)
+      );
+      if (invalidDhams.length > 0) {
+        return res.status(400).json({
+          error: `Invalid dham name(s): ${invalidDhams.join(", ")}. Valid dhams are: ${validDhams.join(", ")}`,
+        });
+      }
     }
 
     // Get rates for vehicle type
@@ -487,6 +533,7 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
         commission: commission,
         taxAmount: 0,
         status: "PENDING",
+        selectedDhams: selectedDhams.length > 0 ? selectedDhams : [],
         metadata: {
           numberOfDhams,
           startingPointType,
