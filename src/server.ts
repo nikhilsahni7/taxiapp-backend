@@ -9,6 +9,7 @@ import {
   calculateDuration,
   validateRideChatAccess,
 } from "./controllers/rideController";
+import { startAllJobs } from "./jobs";
 import { adminRouter } from "./routes/admin";
 import { allIndiaRoutes } from "./routes/allIndiaRoutes";
 import { authRouter } from "./routes/auth";
@@ -24,6 +25,7 @@ import { userWalletRouter } from "./routes/userWallet";
 import { vendorRouter } from "./routes/vendorRoutes";
 import { vendorWalletRouter } from "./routes/vendorWallet";
 import { walletRouter } from "./routes/wallet";
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -881,7 +883,10 @@ io.on("connection", (socket: Socket) => {
     console.log("Client disconnected:", socket.id);
   });
 });
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`Server is running on port ${PORT}`);
+
+  // Start all scheduled jobs
+  startAllJobs();
 });

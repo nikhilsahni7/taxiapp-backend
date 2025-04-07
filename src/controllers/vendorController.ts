@@ -1503,3 +1503,87 @@ export const createVendorChardhamBooking = async (
     res.status(500).json({ error: "Failed to create Chardham booking" });
   }
 };
+
+// Auto cancel pending bookings
+export const autoCancelPendingBookings = async () => {
+  try {
+    // Get current date and time
+    const now = new Date();
+
+    // Find all pending bookings that haven't been accepted by a driver
+    // and whose start date + pickup time is in the past
+    const pendingBookings = await prisma.vendorBooking.findMany({
+      where: {
+        status: VendorBookingStatus.PENDING,
+        startDate: {
+          lt: now,
+        },
+      },
+    });
+
+    if (pendingBookings.length === 0) {
+      console.log("No pending bookings to auto-cancel");
+      return { autoCancel: false, count: 0 };
+    }
+
+    // Process each booking to check if it should be cancelled
+    const bookingsToCancel = [];
+
+    for (const booking of pendingBookings) {
+      // Parse pickup time and combine with startDate
+      const [hours, minutes] = booking.pickupTime.split(":").map(Number);
+      const pickupDateTime = new Date(booking.startDate);
+      pickupDateTime.setHours(hours, minutes, 0, 0);
+
+      // If pickup time has passed, add to cancel list
+      if (pickupDateTime < now) {
+        bookingsToCancel.push(booking.id);
+      }
+    }
+
+    if (bookingsToCancel.length === 0) {
+      console.log("No bookings need to be auto-cancelled");
+      return { autoCancel: false, count: 0 };
+    }
+
+    // Cancel all identified bookings
+    await prisma.vendorBooking.updateMany({
+      where: {
+        id: {
+          in: bookingsToCancel,
+        },
+      },
+      data: {
+        status: VendorBookingStatus.CANCELLED,
+        cancelledBy: CancelledBy.SYSTEM,
+        cancelReason: "Auto-cancelled due to no driver acceptance",
+        cancelledAt: now,
+      },
+    });
+
+    console.log(`Auto-cancelled ${bookingsToCancel.length} pending bookings`);
+    return { autoCancel: true, count: bookingsToCancel.length };
+  } catch (error) {
+    console.error("Error auto-cancelling bookings:", error);
+    return { autoCancel: false, error: error.message };
+  }
+};
+
+// API endpoint to trigger auto cancellation
+export const triggerAutoCancelBookings = async (
+  req: Request,
+  res: Response
+) => {
+  // Only allow admins to manually trigger this
+  if (!req.user?.userId || req.user.userType !== "ADMIN") {
+    return res.status(403).json({ error: "Unauthorized. Admin access only." });
+  }
+
+  try {
+    const result = await autoCancelPendingBookings();
+    res.json(result);
+  } catch (error) {
+    console.error("Error triggering auto-cancellation:", error);
+    res.status(500).json({ error: "Failed to trigger auto-cancellation" });
+  }
+};
