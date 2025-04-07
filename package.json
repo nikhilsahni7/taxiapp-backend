@@ -8,8 +8,7 @@
     "build": "bun build src/server.ts --outdir dist --target node",
     "lint": "bun run eslint src/**/*.ts",
     "format": "bun run prettier --write src/**/*.ts",
-    "test": "bun run vitest",
-    "cancel-pending-bookings": "bun run scripts/cancel-pending-bookings.ts"
+    "test": "bun run vitest"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",

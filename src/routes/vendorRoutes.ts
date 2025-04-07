@@ -1,22 +1,21 @@
 import express from "express";
 import {
-    cancelVendorBooking,
-    completeVendorRide,
-    createDriverCommissionPayment,
-    createVendorBooking,
-    createVendorChardhamBooking,
-    driverArrived,
-    getVendorBookingDetails,
-    getVendorBookings,
-    getVendorChardhamFareEstimate,
-    getVendorEarnings,
-    getVendorFareEstimate,
-    getVendorTransactions,
-    getVendorWallet,
-    startDriverPickup,
-    startVendorRide,
-    triggerAutoCancelBookings,
-    verifyDriverCommissionPayment,
+  cancelVendorBooking,
+  completeVendorRide,
+  createDriverCommissionPayment,
+  createVendorBooking,
+  createVendorChardhamBooking,
+  driverArrived,
+  getVendorBookingDetails,
+  getVendorBookings,
+  getVendorChardhamFareEstimate,
+  getVendorEarnings,
+  getVendorFareEstimate,
+  getVendorTransactions,
+  getVendorWallet,
+  startDriverPickup,
+  startVendorRide,
+  verifyDriverCommissionPayment,
 } from "../controllers/vendorController";
 import { verifyToken } from "../middlewares/auth";
 
@@ -52,8 +51,5 @@ router.post("/bookings/:bookingId/arrived", driverArrived);
 router.post("/bookings/:bookingId/start", startVendorRide);
 router.post("/bookings/:bookingId/complete", completeVendorRide);
 router.post("/bookings/:bookingId/cancel", cancelVendorBooking);
-
-// Admin routes
-router.post("/auto-cancel", triggerAutoCancelBookings);
 
 export { router as vendorRouter };
