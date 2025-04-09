@@ -203,7 +203,7 @@ export const createVendorBooking = async (req: Request, res: Response) => {
     dropLng,
     vehicleCategory,
     serviceType,
-    vendorPrice, // This is the total booking amount (e.g., Rs 5000)
+    vendorPrice,
     tripType,
     startDate,
     endDate,
@@ -234,6 +234,23 @@ export const createVendorBooking = async (req: Request, res: Response) => {
     const driverPayout = vendorPrice - totalAppCommission;
     const vendorPayout = vendorCommission - appCommissionFromVendor; // Correct calculation matching estimate
 
+    // Determine end date based on service type and trip type
+    let calculatedEndDate;
+    if (
+      (serviceType === "OUTSTATION" || serviceType === "HILL_STATION") &&
+      tripType === "ONE_WAY"
+    ) {
+      // For one-way outstation and hill station trips, end date is same as start date
+      calculatedEndDate = new Date(startDate);
+    } else if (endDate) {
+      // Use provided end date if available
+      calculatedEndDate = new Date(endDate);
+    } else {
+      // Default calculation (for round trips)
+      calculatedEndDate = new Date(startDate);
+      calculatedEndDate.setDate(calculatedEndDate.getDate() + 1); // Default to next day
+    }
+
     const booking = await prisma.vendorBooking.create({
       data: {
         vendor: {
@@ -251,10 +268,10 @@ export const createVendorBooking = async (req: Request, res: Response) => {
         distance,
         duration,
         startDate: new Date(startDate),
-        endDate: new Date(endDate),
+        endDate: calculatedEndDate,
         pickupTime,
         totalDays: Math.ceil(
-          (new Date(endDate).getTime() - new Date(startDate).getTime()) /
+          (calculatedEndDate.getTime() - new Date(startDate).getTime()) /
             (1000 * 60 * 60 * 24)
         ),
         appBasePrice,
@@ -1124,6 +1141,7 @@ export const getVendorChardhamFareEstimate = async (
     endDate,
     pickupTime,
     numberOfDhams,
+    selectedDhams,
     extraDays = 0,
     vendorPrice,
   } = req.body;
@@ -1135,15 +1153,26 @@ export const getVendorChardhamFareEstimate = async (
       !vehicleType ||
       !pickupTime ||
       !numberOfDhams ||
-      !vendorPrice
+      !vendorPrice ||
+      !selectedDhams ||
+      selectedDhams.length === 0 ||
+      selectedDhams.length !== numberOfDhams
     ) {
-      return res.status(400).json({ error: "Missing required fields" });
+      return res
+        .status(400)
+        .json({ error: "Missing required fields or invalid selectedDhams" });
     }
 
     if (numberOfDhams < 1 || numberOfDhams > 4) {
       return res
         .status(400)
         .json({ error: "Number of dhams must be between 1 and 4" });
+    }
+
+    // Validate selected dhams
+    const validDhams = ["YAMUNOTRI", "GANGOTRI", "KEDARNATH", "BADRINATH"];
+    if (!selectedDhams.every((dham) => validDhams.includes(dham))) {
+      return res.status(400).json({ error: "Invalid dham selection" });
     }
 
     // Get rates for vehicle type
@@ -1168,22 +1197,22 @@ export const getVendorChardhamFareEstimate = async (
 
     // Add extra days based on distance if location is "other" (not Haridwar/Rishikesh or Delhi)
     let extraKmCharges = 0;
+    let distanceToHaridwar = 0;
 
     if (startingPointType === "other") {
       // Calculate distance to Haridwar for extra days and charges
-      const distanceToHaridwar = await getCachedDistanceAndDuration(
+      const distanceResult = await getCachedDistanceAndDuration(
         { lat: pickupLocation.lat, lng: pickupLocation.lng },
         { lat: 29.9457, lng: 78.1642 } // Haridwar coordinates
       );
 
+      distanceToHaridwar = distanceResult.distance;
+
       // Add extra days based on distance
-      numberOfDays += calculateExtraDays(distanceToHaridwar.distance);
+      numberOfDays += calculateExtraDays(distanceToHaridwar);
 
       // Calculate extra km charges
-      extraKmCharges = calculateExtraKmCharges(
-        distanceToHaridwar.distance,
-        vehicleType
-      );
+      extraKmCharges = calculateExtraKmCharges(distanceToHaridwar, vehicleType);
     }
 
     // Add any user-requested extra days
@@ -1221,7 +1250,6 @@ export const getVendorChardhamFareEstimate = async (
     }
 
     // Additional information for response
-    let distanceToHaridwar = 0;
     if (startingPointType === "other") {
       const result = await getCachedDistanceAndDuration(
         { lat: pickupLocation.lat, lng: pickupLocation.lng },
@@ -1245,6 +1273,7 @@ export const getVendorChardhamFareEstimate = async (
           appCommissionFromVendor,
         },
         numberOfDays,
+        selectedDhams,
         perDayRate: rates.perDayRate,
         perKmRate: rates.perKmRate,
         currency: "INR",
@@ -1322,6 +1351,7 @@ export const createVendorChardhamBooking = async (
     pickupTime,
     numberOfDhams,
     dhamsToVisit,
+    selectedDhams,
     extraDays = 0,
     vendorPrice,
     notes,
@@ -1334,15 +1364,26 @@ export const createVendorChardhamBooking = async (
       !vehicleCategory ||
       !pickupTime ||
       !numberOfDhams ||
-      !vendorPrice
+      !vendorPrice ||
+      !selectedDhams ||
+      selectedDhams.length === 0 ||
+      selectedDhams.length !== numberOfDhams
     ) {
-      return res.status(400).json({ error: "Missing required fields" });
+      return res
+        .status(400)
+        .json({ error: "Missing required fields or invalid selectedDhams" });
     }
 
     if (numberOfDhams < 1 || numberOfDhams > 4) {
       return res
         .status(400)
         .json({ error: "Number of dhams must be between 1 and 4" });
+    }
+
+    // Validate selected dhams
+    const validDhams = ["YAMUNOTRI", "GANGOTRI", "KEDARNATH", "BADRINATH"];
+    if (!selectedDhams.every((dham) => validDhams.includes(dham))) {
+      return res.status(400).json({ error: "Invalid dham selection" });
     }
 
     // Get rates for vehicle type
@@ -1426,7 +1467,7 @@ export const createVendorChardhamBooking = async (
     // Create metadata object for booking
     const bookingMetadata = {
       numberOfDhams,
-      dhamsToVisit,
+      selectedDhams,
       startingPointType,
       baseFare,
       extraKmCharges,
@@ -1480,7 +1521,10 @@ export const createVendorChardhamBooking = async (
         vendorPayout,
         status: "PENDING",
         notes,
-        metadata: bookingMetadata,
+        metadata: {
+          ...bookingMetadata,
+          selectedDhams,
+        },
       },
     });
 
@@ -1496,6 +1540,7 @@ export const createVendorChardhamBooking = async (
         driverPayout,
         vendorPayout,
         numberOfDays,
+        selectedDhams,
       },
     });
   } catch (error) {
