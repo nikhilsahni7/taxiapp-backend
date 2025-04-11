@@ -1065,7 +1065,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
   const { bookingId } = req.params;
   const { reason } = req.body;
 
-  if (!req.user?.userId) {
+  if (!req.user?.userId || !req.user?.userType) {
     return res.status(401).json({ error: "User not authenticated" });
   }
 
@@ -1078,7 +1078,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Booking not found" });
     }
 
-    // Check if user is authorized to cancel (either user or driver)
+    // Check if user is authorized to cancel
     if (
       booking.userId !== req.user.userId &&
       booking.driverId !== req.user.userId
@@ -1088,71 +1088,169 @@ export const cancelBooking = async (req: Request, res: Response) => {
         .json({ error: "Unauthorized to cancel this booking" });
     }
 
-    const cancellationFee = 300; // Fixed cancellation fee
+    const DRIVER_CANCELLATION_FEE = 500; // Fixed fee when driver cancels
+    const USER_CANCELLATION_PERCENTAGE = 0.1; // 10% of total fare
 
-    // Use a transaction to update booking and handle cancellation fee if applicable.
+    // Use a transaction to update booking and handle cancellation fees
     const updatedBooking = await prisma.$transaction(async (tx) => {
-      // Update booking status to CANCELLED with the provided reason.
+      // Update booking status to CANCELLED
       const updated = await tx.longDistanceBooking.update({
         where: { id: bookingId },
         data: {
           status: "CANCELLED",
           cancelReason: reason,
+          cancelledBy: req.user!.userType === "USER" ? "USER" : "DRIVER",
           cancelledAt: new Date(),
-          cancelledBy: req.user!.userId === booking.userId ? "USER" : "DRIVER",
         },
       });
 
-      /**
-       * Process cancellation fee transaction only if:
-       * - The booking is not in the initial PENDING state AND
-       * - A driver is assigned.
-       *
-       * This ensures that if the advance is paid but no driver is assigned,
-       * the cancellation fee logic is bypassed.
-       */
-      if (booking.status !== "PENDING" && booking.driverId) {
-        // Create a transaction record for the cancellation fee.
+      const isUserCancelling = req.user!.userType === "USER";
+
+      if (isUserCancelling) {
+        // USER CANCELLATION LOGIC
+        const totalFare = booking.totalAmount;
+        const advanceAmount = booking.advanceAmount; // 25% of total fare
+        const cancellationFee = totalFare * USER_CANCELLATION_PERCENTAGE; // 10% of total fare
+        const refundAmount = advanceAmount - cancellationFee; // 15% of total fare to be refunded
+
+        // Update user's wallet with refund
+        await tx.wallet.upsert({
+          where: { userId: booking.userId },
+          create: { userId: booking.userId, balance: refundAmount },
+          update: { balance: { increment: refundAmount } },
+        });
+
+        // Create transaction record for user refund
         await tx.longDistanceTransaction.create({
           data: {
             bookingId,
-            amount: cancellationFee,
+            amount: refundAmount,
             type: "REFUND",
             status: "COMPLETED",
-            senderId: req.user?.userId,
-            receiverId:
-              req.user?.userId === booking.userId
-                ? booking.driverId
-                : booking.userId,
-            description: "Cancellation fee for Chardham Yatra booking",
-          },
-        });
-
-        // Determine the receiving party and update (or create) their wallet.
-        const receiverId =
-          req.user?.userId === booking.userId
-            ? booking.driverId
-            : booking.userId;
-        await tx.wallet.upsert({
-          where: {
-            userId: receiverId,
-          },
-          create: {
-            userId: receiverId,
-            balance: cancellationFee,
-          },
-          update: {
-            balance: {
-              increment: cancellationFee,
+            senderId: null,
+            receiverId: booking.userId,
+            description: `Refund for Chardham Yatra booking cancellation (15% of advance payment)`,
+            metadata: {
+              transactionType: "CREDIT",
+              totalFare,
+              advanceAmount,
+              cancellationFee,
+              refundAmount,
+              cancelledBy: "USER",
             },
           },
         });
-      }
 
-      return updated;
+        // If driver is assigned, compensate them
+        if (booking.driverId) {
+          await tx.wallet.upsert({
+            where: { userId: booking.driverId },
+            create: {
+              userId: booking.driverId,
+              balance: DRIVER_CANCELLATION_FEE,
+            },
+            update: { balance: { increment: DRIVER_CANCELLATION_FEE } },
+          });
+
+          // Create transaction record for driver compensation
+          await tx.longDistanceTransaction.create({
+            data: {
+              bookingId,
+              amount: DRIVER_CANCELLATION_FEE,
+              type: "COMPENSATION",
+              status: "COMPLETED",
+              senderId: null,
+              receiverId: booking.driverId,
+              description: `Compensation for Chardham Yatra booking cancellation by user`,
+              metadata: {
+                transactionType: "CREDIT",
+                compensationAmount: DRIVER_CANCELLATION_FEE,
+                cancelledBy: "USER",
+              },
+            },
+          });
+        }
+
+        return {
+          ...updated,
+          cancellationDetails: {
+            totalFare,
+            advanceAmount,
+            cancellationFee,
+            refundAmount,
+            driverCompensation: booking.driverId ? DRIVER_CANCELLATION_FEE : 0,
+          },
+        };
+      } else {
+        // DRIVER CANCELLATION LOGIC
+        // Deduct cancellation fee from driver's wallet
+        await tx.wallet.upsert({
+          where: { userId: booking.driverId! },
+          create: {
+            userId: booking.driverId!,
+            balance: -DRIVER_CANCELLATION_FEE,
+          },
+          update: { balance: { decrement: DRIVER_CANCELLATION_FEE } },
+        });
+
+        // Create transaction record for driver penalty
+        await tx.longDistanceTransaction.create({
+          data: {
+            bookingId,
+            amount: DRIVER_CANCELLATION_FEE,
+            type: "PENALTY",
+            status: "COMPLETED",
+            senderId: booking.driverId!,
+            receiverId: null,
+            description: `Penalty for Chardham Yatra booking cancellation by driver`,
+            metadata: {
+              transactionType: "DEBIT",
+              penaltyAmount: DRIVER_CANCELLATION_FEE,
+              cancelledBy: "DRIVER",
+            },
+          },
+        });
+
+        // Credit cancellation fee to user's wallet
+        await tx.wallet.upsert({
+          where: { userId: booking.userId },
+          create: { userId: booking.userId, balance: DRIVER_CANCELLATION_FEE },
+          update: { balance: { increment: DRIVER_CANCELLATION_FEE } },
+        });
+
+        // Create transaction record for user compensation
+        await tx.longDistanceTransaction.create({
+          data: {
+            bookingId,
+            amount: DRIVER_CANCELLATION_FEE,
+            type: "COMPENSATION",
+            status: "COMPLETED",
+            senderId: null,
+            receiverId: booking.userId,
+            description: `Compensation for Chardham Yatra booking cancellation by driver`,
+            metadata: {
+              transactionType: "CREDIT",
+              compensationAmount: DRIVER_CANCELLATION_FEE,
+              cancelledBy: "DRIVER",
+            },
+          },
+        });
+
+        return {
+          ...updated,
+          cancellationDetails: {
+            driverPenalty: DRIVER_CANCELLATION_FEE,
+            userCompensation: DRIVER_CANCELLATION_FEE,
+          },
+        };
+      }
     });
 
-    res.json({ success: true, booking: updatedBooking });
+    res.json({
+      success: true,
+      booking: updatedBooking,
+      message: `Booking cancelled successfully by ${req.user.userType.toLowerCase()}`,
+    });
   } catch (error) {
     console.error("Error cancelling booking:", error);
     res.status(500).json({ error: "Failed to cancel booking" });
