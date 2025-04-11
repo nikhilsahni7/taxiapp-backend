@@ -409,7 +409,6 @@ model LongDistanceTransaction {
   receiverId       String?
   razorpayOrderId  String?           @unique
   razorpayPaymentId String?
-
   description      String?
   metadata         Json?
   createdAt        DateTime          @default(now())
@@ -426,6 +425,8 @@ enum LongDistanceTransactionType {
   BOOKING_FINAL
   REFUND
   CANCELLATION_FEE
+  PENALTY
+  COMPENSATION
 }
 
 // Add new models for vendor bookings

@@ -497,7 +497,7 @@ export const cancelBooking = async (req: Request, res: Response) => {
       return res.status(404).json({ error: "Booking not found" });
     }
 
-    // Check if user is authorized to cancel (either user or driver)
+    // Check if user is authorized to cancel
     if (
       booking.userId !== req.user.userId &&
       booking.driverId !== req.user.userId
@@ -507,11 +507,12 @@ export const cancelBooking = async (req: Request, res: Response) => {
         .json({ error: "Unauthorized to cancel this booking" });
     }
 
-    const cancellationFee = 300; // Fixed cancellation fee
+    const DRIVER_CANCELLATION_FEE = 500; // Fixed fee when driver cancels
+    const USER_CANCELLATION_PERCENTAGE = 0.1; // 10% of total fare
 
-    // Use a transaction to update booking and handle cancellation fee if applicable.
+    // Use a transaction to update booking and handle cancellation fees
     const updatedBooking = await prisma.$transaction(async (tx) => {
-      // Update booking status to CANCELLED with the provided reason.
+      // Update booking status to CANCELLED
       const updated = await tx.longDistanceBooking.update({
         where: { id: bookingId },
         data: {
@@ -522,69 +523,123 @@ export const cancelBooking = async (req: Request, res: Response) => {
         },
       });
 
-      /**
-       * Process cancellation fee transaction only if:
-       * - The booking is not in the initial PENDING state AND
-       * - A driver is assigned.
-       *
-       * This ensures that if the advance is paid but no driver is assigned,
-       * the cancellation fee logic is bypassed.
-       */
-      if (booking.status !== "PENDING" && booking.driverId) {
-        // Determine who is cancelling and who should receive the fee
-        const isUserCancelling = req.user!.userId === booking.userId;
-        const senderId = isUserCancelling ? booking.userId : booking.driverId;
-        const receiverId = isUserCancelling ? booking.driverId : booking.userId;
-        const cancelledByRole = isUserCancelling ? "USER" : "DRIVER";
+      const isUserCancelling = req.user!.userType === "USER";
 
-        // Get sender's wallet
-        const senderWallet = await tx.wallet.upsert({
-          where: { userId: senderId },
-          create: { userId: senderId, balance: -cancellationFee },
-          update: { balance: { decrement: cancellationFee } },
+      if (isUserCancelling) {
+        // USER CANCELLATION LOGIC
+        const totalFare = booking.totalAmount;
+        const advanceAmount = booking.advanceAmount; // 25% of total fare
+        const cancellationFee = totalFare * USER_CANCELLATION_PERCENTAGE; // 10% of total fare
+        const refundAmount = advanceAmount - cancellationFee; // 15% of total fare to be refunded
+
+        // Update user's wallet with refund
+        await tx.wallet.upsert({
+          where: { userId: booking.userId },
+          create: { userId: booking.userId, balance: refundAmount },
+          update: { balance: { increment: refundAmount } },
         });
 
-        // Get or create receiver's wallet
-        const receiverWallet = await tx.wallet.upsert({
-          where: { userId: receiverId },
-          create: { userId: receiverId, balance: cancellationFee },
-          update: { balance: { increment: cancellationFee } },
-        });
-
-        // Create DEBIT transaction record for the sender
+        // Create transaction record for user refund
         await tx.longDistanceTransaction.create({
           data: {
             bookingId,
-            amount: cancellationFee,
-            type: "CANCELLATION_FEE",
+            amount: refundAmount,
+            type: "REFUND",
             status: "COMPLETED",
-            senderId,
-            receiverId: null, // No direct receiver for the debit transaction
-            description: `Cancellation fee deducted - ${cancelledByRole} cancelled the booking`,
+            senderId: null,
+            receiverId: booking.userId,
+            description: `Refund for booking cancellation (15% of advance payment)`,
             metadata: {
-              transactionType: "DEBIT",
+              transactionType: "CREDIT",
+              totalFare,
+              advanceAmount,
               cancellationFee,
-              cancelledBy: cancelledByRole,
-              walletBalance: senderWallet.balance,
+              refundAmount,
+              cancelledBy: "USER",
             },
           },
         });
 
-        // Create CREDIT transaction record for the receiver
+        // If driver is assigned, compensate them
+        if (booking.driverId) {
+          await tx.wallet.upsert({
+            where: { userId: booking.driverId },
+            create: {
+              userId: booking.driverId,
+              balance: DRIVER_CANCELLATION_FEE,
+            },
+            update: { balance: { increment: DRIVER_CANCELLATION_FEE } },
+          });
+
+          // Create transaction record for driver compensation
+          await tx.longDistanceTransaction.create({
+            data: {
+              bookingId,
+              amount: DRIVER_CANCELLATION_FEE,
+              type: "COMPENSATION",
+              status: "COMPLETED",
+              senderId: null,
+              receiverId: booking.driverId,
+              description: `Compensation for booking cancellation by user`,
+              metadata: {
+                transactionType: "CREDIT",
+                compensationAmount: DRIVER_CANCELLATION_FEE,
+                cancelledBy: "USER",
+              },
+            },
+          });
+        }
+      } else {
+        // DRIVER CANCELLATION LOGIC
+        // Deduct cancellation fee from driver's wallet
+        await tx.wallet.upsert({
+          where: { userId: booking.driverId! },
+          create: {
+            userId: booking.driverId!,
+            balance: -DRIVER_CANCELLATION_FEE,
+          },
+          update: { balance: { decrement: DRIVER_CANCELLATION_FEE } },
+        });
+
+        // Create transaction record for driver penalty
         await tx.longDistanceTransaction.create({
           data: {
             bookingId,
-            amount: cancellationFee,
-            type: "REFUND",
+            amount: DRIVER_CANCELLATION_FEE,
+            type: "PENALTY",
             status: "COMPLETED",
-            senderId: null, // No direct sender for the credit transaction
-            receiverId,
-            description: `Cancellation fee received - ${cancelledByRole} cancelled the booking`,
+            senderId: booking.driverId!,
+            receiverId: null,
+            description: `Penalty for booking cancellation by driver`,
+            metadata: {
+              transactionType: "DEBIT",
+              penaltyAmount: DRIVER_CANCELLATION_FEE,
+              cancelledBy: "DRIVER",
+            },
+          },
+        });
+
+        // Credit cancellation fee to user's wallet
+        await tx.wallet.upsert({
+          where: { userId: booking.userId },
+          create: { userId: booking.userId, balance: DRIVER_CANCELLATION_FEE },
+          update: { balance: { increment: DRIVER_CANCELLATION_FEE } },
+        });
+
+        // Create transaction record for user compensation
+        await tx.longDistanceTransaction.create({
+          data: {
+            bookingId,
+            amount: DRIVER_CANCELLATION_FEE,
+            type: "COMPENSATION",
+            status: "COMPLETED",
+            senderId: null,
+            receiverId: booking.userId,
+            description: `Compensation for booking cancellation by driver`,
             metadata: {
               transactionType: "CREDIT",
-              cancellationFee,
-              cancelledBy: cancelledByRole,
-              walletBalance: receiverWallet.balance,
+              compensationAmount: DRIVER_CANCELLATION_FEE,
+              cancelledBy: "DRIVER",
             },
           },
         });
