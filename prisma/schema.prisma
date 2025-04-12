@@ -254,6 +254,11 @@ model Ride {
   // New fields for carrier option
   carrierRequested Boolean @default(false)
   carrierCharge    Float   @default(0)
+
+  // Add new fields for waiting time charges
+  waitingStartTime DateTime?   // When the waiting time tracking started
+  waitingMinutes   Int?        // Total waiting minutes
+  waitingCharges   Float?      // Charges for waiting time
 }
 
 // Existing models remain unchanged

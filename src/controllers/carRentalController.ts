@@ -77,6 +77,10 @@ const EXTRA_KM_RATES: Record<keyof RentalPackages, number> = {
 
 const EXTRA_MINUTE_RATE = 2;
 
+// Constants for waiting time calculation
+const FREE_WAITING_MINUTES = 3;
+const WAITING_CHARGE_PER_MINUTE = 3;
+
 // Create a new car rental booking
 export const createCarRental = async (req: Request, res: Response) => {
   const { carCategory, packageHours, paymentMode, carrierRequested } = req.body;
@@ -183,11 +187,33 @@ export const getRentalStatus = async (req: Request, res: Response) => {
       };
     }
 
+    // Calculate waiting time details if driver has arrived
+    let waitingTimeDetails = null;
+    if (
+      rental.status === RideStatus.DRIVER_ARRIVED &&
+      rental.waitingStartTime
+    ) {
+      const now = new Date();
+      const waitingTimeMs = now.getTime() - rental.waitingStartTime.getTime();
+      const waitingMinutes = Math.floor(waitingTimeMs / (1000 * 60));
+      const chargableMinutes = Math.max(0, waitingMinutes - FREE_WAITING_MINUTES);
+
+      waitingTimeDetails = {
+        waitingStartTime: rental.waitingStartTime,
+        currentWaitingMinutes: waitingMinutes,
+        freeWaitingMinutes: FREE_WAITING_MINUTES,
+        chargableMinutes: chargableMinutes,
+        currentWaitingCharges: chargableMinutes * WAITING_CHARGE_PER_MINUTE,
+        chargePerMinute: WAITING_CHARGE_PER_MINUTE
+      };
+    }
+
     console.log(currentMetrics);
 
     return res.json({
       rental,
       currentMetrics,
+      waitingTimeDetails
     });
   } catch (error) {
     console.error("Error getting rental status:", error);
@@ -327,7 +353,7 @@ export const acceptRental = async (req: Request, res: Response) => {
   }
 };
 
-// Driver marks arrival at pickup
+// Driver marks arrival at pickup - need to modify this to start the wait timer
 export const markDriverArrived = async (req: Request, res: Response) => {
   const { id } = req.params;
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
@@ -349,6 +375,8 @@ export const markDriverArrived = async (req: Request, res: Response) => {
       where: { id },
       data: {
         status: RideStatus.DRIVER_ARRIVED,
+        driverArrivedAt: new Date(),
+        waitingStartTime: new Date(), // Start the waiting time tracking
       },
     });
 
@@ -359,7 +387,7 @@ export const markDriverArrived = async (req: Request, res: Response) => {
   }
 };
 
-// Start ride with OTP verification and initial odometer reading
+// Start ride - need to modify to calculate waiting time charges
 export const startRide = async (req: Request, res: Response) => {
   const { id } = req.params;
   const { otp, startOdometer } = req.body;
@@ -387,18 +415,34 @@ export const startRide = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid OTP" });
     }
 
+    // Calculate waiting time and charges
+    let waitingMinutes = 0;
+    let waitingCharges = 0;
+
+    if (rental.waitingStartTime) {
+      const now = new Date();
+      const waitingTimeMs = now.getTime() - rental.waitingStartTime.getTime();
+      waitingMinutes = Math.floor(waitingTimeMs / (1000 * 60));
+
+      // Only charge for waiting time beyond the free period
+      const chargableMinutes = Math.max(0, waitingMinutes - FREE_WAITING_MINUTES);
+      waitingCharges = chargableMinutes * WAITING_CHARGE_PER_MINUTE;
+    }
+
     // Create initial location log
     const driverStatus = await prisma.driverStatus.findUnique({
       where: { driverId: req.user.userId },
     });
 
-    // Start the ride with initial readings
+    // Start the ride with initial readings and waiting time charges
     const updatedRental = await prisma.ride.update({
       where: { id },
       data: {
         status: RideStatus.RIDE_STARTED,
         rideStartedAt: new Date(),
         startOdometer,
+        waitingMinutes,
+        waitingCharges,
         currentLat: driverStatus?.locationLat,
         currentLng: driverStatus?.locationLng,
         lastLocationUpdate: new Date(),
@@ -423,6 +467,12 @@ export const startRide = async (req: Request, res: Response) => {
       success: true,
       rental: updatedRental,
       message: "Ride started successfully with initial odometer reading",
+      waitingDetails: {
+        waitingMinutes,
+        chargableMinutes: Math.max(0, waitingMinutes - FREE_WAITING_MINUTES),
+        waitingCharges,
+        freeWaitingPeriod: FREE_WAITING_MINUTES,
+      },
     });
   } catch (error) {
     console.error("Error starting ride:", error);
@@ -550,11 +600,14 @@ export const requestEndRental = async (req: Request, res: Response) => {
     );
     const extraMinuteCharges = Math.round(extraMinutes * EXTRA_MINUTE_RATE);
 
+    // Include waiting charges
+    const waitingCharges = rental.waitingCharges || 0;
+
     // Include carrier charge in the breakdown but not in additional calculation since it's already in base price
     const carrierCharge = rental.carrierCharge || 0;
     const basePrice = (rental.rentalBasePrice || 0) - carrierCharge;
     const totalAmount =
-      basePrice + extraKmCharges + extraMinuteCharges + carrierCharge;
+      basePrice + extraKmCharges + extraMinuteCharges + waitingCharges + carrierCharge;
 
     if (rental.paymentMode === PaymentMode.CASH) {
       // Update rental status to wait for driver's cash confirmation
@@ -580,6 +633,7 @@ export const requestEndRental = async (req: Request, res: Response) => {
           carrierCharge: carrierCharge,
           extraKmCharges,
           extraMinuteCharges,
+          waitingCharges, // Include waiting charges in the breakdown
           totalAmount,
         },
       });
@@ -638,6 +692,7 @@ export const requestEndRental = async (req: Request, res: Response) => {
           carrierCharge: carrierCharge,
           extraKmCharges,
           extraMinuteCharges,
+          waitingCharges, // Include waiting charges in the breakdown
           totalAmount,
         },
       });
@@ -797,6 +852,13 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
       rental: updatedRental,
       transaction: paymentUpdate,
       wallet: walletUpdate,
+    });
+  } catch (error) {
+    console.error("Error verifying payment:", error);
+    return res.status(500).json({ error: "Failed to verify payment" });
+  }
+};
+
     });
   } catch (error) {
     console.error("Error verifying payment:", error);
