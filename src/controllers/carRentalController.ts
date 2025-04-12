@@ -196,7 +196,10 @@ export const getRentalStatus = async (req: Request, res: Response) => {
       const now = new Date();
       const waitingTimeMs = now.getTime() - rental.waitingStartTime.getTime();
       const waitingMinutes = Math.floor(waitingTimeMs / (1000 * 60));
-      const chargableMinutes = Math.max(0, waitingMinutes - FREE_WAITING_MINUTES);
+      const chargableMinutes = Math.max(
+        0,
+        waitingMinutes - FREE_WAITING_MINUTES
+      );
 
       waitingTimeDetails = {
         waitingStartTime: rental.waitingStartTime,
@@ -204,7 +207,7 @@ export const getRentalStatus = async (req: Request, res: Response) => {
         freeWaitingMinutes: FREE_WAITING_MINUTES,
         chargableMinutes: chargableMinutes,
         currentWaitingCharges: chargableMinutes * WAITING_CHARGE_PER_MINUTE,
-        chargePerMinute: WAITING_CHARGE_PER_MINUTE
+        chargePerMinute: WAITING_CHARGE_PER_MINUTE,
       };
     }
 
@@ -213,7 +216,7 @@ export const getRentalStatus = async (req: Request, res: Response) => {
     return res.json({
       rental,
       currentMetrics,
-      waitingTimeDetails
+      waitingTimeDetails,
     });
   } catch (error) {
     console.error("Error getting rental status:", error);
@@ -425,7 +428,10 @@ export const startRide = async (req: Request, res: Response) => {
       waitingMinutes = Math.floor(waitingTimeMs / (1000 * 60));
 
       // Only charge for waiting time beyond the free period
-      const chargableMinutes = Math.max(0, waitingMinutes - FREE_WAITING_MINUTES);
+      const chargableMinutes = Math.max(
+        0,
+        waitingMinutes - FREE_WAITING_MINUTES
+      );
       waitingCharges = chargableMinutes * WAITING_CHARGE_PER_MINUTE;
     }
 
@@ -607,7 +613,11 @@ export const requestEndRental = async (req: Request, res: Response) => {
     const carrierCharge = rental.carrierCharge || 0;
     const basePrice = (rental.rentalBasePrice || 0) - carrierCharge;
     const totalAmount =
-      basePrice + extraKmCharges + extraMinuteCharges + waitingCharges + carrierCharge;
+      basePrice +
+      extraKmCharges +
+      extraMinuteCharges +
+      waitingCharges +
+      carrierCharge;
 
     if (rental.paymentMode === PaymentMode.CASH) {
       // Update rental status to wait for driver's cash confirmation
@@ -852,13 +862,6 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
       rental: updatedRental,
       transaction: paymentUpdate,
       wallet: walletUpdate,
-    });
-  } catch (error) {
-    console.error("Error verifying payment:", error);
-    return res.status(500).json({ error: "Failed to verify payment" });
-  }
-};
-
     });
   } catch (error) {
     console.error("Error verifying payment:", error);
