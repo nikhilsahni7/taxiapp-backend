@@ -44,7 +44,8 @@ export const geocodeAddress = async (
 
 export const searchAvailableDrivers = async (
   pickupLocation: string,
-  radius: number
+  radius: number,
+  filterOptions?: { hasCarrier?: boolean }
 ) => {
   const { lat, lng } = await geocodeAddress(pickupLocation);
 
@@ -60,6 +61,14 @@ export const searchAvailableDrivers = async (
         gte: lng - radius / (111 * Math.cos((lat * Math.PI) / 180)),
         lte: lng + radius / (111 * Math.cos((lat * Math.PI) / 180)),
       },
+      // Filter by carrier option if specified
+      ...(filterOptions?.hasCarrier && {
+        driver: {
+          driverDetails: {
+            hasCarrier: true,
+          },
+        },
+      }),
       // driver: {
       //   ridesAsDriver: {
       //     none: {
@@ -71,7 +80,11 @@ export const searchAvailableDrivers = async (
       // },
     },
     include: {
-      driver: true,
+      driver: {
+        include: {
+          driverDetails: true,
+        },
+      },
     },
     orderBy: [
       {
