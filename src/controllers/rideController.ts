@@ -23,8 +23,10 @@ import { io } from "../server";
 const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY!;
 
 const prisma = new PrismaClient();
-const WAIT_TIME_THRESHOLD = 5; // minutes
-const EXTRA_CHARGE_PER_MINUTE = 2;
+
+// Wait time constants
+const FREE_WAITING_MINUTES = 3; // Free waiting period in minutes
+const WAITING_CHARGE_PER_MINUTE = 3; // Rs 3 per minute after free period
 const DRIVER_REQUEST_TIMEOUT = 15000;
 const MAX_SEARCH_RADIUS = 15; // kilometers
 const INITIAL_SEARCH_RADIUS = 3; // kilometers
@@ -376,7 +378,9 @@ async function initializeRide(
       status: RideStatus.SEARCHING,
       paymentMode: paymentMode || PaymentMode.CASH,
       otp: generateOTP().toString(),
-      waitStartTime: null,
+      waitingStartTime: null,
+      waitingMinutes: 0,
+      waitingCharges: 0,
       extraCharges: 0,
       carrierRequested: carrierRequested,
       carrierCharge: carrierRequested ? CARRIER_CHARGE : 0,
@@ -706,6 +710,10 @@ export const createRide = async (req: Request, res: Response) => {
       rideType: isCarRental ? RideType.CAR_RENTAL : RideType.LOCAL,
       carrierRequested: carrierRequested || false,
       carrierCharge: carrierRequested ? CARRIER_CHARGE : 0,
+      // Initialize waiting time fields
+      waitingStartTime: null,
+      waitingMinutes: 0,
+      waitingCharges: 0,
     };
 
     if (isCarRental) {
@@ -878,27 +886,36 @@ const validatePermissions = (
 const handleDriverArrival = async (ride: any) => {
   await prisma.ride.update({
     where: { id: ride.id },
-    data: { waitStartTime: new Date() },
+    data: {
+      driverArrivedAt: new Date(),
+      waitingStartTime: new Date(),
+    },
   });
 };
 
 const calculateWaitingCharges = async (ride: any) => {
-  if (ride.waitStartTime) {
-    const waitDuration = Math.floor(
-      (new Date().getTime() - new Date(ride.waitStartTime).getTime()) / 60000
-    );
-    if (waitDuration > WAIT_TIME_THRESHOLD) {
-      const extraCharges =
-        (waitDuration - WAIT_TIME_THRESHOLD) * EXTRA_CHARGE_PER_MINUTE;
-      await prisma.ride.update({
-        where: { id: ride.id },
-        data: {
-          extraCharges,
-          fare: { increment: extraCharges },
-        },
-      });
-    }
+  if (ride.waitingStartTime) {
+    const now = new Date();
+    const waitingTimeMs =
+      now.getTime() - new Date(ride.waitingStartTime).getTime();
+    const waitingMinutes = Math.floor(waitingTimeMs / (1000 * 60));
+
+    // Only charge for waiting time beyond the free period
+    const chargableMinutes = Math.max(0, waitingMinutes - FREE_WAITING_MINUTES);
+    const waitingCharges = chargableMinutes * WAITING_CHARGE_PER_MINUTE;
+
+    await prisma.ride.update({
+      where: { id: ride.id },
+      data: {
+        waitingMinutes,
+        waitingCharges,
+        fare: ride.fare + waitingCharges, // Add waiting charges to the fare
+      },
+    });
+
+    return { waitingMinutes, chargableMinutes, waitingCharges };
   }
+  return { waitingMinutes: 0, chargableMinutes: 0, waitingCharges: 0 };
 };
 
 export const handleRideCompletion = async (req: Request, res: Response) => {
@@ -952,8 +969,10 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
 
       finalAmount = updateData.totalAmount;
     } else {
+      // Include waiting charges in final amount
       finalAmount = calculateFinalAmount(ride);
-      // Ensure carrier charge is included in final amount
+
+      // Make sure waiting charges are included in totalAmount
       updateData.totalAmount = finalAmount;
     }
 
@@ -966,7 +985,7 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
       },
     });
 
-    // Emit ride completion event with carrier details if applicable
+    // Emit ride completion event with waiting charges and carrier details if applicable
     io.to(ride.userId).emit("ride_completed", {
       rideId: ride.id,
       finalLocation,
@@ -975,6 +994,8 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
       isCarRental: ride.isCarRental,
       carrierRequested: ride.carrierRequested,
       carrierCharge: ride.carrierCharge,
+      waitingCharges: ride.waitingCharges || 0,
+      waitingMinutes: ride.waitingMinutes || 0,
       ...(ride.isCarRental && {
         actualKmsTravelled,
         actualMinutes,
@@ -1088,7 +1109,29 @@ export const getRide = async (req: Request, res: Response) => {
         })
       : null;
 
-    res.json({ ride, driverStatus });
+    // Calculate waiting time details if driver has arrived
+    let waitingTimeDetails = null;
+    if (ride.status === RideStatus.DRIVER_ARRIVED && ride.waitingStartTime) {
+      const now = new Date();
+      const waitingTimeMs =
+        now.getTime() - new Date(ride.waitingStartTime).getTime();
+      const waitingMinutes = Math.floor(waitingTimeMs / (1000 * 60));
+      const chargableMinutes = Math.max(
+        0,
+        waitingMinutes - FREE_WAITING_MINUTES
+      );
+
+      waitingTimeDetails = {
+        waitingStartTime: ride.waitingStartTime,
+        currentWaitingMinutes: waitingMinutes,
+        freeWaitingMinutes: FREE_WAITING_MINUTES,
+        chargableMinutes: chargableMinutes,
+        currentWaitingCharges: chargableMinutes * WAITING_CHARGE_PER_MINUTE,
+        chargePerMinute: WAITING_CHARGE_PER_MINUTE,
+      };
+    }
+
+    res.json({ ride, driverStatus, waitingTimeDetails });
   } catch (error) {
     console.error("Error fetching ride details:", error);
     res.status(500).json({ error: "Failed to retrieve ride details" });
@@ -1422,6 +1465,64 @@ export const getUserSelfieUrl = async (req: Request, res: Response) => {
     res.status(500).json({
       error: "Failed to fetch user details",
       message: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+// Add a new function to get waiting time details
+export const getWaitingTimeDetails = async (req: Request, res: Response) => {
+  const { id: rideId } = req.params;
+
+  if (!req.user) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const { userId, userType } = req.user;
+
+  try {
+    const ride = await prisma.ride.findFirst({
+      where: {
+        id: rideId,
+        OR: [{ userId }, userType === "DRIVER" ? { driverId: userId } : {}],
+        status: RideStatus.DRIVER_ARRIVED,
+      },
+    });
+
+    if (!ride) {
+      return res.status(404).json({
+        error: "Ride not found or driver has not arrived yet",
+      });
+    }
+
+    if (!ride.waitingStartTime) {
+      return res.status(400).json({
+        error: "Waiting time has not started yet",
+      });
+    }
+
+    const now = new Date();
+    const waitingTimeMs =
+      now.getTime() - new Date(ride.waitingStartTime).getTime();
+    const waitingMinutes = Math.floor(waitingTimeMs / (1000 * 60));
+    const chargableMinutes = Math.max(0, waitingMinutes - FREE_WAITING_MINUTES);
+    const currentWaitingCharges = chargableMinutes * WAITING_CHARGE_PER_MINUTE;
+
+    return res.json({
+      success: true,
+      waitingTimeDetails: {
+        waitingStartTime: ride.waitingStartTime,
+        currentWaitingMinutes: waitingMinutes,
+        freeWaitingMinutes: FREE_WAITING_MINUTES,
+        chargableMinutes: chargableMinutes,
+        currentWaitingCharges: currentWaitingCharges,
+        chargePerMinute: WAITING_CHARGE_PER_MINUTE,
+        elapsedTimeMs: waitingTimeMs,
+      },
+    });
+  } catch (error) {
+    console.error("Error getting waiting time details:", error);
+    return res.status(500).json({
+      error: "Failed to get waiting time details",
     });
   }
 };

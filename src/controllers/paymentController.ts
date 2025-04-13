@@ -363,6 +363,11 @@ export const calculateFinalAmount = (ride: any): number => {
     finalAmount += ride.carrierCharge;
   }
 
+  // Include waiting charges if available
+  if (ride.waitingCharges) {
+    finalAmount += ride.waitingCharges;
+  }
+
   if (ride.extraCharges) {
     finalAmount += ride.extraCharges;
   }

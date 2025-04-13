@@ -21,6 +21,7 @@ import {
   getFareEstimation,
   getRide,
   getUserSelfieUrl,
+  getWaitingTimeDetails,
   updateRideStatus,
 } from "../controllers/rideController";
 import { getAllUsersWithDetails } from "../controllers/userController";
@@ -28,71 +29,102 @@ import { verifyToken } from "../middlewares/auth";
 
 const router = express.Router();
 
-router.post("/", verifyToken, createRide as RequestHandler);
-router.get("/:id", verifyToken, getRide as RequestHandler);
-router.put("/:id/status", verifyToken, updateRideStatus as RequestHandler);
+router.post("/", verifyToken, createRide as unknown as RequestHandler);
+router.get("/:id", verifyToken, getRide as unknown as RequestHandler);
+router.put(
+  "/:id/status",
+  verifyToken,
+  updateRideStatus as unknown as RequestHandler
+);
 router.post(
   "/fare-estimation",
   verifyToken,
-  getFareEstimation as RequestHandler
+  getFareEstimation as unknown as RequestHandler
 );
 router.post(
   "/outstation/fare-estimation",
   verifyToken,
-  getOutstationFareEstimate as RequestHandler
+  getOutstationFareEstimate as unknown as RequestHandler
 );
-router.get("/:id/chat", verifyToken, getChatMessages as RequestHandler);
+router.get(
+  "/:id/chat",
+  verifyToken,
+  getChatMessages as unknown as RequestHandler
+);
+
+// New route to get waiting time details
+router.get(
+  "/:id/waiting-time",
+  verifyToken,
+  getWaitingTimeDetails as unknown as RequestHandler
+);
 
 // Car rental routes
-router.post("/rental", verifyToken, createCarRental as RequestHandler);
+router.post(
+  "/rental",
+  verifyToken,
+  createCarRental as unknown as RequestHandler
+);
 router.get(
   "/rental/:id/status",
   verifyToken,
-  getRentalStatus as RequestHandler
+  getRentalStatus as unknown as RequestHandler
 );
 router.post(
   "/rental/:id/arrive",
   verifyToken,
-  markDriverArrived as RequestHandler
+  markDriverArrived as unknown as RequestHandler
 );
-router.post("/rental/:id/start", verifyToken, startRide as RequestHandler);
-router.post("/rental/:id/cancel", verifyToken, cancelRental as RequestHandler);
+router.post(
+  "/rental/:id/start",
+  verifyToken,
+  startRide as unknown as RequestHandler
+);
+router.post(
+  "/rental/:id/cancel",
+  verifyToken,
+  cancelRental as unknown as RequestHandler
+);
 
 router.get(
   "/rental/available",
   verifyToken,
-  getAvailableRentals as RequestHandler
+  getAvailableRentals as unknown as RequestHandler
 );
 router.post(
   "/rental/:rentalId/accept",
   verifyToken,
-  acceptRental as RequestHandler
+  acceptRental as unknown as RequestHandler
 );
 
 //  rental final  payment flow routes
 router.post(
   "/rental/:id/end-request",
   verifyToken,
-  requestEndRental as RequestHandler
+  requestEndRental as unknown as RequestHandler
 );
 
 router.post(
   "/rental/:id/confirm-cash",
   verifyToken,
-  confirmCashPayment as RequestHandler
+  confirmCashPayment as unknown as RequestHandler
 );
 router.post(
   "/rental/:id/verify-payment",
   verifyToken,
-  verifyRazorpayPayment as RequestHandler
+  verifyRazorpayPayment as unknown as RequestHandler
 );
 
 // Add new route for getting selfie URLs
 router.get(
   "/user/:userId/selfie",
   verifyToken,
-  getUserSelfieUrl as RequestHandler
+  getUserSelfieUrl as unknown as RequestHandler
 );
-router.get("/all/users", verifyToken, getAllUsersWithDetails as RequestHandler);
+router.get(
+  "/all/users",
+  verifyToken,
+  getAllUsersWithDetails as unknown as RequestHandler
+);
 
 export { router as rideRouter };
