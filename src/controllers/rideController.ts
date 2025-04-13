@@ -28,6 +28,7 @@ const EXTRA_CHARGE_PER_MINUTE = 2;
 const DRIVER_REQUEST_TIMEOUT = 15000;
 const MAX_SEARCH_RADIUS = 15; // kilometers
 const INITIAL_SEARCH_RADIUS = 3; // kilometers
+const CARRIER_CHARGE = 30; // Fixed carrier charge in INR
 
 interface Location {
   lat: number;
@@ -202,11 +203,13 @@ export const calculateFare = async (
   pickupLocation: string,
   dropLocation: string,
   distance: number,
-  category: string
+  category: string,
+  carrierRequested: boolean = false
 ): Promise<{
   baseFare: number;
   totalFare: number;
   charges: TaxAndCharges;
+  carrierCharge?: number;
 }> => {
   const baseFare = 50;
   let perKmRate = 0;
@@ -249,7 +252,7 @@ export const calculateFare = async (
   );
 
   const distanceFare = distance * perKmRate;
-  const totalFare =
+  const baseTotalFare =
     baseFare +
     distanceFare +
     charges.stateTax +
@@ -257,17 +260,21 @@ export const calculateFare = async (
     charges.airportCharges +
     charges.mcdCharges;
 
+  // Add carrier charge if requested
+  const carrierCharge = carrierRequested ? CARRIER_CHARGE : 0;
+  const totalFare = baseTotalFare + carrierCharge;
+
   return {
     baseFare: baseFare + distanceFare,
     totalFare,
     charges,
+    carrierCharge: carrierRequested ? CARRIER_CHARGE : undefined,
   };
 };
 
 // Update the getFareEstimation endpoint
 export const getFareEstimation = async (req: Request, res: Response) => {
   const { pickupLocation, dropLocation, carrierRequested } = req.body;
-  const carrierCharge = carrierRequested ? 30 : 0;
 
   try {
     const distance = await calculateDistance(pickupLocation, dropLocation);
@@ -285,7 +292,8 @@ export const getFareEstimation = async (req: Request, res: Response) => {
         pickupLocation,
         dropLocation,
         distance,
-        category
+        category,
+        carrierRequested
       );
 
       estimates[category] = {
@@ -293,8 +301,8 @@ export const getFareEstimation = async (req: Request, res: Response) => {
         distance,
         duration,
         currency: "INR",
-        totalFare: fareDetails.totalFare + carrierCharge,
-        carrierCharge,
+        totalFare: fareDetails.totalFare,
+        carrierCharge: fareDetails.carrierCharge,
       };
     }
 
@@ -343,15 +351,17 @@ async function initializeRide(
   pickupLocation: string,
   dropLocation: string,
   carCategory: string,
-  paymentMode: PaymentMode | undefined
+  paymentMode: PaymentMode | undefined,
+  carrierRequested: boolean = false
 ) {
   const distance = await calculateDistance(pickupLocation, dropLocation);
   const duration = await calculateDuration(pickupLocation, dropLocation);
-  const totalFare = await calculateFare(
+  const fareDetails = await calculateFare(
     pickupLocation,
     dropLocation,
     distance,
-    carCategory
+    carCategory,
+    carrierRequested
   );
 
   return prisma.ride.create({
@@ -360,7 +370,7 @@ async function initializeRide(
       pickupLocation,
       dropLocation,
       carCategory,
-      fare: totalFare.totalFare,
+      fare: fareDetails.totalFare,
       distance,
       duration,
       status: RideStatus.SEARCHING,
@@ -368,6 +378,8 @@ async function initializeRide(
       otp: generateOTP().toString(),
       waitStartTime: null,
       extraCharges: 0,
+      carrierRequested: carrierRequested,
+      carrierCharge: carrierRequested ? CARRIER_CHARGE : 0,
     },
     include: {
       user: {
@@ -398,14 +410,17 @@ async function findAndRequestDrivers(ride: any) {
       };
     }
 
-    // Add filter for carrier if requested
-    const filterOptions = ride.carrierRequested ? { hasCarrier: true } : {};
+    // Filter for drivers with carrier if requested
+    const filterOptions = ride.carrierRequested
+      ? { hasCarrier: true }
+      : undefined;
 
     const drivers = await searchAvailableDrivers(
       ride.pickupLocation,
       currentRadius,
-      filterOptions // Pass carrier filter
+      filterOptions
     );
+
     const newDrivers = drivers.filter((d) => !attemptedDrivers.has(d.driverId));
 
     if (newDrivers.length > 0) {
@@ -414,6 +429,7 @@ async function findAndRequestDrivers(ride: any) {
           driverId: d.driverId,
           distance: d.distance,
           status: "searched",
+          hasCarrier: d.driver?.driverDetails?.hasCarrier || false,
         }))
       );
 
@@ -430,6 +446,8 @@ async function findAndRequestDrivers(ride: any) {
               status: true,
               driverId: true,
               userId: true,
+              carrierRequested: true,
+              carrierCharge: true,
               user: {
                 select: {
                   name: true,
@@ -444,7 +462,6 @@ async function findAndRequestDrivers(ride: any) {
               success: true,
               message: "Ride already accepted",
               searchedDrivers,
-              // finalRadius: currentRadius,
               ride: currentRide,
             };
           }
@@ -463,6 +480,8 @@ async function findAndRequestDrivers(ride: any) {
             distance: ride.distance,
             duration: ride.duration,
             paymentMode: ride.paymentMode,
+            carrierRequested: ride.carrierRequested,
+            carrierCharge: ride.carrierCharge,
             ...pickupMetrics,
             userId: currentRide.userId,
             userName: currentRide.user?.name,
@@ -524,6 +543,7 @@ async function findAndRequestDrivers(ride: any) {
                 driverId: driver.driverId,
                 pickupDistance: pickupMetrics.pickupDistance,
                 pickupDuration: pickupMetrics.pickupDuration,
+                carrierRequested: ride.carrierRequested,
               });
 
               // Broadcast ride unavailability
@@ -549,7 +569,9 @@ async function findAndRequestDrivers(ride: any) {
 
   return {
     success: false,
-    message: "No available drivers found",
+    message: ride.carrierRequested
+      ? "No drivers with carrier available"
+      : "No available drivers found",
     searchedDrivers,
     finalRadius: currentRadius - 2,
   };
@@ -658,7 +680,7 @@ const isValidPackageHours = (hours: number): hours is PackageHours => {
   return hours >= 1 && hours <= 8;
 };
 
-// Modify createRide to handle car rentals
+// Modify createRide to handle carrier requests for all ride types
 export const createRide = async (req: Request, res: Response) => {
   const {
     pickupLocation,
@@ -683,7 +705,7 @@ export const createRide = async (req: Request, res: Response) => {
       otp: generateOTP().toString(),
       rideType: isCarRental ? RideType.CAR_RENTAL : RideType.LOCAL,
       carrierRequested: carrierRequested || false,
-      carrierCharge: carrierRequested ? 30 : 0,
+      carrierCharge: carrierRequested ? CARRIER_CHARGE : 0,
     };
 
     if (isCarRental) {
@@ -721,14 +743,15 @@ export const createRide = async (req: Request, res: Response) => {
         pickupLocation,
         dropLocation,
         distance,
-        carCategory
+        carCategory,
+        carrierRequested
       );
 
       rideData = {
         ...rideData,
         distance,
         duration,
-        fare: fareDetails.totalFare + rideData.carrierCharge,
+        fare: fareDetails.totalFare,
       };
     }
 
@@ -924,10 +947,10 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         actualMinutes,
         extraKmCharges: rentalCalculation.extraKmCharges,
         extraMinuteCharges: rentalCalculation.extraMinuteCharges,
-        totalAmount: rentalCalculation.totalAmount,
+        totalAmount: rentalCalculation.totalAmount + (ride.carrierCharge || 0),
       };
 
-      finalAmount = rentalCalculation.totalAmount;
+      finalAmount = updateData.totalAmount;
     } else {
       finalAmount = calculateFinalAmount(ride);
       // Ensure carrier charge is included in final amount
