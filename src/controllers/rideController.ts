@@ -909,6 +909,7 @@ const calculateWaitingCharges = async (ride: any) => {
       data: {
         waitingMinutes,
         waitingCharges,
+        fare: ride.fare + waitingCharges, // Add waiting charges to the fare
       },
     });
 
