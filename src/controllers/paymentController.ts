@@ -358,23 +358,23 @@ export const verifyPayment = async (req: Request, res: Response) => {
 export const calculateFinalAmount = (ride: any): number => {
   let finalAmount = ride.fare || 0;
 
-  // Include carrier charge if available
-  if (ride.carrierCharge) {
-    finalAmount += ride.carrierCharge;
-  }
+  // // Include carrier charge if available
+  // if (ride.carrierCharge) {
+  //   finalAmount += ride.carrierCharge;
+  // }
 
-  // Include waiting charges if available
-  if (ride.waitingCharges) {
-    finalAmount += ride.waitingCharges;
-  }
+  // // Include waiting charges if available
+  // if (ride.waitingCharges) {
+  //   finalAmount += ride.waitingCharges;
+  // }
 
-  if (ride.extraCharges) {
-    finalAmount += ride.extraCharges;
-  }
+  // if (ride.extraCharges) {
+  //   finalAmount += ride.extraCharges;
+  // }
 
-  if (ride.tax) {
-    finalAmount += ride.tax;
-  }
+  // if (ride.tax) {
+  //   finalAmount += ride.tax;
+  // }
 
   return finalAmount;
 };
