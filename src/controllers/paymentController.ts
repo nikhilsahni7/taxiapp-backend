@@ -206,6 +206,8 @@ export const handleCashPayment = async (ride: any) => {
       rideId: ride.id,
       amount: ride.totalAmount,
       status: "COMPLETED",
+      distance: ride.distance || 0,
+      duration: ride.duration || 0,
       fareBreakdown: fareBreakdown,
     });
 

@@ -1013,6 +1013,8 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
       amount: finalAmount,
       paymentMode: ride.paymentMode,
       fareBreakdown: fareBreakdown,
+      distance: ride.distance || 0,
+      duration: ride.duration || 0,
       isCarRental: ride.isCarRental,
       carrierRequested: ride.carrierRequested,
       carrierCharge: ride.carrierCharge,
