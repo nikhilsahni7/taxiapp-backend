@@ -356,27 +356,14 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
 // Calculate final amount
 export const calculateFinalAmount = (ride: any): number => {
-  let finalAmount = ride.fare || 0;
+  // If totalAmount is already set (e.g., from ride completion), use it
+  if (ride.totalAmount) {
+    return ride.totalAmount;
+  }
 
-  // // Include carrier charge if available
-  // if (ride.carrierCharge) {
-  //   finalAmount += ride.carrierCharge;
-  // }
-
-  // // Include waiting charges if available
-  // if (ride.waitingCharges) {
-  //   finalAmount += ride.waitingCharges;
-  // }
-
-  // if (ride.extraCharges) {
-  //   finalAmount += ride.extraCharges;
-  // }
-
-  // if (ride.tax) {
-  //   finalAmount += ride.tax;
-  // }
-
-  return finalAmount;
+  // Otherwise use fare which should already include waiting charges
+  // from the calculateWaitingCharges function in rideController.ts
+  return ride.fare || 0;
 };
 
 // Socket event handlers
