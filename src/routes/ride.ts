@@ -20,6 +20,7 @@ import {
   getChatMessages,
   getFareEstimation,
   getRide,
+  getUnreadMessageCount,
   getUserSelfieUrl,
   getWaitingTimeDetails,
   updateRideStatus,
@@ -50,6 +51,13 @@ router.get(
   "/:id/chat",
   verifyToken,
   getChatMessages as unknown as RequestHandler
+);
+
+// Add new route for getting unread message count
+router.get(
+  "/:rideId/chat/unread/:userId",
+  verifyToken,
+  getUnreadMessageCount as unknown as RequestHandler
 );
 
 // New route to get waiting time details
