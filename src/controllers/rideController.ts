@@ -1552,3 +1552,39 @@ export const getWaitingTimeDetails = async (req: Request, res: Response) => {
     });
   }
 };
+
+/**
+ * Gets unread message count for a ride chat
+ * @param req Request with rideId and userId parameters
+ * @param res Response with unread message count
+ */
+export const getUnreadMessageCount = async (req: Request, res: Response) => {
+  const { rideId, userId } = req.params;
+
+  try {
+    // Check if user has access to this ride chat
+    const hasAccess = await validateRideChatAccess(rideId, userId);
+    if (!hasAccess) {
+      return res.status(403).json({
+        error: "Unauthorized access to chat",
+      });
+    }
+
+    // Count unread messages for this user in this ride
+    const unreadCount = await prisma.chatMessage.count({
+      where: {
+        rideId,
+        senderId: { not: userId }, // Messages not sent by this user
+        read: false, // That are unread
+      },
+    });
+
+    return res.json({ unreadCount });
+  } catch (error) {
+    console.error("Error getting unread message count:", error);
+    return res.status(500).json({
+      error: "Failed to get unread message count",
+      details: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};

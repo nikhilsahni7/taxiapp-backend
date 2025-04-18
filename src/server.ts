@@ -823,6 +823,17 @@ io.on("connection", (socket: Socket) => {
       const { rideId, senderId, message } = data;
 
       try {
+        // Get ride details to identify the other participant
+        const ride = await prisma.ride.findUnique({
+          where: { id: rideId },
+          select: { userId: true, driverId: true },
+        });
+
+        if (!ride) {
+          socket.emit("chat_error", { message: "Ride not found" });
+          return;
+        }
+
         // Save message to database
         const chatMessage = await prisma.chatMessage.create({
           data: {
@@ -845,6 +856,27 @@ io.on("connection", (socket: Socket) => {
           ...chatMessage,
           createdAt: chatMessage.createdAt.toISOString(),
         });
+
+        // Identify recipient and emit unread count notification
+        const recipientId =
+          senderId === ride.userId ? ride.driverId : ride.userId;
+
+        if (recipientId) {
+          // Count unread messages for recipient
+          const unreadCount = await prisma.chatMessage.count({
+            where: {
+              rideId,
+              senderId: { not: recipientId },
+              read: false,
+            },
+          });
+
+          // Emit unread message count to recipient
+          io.to(recipientId).emit("unread_messages_update", {
+            rideId,
+            unreadCount,
+          });
+        }
       } catch (error) {
         console.error("Error sending message:", error);
         socket.emit("chat_error", { message: "Failed to send message" });
@@ -858,20 +890,92 @@ io.on("connection", (socket: Socket) => {
       const { rideId, userId } = data;
 
       try {
+        // Get ride details to identify the other participant
+        const ride = await prisma.ride.findUnique({
+          where: { id: rideId },
+          select: { userId: true, driverId: true },
+        });
+
+        if (!ride) {
+          socket.emit("chat_error", { message: "Ride not found" });
+          return;
+        }
+
+        // Mark messages as read
         await prisma.chatMessage.updateMany({
           where: {
             rideId,
-            NOT: {
-              senderId: userId,
-            },
+            senderId: { not: userId },
             read: false,
           },
           data: {
             read: true,
           },
         });
+
+        // Emit that messages have been read to the chat room
+        io.to(`ride_chat_${rideId}`).emit("messages_read", {
+          rideId,
+          readBy: userId,
+        });
+
+        // Emit updated unread count (which is now 0) to the user who read the messages
+        io.to(userId).emit("unread_messages_update", {
+          rideId,
+          unreadCount: 0,
+        });
+
+        // Identify the other participant (sender of those messages)
+        const otherParticipantId =
+          userId === ride.userId ? ride.driverId : ride.userId;
+
+        if (otherParticipantId) {
+          // Notify sender that their messages have been read
+          io.to(otherParticipantId).emit("messages_read_by_other", {
+            rideId,
+            readBy: userId,
+          });
+        }
       } catch (error) {
         console.error("Error marking messages as read:", error);
+        socket.emit("chat_error", {
+          message: "Failed to mark messages as read",
+        });
+      }
+    }
+  );
+
+  // New event to get unread message count
+  socket.on(
+    "get_unread_count",
+    async (data: { rideId: string; userId: string }) => {
+      const { rideId, userId } = data;
+
+      try {
+        // Validate if user has access to this ride chat
+        const hasAccess = await validateRideChatAccess(rideId, userId);
+        if (!hasAccess) {
+          socket.emit("chat_error", { message: "Unauthorized access to chat" });
+          return;
+        }
+
+        // Count unread messages
+        const unreadCount = await prisma.chatMessage.count({
+          where: {
+            rideId,
+            senderId: { not: userId },
+            read: false,
+          },
+        });
+
+        // Send count to requesting user
+        socket.emit("unread_count_result", {
+          rideId,
+          unreadCount,
+        });
+      } catch (error) {
+        console.error("Error getting unread count:", error);
+        socket.emit("chat_error", { message: "Failed to get unread count" });
       }
     }
   );
