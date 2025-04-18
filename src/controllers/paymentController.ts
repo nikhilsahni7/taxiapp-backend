@@ -73,12 +73,22 @@ export const handleRideEnd = async (req: Request, res: Response) => {
       },
     });
 
-    // Emit ride completion event to both user and driver
+    // Create fare breakdown for detailed billing
+    const fareBreakdown = {
+      baseFare: ride.fare || 0,
+      waitingCharges: ride.waitingCharges || 0,
+      carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
+      extraCharges: ride.extraCharges || 0,
+      totalAmount: finalAmount,
+    };
+
+    // Emit ride completion event to both user and driver with fare breakdown
     io.to(ride.userId).emit("ride_completed", {
       rideId: ride.id,
       finalLocation,
       amount: finalAmount,
       paymentMode: ride.paymentMode,
+      fareBreakdown: fareBreakdown,
     });
 
     if (ride.driverId) {
@@ -87,6 +97,7 @@ export const handleRideEnd = async (req: Request, res: Response) => {
         finalLocation,
         amount: finalAmount,
         paymentMode: ride.paymentMode,
+        fareBreakdown: fareBreakdown,
       });
     }
 
@@ -181,17 +192,28 @@ export const handleCashPayment = async (ride: any) => {
       },
     });
 
-    // Emit completion events
+    // Create fare breakdown for detailed billing
+    const fareBreakdown = {
+      baseFare: ride.fare || 0,
+      waitingCharges: ride.waitingCharges || 0,
+      carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
+      extraCharges: ride.extraCharges || 0,
+      totalAmount: ride.totalAmount,
+    };
+
+    // Emit completion events with fare breakdown
     io.to(ride.userId).emit("ride_completed", {
       rideId: ride.id,
       amount: ride.totalAmount,
       status: "COMPLETED",
+      fareBreakdown: fareBreakdown,
     });
 
     io.to(ride.driverId).emit("ride_completed", {
       rideId: ride.id,
       amount: ride.totalAmount,
       status: "COMPLETED",
+      fareBreakdown: fareBreakdown,
     });
 
     return transaction;
@@ -370,7 +392,6 @@ export const calculateFinalAmount = (ride: any): number => {
 export const setupPaymentSocketEvents = (socket: any) => {
   socket.on(
     "end_ride",
-
     async (data: { rideId: string; finalLocation: string }) => {
       try {
         const ride = await prisma.ride.findUnique({
@@ -399,12 +420,22 @@ export const setupPaymentSocketEvents = (socket: any) => {
           },
         });
 
-        // Emit ride end event to user
+        // Create fare breakdown
+        const fareBreakdown = {
+          baseFare: ride.fare || 0,
+          waitingCharges: ride.waitingCharges || 0,
+          carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
+          extraCharges: ride.extraCharges || 0,
+          totalAmount: finalAmount,
+        };
+
+        // Emit ride end event to user with detailed fare breakdown
         socket.to(ride.userId).emit("ride_ended", {
           rideId: ride.id,
           finalLocation: data.finalLocation,
           amount: finalAmount,
           paymentMode: ride.paymentMode,
+          fareBreakdown: fareBreakdown,
         });
 
         // Handle payment based on mode

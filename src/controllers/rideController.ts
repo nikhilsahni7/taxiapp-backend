@@ -949,6 +949,8 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
       dropLocation: finalLocation,
     };
 
+    let fareBreakdown: any = {};
+
     if (ride.isCarRental) {
       // Calculate final amount for rental
       const rentalCalculation = calculateRentalFare(
@@ -968,12 +970,31 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
       };
 
       finalAmount = updateData.totalAmount;
+
+      // Create rental-specific fare breakdown
+      fareBreakdown = {
+        basePrice: rentalCalculation.basePrice,
+        packageKms: rentalCalculation.packageKms,
+        extraKmCharges: rentalCalculation.extraKmCharges,
+        extraMinuteCharges: rentalCalculation.extraMinuteCharges,
+        carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
+        totalAmount: finalAmount,
+      };
     } else {
       // Include waiting charges in final amount
       finalAmount = calculateFinalAmount(ride);
 
       // Make sure waiting charges are included in totalAmount
       updateData.totalAmount = finalAmount;
+
+      // Create standard ride fare breakdown
+      fareBreakdown = {
+        baseFare: ride.fare || 0,
+        waitingCharges: ride.waitingCharges || 0,
+        carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
+        extraCharges: ride.extraCharges || 0,
+        totalAmount: finalAmount,
+      };
     }
 
     const updatedRide = await prisma.ride.update({
@@ -985,12 +1006,13 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
       },
     });
 
-    // Emit ride completion event with waiting charges and carrier details if applicable
+    // Emit ride completion event with detailed fare breakdown
     io.to(ride.userId).emit("ride_completed", {
       rideId: ride.id,
       finalLocation,
       amount: finalAmount,
       paymentMode: ride.paymentMode,
+      fareBreakdown: fareBreakdown,
       isCarRental: ride.isCarRental,
       carrierRequested: ride.carrierRequested,
       carrierCharge: ride.carrierCharge,
@@ -1010,6 +1032,7 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         success: true,
         message: "Ride completed, awaiting cash collection",
         ride: updatedRide,
+        fareBreakdown: fareBreakdown,
       });
     } else {
       const paymentDetails = await initiateRazorpayPayment(updatedRide);
@@ -1018,6 +1041,7 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         message: "Payment initiated",
         ride: updatedRide,
         paymentDetails,
+        fareBreakdown: fareBreakdown,
       });
     }
   } catch (error) {
