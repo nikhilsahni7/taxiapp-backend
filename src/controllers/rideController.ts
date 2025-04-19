@@ -686,67 +686,107 @@ const isValidPackageHours = (hours: number): hours is PackageHours => {
 
 // Modify createRide to handle carrier requests for all ride types
 export const createRide = async (req: Request, res: Response) => {
+  // 1. Extract request body data
   const {
     pickupLocation,
-    dropLocation,
+    dropLocation, // May be empty for rentals
     carCategory,
     paymentMode,
-    isCarRental,
-    rentalPackageHours,
-    carrierRequested,
+    isCarRental, // Boolean indicating rental type
+    rentalPackageHours, // Only relevant for rentals
+    carrierRequested, // Boolean for carrier need
   } = req.body;
 
-  if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+  // 2. Validate user authentication
+  if (!req.user) {
+    console.error("[createRide] Error: Unauthorized access attempt.");
+    return res.status(401).json({ error: "Unauthorized" });
+  }
   const userId = req.user.userId;
+  console.log(`[createRide] Received request from user: ${userId}`);
 
   try {
+    // 3. Prepare common ride data
+    console.log(`[createRide] Preparing ride data for user ${userId}`);
     let rideData: any = {
       userId,
       pickupLocation,
       carCategory,
-      status: RideStatus.SEARCHING,
-      paymentMode: paymentMode || PaymentMode.CASH,
-      otp: generateOTP().toString(),
+      status: RideStatus.SEARCHING, // Initial status
+      paymentMode: paymentMode || PaymentMode.CASH, // Default to CASH
+      otp: generateOTP().toString(), // Generate OTP
       rideType: isCarRental ? RideType.CAR_RENTAL : RideType.LOCAL,
       carrierRequested: carrierRequested || false,
       carrierCharge: carrierRequested ? CARRIER_CHARGE : 0,
-      // Initialize waiting time fields
       waitingStartTime: null,
       waitingMinutes: 0,
       waitingCharges: 0,
+      extraCharges: 0,
+      totalAmount: 0, // Initialize totalAmount
     };
 
+    // 4. Add specific data based on ride type (Rental vs Local)
     if (isCarRental) {
-      // For car rental, initialize rental-specific fields
-      const isValidCategory = isValidCarCategory(carCategory);
-      const isValidHours = isValidPackageHours(rentalPackageHours);
-
-      if (!isValidCategory) {
+      console.log(`[createRide] Processing CAR_RENTAL for user ${userId}`);
+      // Validate rental-specific inputs
+      const isValidCategoryFlag = isValidCarCategory(carCategory);
+      const isValidHoursFlag = isValidPackageHours(rentalPackageHours);
+      if (!isValidCategoryFlag) {
+        console.error(`[createRide] Invalid car category: ${carCategory}`);
         return res.status(400).json({ error: "Invalid car category" });
       }
-
-      if (!isValidHours) {
+      if (!isValidHoursFlag) {
+        console.error(
+          `[createRide] Invalid package hours: ${rentalPackageHours}`
+        );
         return res.status(400).json({ error: "Invalid package hours" });
       }
-
+      // Get rental package details
       const packageDetails =
         RENTAL_PACKAGES[carCategory.toLowerCase() as CarCategory][
           rentalPackageHours
         ];
-
+      const baseRentalPrice = packageDetails.price + rideData.carrierCharge;
+      // Add rental-specific fields
       rideData = {
         ...rideData,
         isCarRental: true,
         rentalPackageHours,
         rentalPackageKms: packageDetails.km,
-        rentalBasePrice: packageDetails.price + rideData.carrierCharge,
-        dropLocation: "", // Initially empty for rentals
+        rentalBasePrice: baseRentalPrice,
+        fare: baseRentalPrice, // Initial fare is base price
+        totalAmount: baseRentalPrice, // Initial total is base price
+        dropLocation: "", // Default empty drop location for rentals
+        actualKmsTravelled: 0, // Initialize rental specific fields
+        actualMinutes: 0,
+        extraKmCharges: 0,
+        extraMinuteCharges: 0,
       };
+      console.log(`[createRide] Rental data prepared:`, rideData);
     } else {
-      // For regular rides, include drop location and calculate fare
+      // Regular Local Ride
+      console.log(`[createRide] Processing LOCAL ride for user ${userId}`);
+      if (!dropLocation) {
+        console.error(
+          `[createRide] Error: Drop location is required for local rides.`
+        );
+        return res
+          .status(400)
+          .json({ error: "Drop location is required for local rides" });
+      }
+      // Calculate distance, duration, and fare
       rideData.dropLocation = dropLocation;
+      console.log(
+        `[createRide] Calculating distance/duration for ${pickupLocation} to ${dropLocation}`
+      );
       const distance = await calculateDistance(pickupLocation, dropLocation);
       const duration = await calculateDuration(pickupLocation, dropLocation);
+      console.log(
+        `[createRide] Calculated Distance: ${distance} km, Duration: ${duration} min`
+      );
+      console.log(
+        `[createRide] Calculating fare for category ${carCategory}, carrier: ${carrierRequested}`
+      );
       const fareDetails = await calculateFare(
         pickupLocation,
         dropLocation,
@@ -754,50 +794,153 @@ export const createRide = async (req: Request, res: Response) => {
         carCategory,
         carrierRequested
       );
-
+      console.log(`[createRide] Calculated Fare Details:`, fareDetails);
+      // Add local ride specific fields, including tax/charges
       rideData = {
         ...rideData,
         distance,
         duration,
-        fare: fareDetails.totalFare,
+        fare: fareDetails.baseFare, // Store base fare (base + distance * rate)
+        totalAmount: fareDetails.totalFare, // Store total calculated fare including taxes/carrier
+        stateTax: fareDetails.charges.stateTax,
+        tollCharges: fareDetails.charges.tollCharges,
+        airportCharges: fareDetails.charges.airportCharges,
+        mcdCharges: fareDetails.charges.mcdCharges,
       };
+      console.log(`[createRide] Local ride data prepared:`, rideData);
     }
 
-    // Create the ride
+    // 5. Create the Ride record in the database FIRST
+    console.log(`[createRide] Creating ride record in database...`);
     const ride = await prisma.ride.create({
       data: rideData,
       include: {
-        user: {
-          select: { name: true, phone: true },
-        },
+        // Include necessary relations for the response
+        user: { select: { id: true, name: true, phone: true } },
+        driver: {
+          select: { id: true, name: true, phone: true, driverDetails: true },
+        }, // Include driver details
       },
     });
+    console.log(
+      `[createRide] Ride record created successfully with ID: ${ride.id}`
+    );
 
-    // Start driver search process
-    const driverSearchResult = await findAndRequestDrivers(ride);
-
-    // Handle no driver found case
-    if (!driverSearchResult.success) {
-      const cancelledRide = await updateRideInDatabase(
-        ride.id,
-        RideStatus.CANCELLED
-      );
-      return res.status(200).json({
-        message: driverSearchResult.message,
-        searchedDrivers: driverSearchResult.searchedDrivers,
-        ride: cancelledRide,
-      });
-    }
-
-    return res.status(201).json({
-      ride: driverSearchResult.ride,
-      message: driverSearchResult.message,
-      searchedDrivers: driverSearchResult.searchedDrivers,
-      finalRadius: driverSearchResult.finalRadius,
+    // 6. Respond IMMEDIATELY to the frontend with the created ride object
+    console.log(
+      `[createRide] Sending immediate response (201) for ride ${ride.id}`
+    );
+    // *** THE KEY CHANGE: Respond BEFORE searching for drivers ***
+    res.status(201).json({
+      message: "Ride created, searching for driver...",
+      ride: ride, // Send the full created ride object back
     });
+    console.log(
+      `[createRide] Response sent for ride ${ride.id}. Initiating async driver search...`
+    );
+
+    // 7. Initiate driver search asynchronously (don't await the IIFE)
+    // *** THE KEY CHANGE: Search happens AFTER response is sent ***
+    (async () => {
+      try {
+        console.log(
+          `[Async Search] Starting background driver search for ride ${ride.id}`
+        );
+        // Pass the newly created ride object with includes to the search function
+        const driverSearchResult = await findAndRequestDrivers(ride); // This function searches and handles acceptance/socket emits
+        console.log(
+          `[Async Search] Background search completed for ride ${ride.id}. Result Success: ${driverSearchResult.success}, Message: ${driverSearchResult.message}`
+        );
+
+        // If the async search fails to find a driver
+        if (!driverSearchResult.success) {
+          console.log(
+            `[Async Search] Driver search failed for ride ${ride.id}. Checking current status before potentially cancelling...`
+          );
+          // Check the ride status again before updating
+          const currentRideState = await prisma.ride.findUnique({
+            where: { id: ride.id },
+            select: { status: true },
+          });
+
+          // Only update to CANCELLED if it's still in SEARCHING state
+          if (currentRideState?.status === RideStatus.SEARCHING) {
+            console.log(
+              `[Async Search] Ride ${ride.id} still SEARCHING. Updating status to CANCELLED (No drivers found).`
+            );
+            // Update the database first
+            await updateRideInDatabase(ride.id, RideStatus.CANCELLED);
+            // Notify the user via socket AFTER db update
+            io.to(ride.userId).emit("ride_status_update", {
+              rideId: ride.id,
+              status: RideStatus.CANCELLED,
+              reason:
+                driverSearchResult.message || "No available drivers found",
+            });
+            console.log(
+              `[Async Search] Sent CANCELLED status update to user ${ride.userId} for ride ${ride.id}`
+            );
+          } else {
+            console.log(
+              `[Async Search] Ride ${ride.id} status is already ${currentRideState?.status}. No cancellation needed from async search failure.`
+            );
+          }
+        }
+        // If driverSearchResult.success is true, findAndRequestDrivers handles DB updates and socket emits.
+      } catch (searchError) {
+        console.error(
+          `[Async Search] Error during background driver search for ride ${ride.id}:`,
+          searchError
+        );
+        // Attempt to cancel the ride if an error occurred, checking status first
+        try {
+          const currentRideStateOnError = await prisma.ride.findUnique({
+            where: { id: ride.id },
+            select: { status: true },
+          });
+          if (currentRideStateOnError?.status === RideStatus.SEARCHING) {
+            console.log(
+              `[Async Search] Error occurred for ${ride.id} while SEARCHING. Updating status to CANCELLED.`
+            );
+            await updateRideInDatabase(ride.id, RideStatus.CANCELLED); // Update DB first
+            io.to(ride.userId).emit("ride_status_update", {
+              // Notify user after DB update
+              rideId: ride.id,
+              status: RideStatus.CANCELLED,
+              reason: "Error during driver search process",
+            });
+            console.log(
+              `[Async Search] Sent CANCELLED status update due to error to user ${ride.userId} for ride ${ride.id}`
+            );
+          } else {
+            console.log(
+              `[Async Search] Error occurred for ${ride.id}, but status is already ${currentRideStateOnError?.status}. No cancellation needed.`
+            );
+          }
+        } catch (dbError) {
+          console.error(
+            `[Async Search] Error updating ride ${ride.id} to CANCELLED after search error:`,
+            dbError
+          );
+        }
+      }
+    })(); // End of async IIFE
   } catch (error) {
-    console.error("Error in createRide:", error);
-    res.status(500).json({ error: "Failed to create ride" });
+    console.error(
+      "[createRide] Error during initial ride creation process:",
+      error
+    );
+    // Ensure response is sent only once
+    if (!res.headersSent) {
+      console.error(
+        "[createRide] Sending 500 error response as headers were not sent."
+      );
+      res.status(500).json({ error: "Failed to create ride record" });
+    } else {
+      console.error(
+        "[createRide] Error occurred after response was already sent. Ride ID potentially unknown or not created."
+      );
+    }
   }
 };
 
