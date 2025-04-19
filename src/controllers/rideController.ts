@@ -795,17 +795,13 @@ export const createRide = async (req: Request, res: Response) => {
         carrierRequested
       );
       console.log(`[createRide] Calculated Fare Details:`, fareDetails);
-      // Add local ride specific fields, including tax/charges
+      // Add local ride specific fields
       rideData = {
         ...rideData,
         distance,
         duration,
         fare: fareDetails.baseFare, // Store base fare (base + distance * rate)
         totalAmount: fareDetails.totalFare, // Store total calculated fare including taxes/carrier
-        stateTax: fareDetails.charges.stateTax,
-        tollCharges: fareDetails.charges.tollCharges,
-        airportCharges: fareDetails.charges.airportCharges,
-        mcdCharges: fareDetails.charges.mcdCharges,
       };
       console.log(`[createRide] Local ride data prepared:`, rideData);
     }
