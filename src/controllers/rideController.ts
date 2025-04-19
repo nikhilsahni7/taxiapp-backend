@@ -754,8 +754,8 @@ export const createRide = async (req: Request, res: Response) => {
         rentalPackageHours,
         rentalPackageKms: packageDetails.km,
         rentalBasePrice: baseRentalPrice,
-        fare: baseRentalPrice, // Initial fare is base price
-        totalAmount: baseRentalPrice, // Initial total is base price
+        fare: baseRentalPrice, // Initial fare is base price for rentals
+        totalAmount: baseRentalPrice, // Initial total is base price for rentals
         dropLocation: "", // Default empty drop location for rentals
         actualKmsTravelled: 0, // Initialize rental specific fields
         actualMinutes: 0,
@@ -800,7 +800,7 @@ export const createRide = async (req: Request, res: Response) => {
         ...rideData,
         distance,
         duration,
-        fare: fareDetails.baseFare, // Store base fare (base + distance * rate)
+        fare: fareDetails.totalFare, // Store the TOTAL fare including taxes/charges
         totalAmount: fareDetails.totalFare, // Store total calculated fare including taxes/carrier
       };
       console.log(`[createRide] Local ride data prepared:`, rideData);
