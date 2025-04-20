@@ -135,6 +135,9 @@ export const createCarRental = async (req: Request, res: Response) => {
       // Note: We will reset the user's outstanding fee upon successful payment later
     }
 
+    console.log("Creating rental with metadata:", rentalMetadata);
+    // >> prisma.ride.create({ data: { ..., metadata: rentalMetadata } })
+
     // Create rental booking with coordinates, carrier option, fee, and metadata
     const rental = await prisma.ride.create({
       data: {
@@ -866,9 +869,12 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
     }
 
     // Check if an outstanding fee was applied (before the transaction)
+    console.log("Fetched rental metadata for payment:", rental.metadata);
     const metadata = rental.metadata as Prisma.JsonObject | null;
     const appliedFee = metadata?.appliedOutstandingFee;
+    console.log("Applied fee detected:", appliedFee);
     const feeWasApplied = typeof appliedFee === "number" && appliedFee > 0;
+    console.log("Fee was applied flag:", feeWasApplied);
     const userIdToResetFee = feeWasApplied ? rental.userId : null;
 
     if (!received) {
@@ -1013,9 +1019,12 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
     }
 
     // Check if an outstanding fee was applied (before the transaction)
+    console.log("Fetched rental metadata for payment:", rental.metadata);
     const metadata = rental.metadata as Prisma.JsonObject | null;
     const appliedFee = metadata?.appliedOutstandingFee;
+    console.log("Applied fee detected:", appliedFee);
     const feeWasApplied = typeof appliedFee === "number" && appliedFee > 0;
+    console.log("Fee was applied flag:", feeWasApplied);
     const userIdToResetFee = feeWasApplied ? rental.userId : null;
 
     // Perform main transaction: Update Ride, Transaction, Wallet
