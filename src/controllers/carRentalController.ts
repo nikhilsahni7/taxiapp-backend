@@ -849,14 +849,12 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
         status: RideStatus.PAYMENT_PENDING,
         paymentMode: PaymentMode.CASH,
       },
-      // Select metadata explicitly if not always included
       select: {
         id: true,
         userId: true,
         driverId: true,
         totalAmount: true,
-        metadata: true, // Ensure metadata is fetched
-        // ... other necessary fields
+        metadata: true,
       },
     });
 
@@ -867,10 +865,11 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // Type assertion for metadata if needed, adjust based on actual structure
+    // Check if an outstanding fee was applied (before the transaction)
     const metadata = rental.metadata as Prisma.JsonObject | null;
     const appliedFee = metadata?.appliedOutstandingFee;
     const feeWasApplied = typeof appliedFee === "number" && appliedFee > 0;
+    const userIdToResetFee = feeWasApplied ? rental.userId : null;
 
     if (!received) {
       return res.json({
@@ -883,15 +882,15 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // Prepare transaction operations
-    const transactionOperations = [
+    // --- Main Transaction: Update Ride, Create Transaction, Update Wallet --- START
+    const [updatedRental, transaction] = await prisma.$transaction([
       // 1. Update Ride Status
       prisma.ride.update({
         where: { id },
         data: {
           status: RideStatus.PAYMENT_COMPLETED,
           rideEndedAt: new Date(),
-          paymentStatus: TransactionStatus.COMPLETED, // Mark payment status as completed
+          paymentStatus: TransactionStatus.COMPLETED,
         },
       }),
       // 2. Create Transaction Record
@@ -921,31 +920,28 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
           },
         },
       }),
-    ];
+    ]);
+    // --- Main Transaction --- END
 
-    // 4. Conditionally add User Fee Reset operation
-    if (feeWasApplied) {
-      transactionOperations.push(
-        prisma.user.update({
-          where: { id: rental.userId },
-          data: {
-            outstandingCancellationFee: 0, // Reset the fee
-          },
-        })
-      );
-      console.log(
-        `Outstanding cancellation fee reset for user ${rental.userId} after rental ${rental.id} payment.`
-      );
+    // --- Separate Step: Reset User Fee if Applicable --- START
+    if (userIdToResetFee) {
+      try {
+        await prisma.user.update({
+          where: { id: userIdToResetFee },
+          data: { outstandingCancellationFee: 0 }, // Reset the fee
+        });
+        console.log(
+          `Outstanding cancellation fee reset for user ${userIdToResetFee} after rental ${rental.id} cash payment.`
+        );
+      } catch (userUpdateError) {
+        // Log error if fee reset fails, but don't fail the overall request
+        console.error(
+          `Failed to reset outstanding fee for user ${userIdToResetFee} after successful cash payment for rental ${rental.id}:`,
+          userUpdateError
+        );
+      }
     }
-
-    // Execute all operations in a transaction
-    const results = await prisma.$transaction(transactionOperations);
-
-    // Extract results (adjust indices based on whether fee reset was added)
-    const updatedRental = results[0];
-    const transaction = results[1];
-    // const walletUpdate = results[2];
-    // const userUpdate = feeWasApplied ? results[3] : null;
+    // --- Separate Step: Reset User Fee if Applicable --- END
 
     return res.json({
       success: true,
@@ -957,6 +953,7 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error("Error confirming payment:", error);
+    // Handle potential errors from the main transaction
     return res.status(500).json({ error: "Failed to confirm payment" });
   }
 };
