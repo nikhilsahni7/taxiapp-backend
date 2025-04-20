@@ -1,5 +1,9 @@
 import express from "express";
 import {
+  createVendorAllIndiaBooking,
+  getVendorAllIndiaFareEstimate,
+} from "../controllers/vendorAllIndiaController";
+import {
   cancelVendorBooking,
   completeVendorRide,
   createDriverCommissionPayment,
@@ -24,6 +28,7 @@ const router = express.Router();
 // Public routes
 router.post("/estimate", getVendorFareEstimate);
 router.post("/chardham/estimate", getVendorChardhamFareEstimate);
+router.post("/all-india/estimate", getVendorAllIndiaFareEstimate);
 
 // Protected routes
 router.use(verifyToken);
@@ -34,6 +39,7 @@ router.get("/transactions", getVendorTransactions);
 router.get("/earnings", getVendorEarnings);
 router.post("/bookings", createVendorBooking);
 router.post("/chardham/bookings", createVendorChardhamBooking);
+router.post("/all-india/bookings", createVendorAllIndiaBooking);
 router.get("/bookings", getVendorBookings);
 router.get("/bookings/:bookingId", getVendorBookingDetails);
 
