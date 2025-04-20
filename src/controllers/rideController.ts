@@ -508,7 +508,7 @@ async function findAndRequestDrivers(ride: any) {
             rideId: ride.id,
             pickupLocation: ride.pickupLocation,
             dropLocation: ride.dropLocation,
-            fare: ride.fare,
+            fare: ride.totalAmount,
             distance: ride.distance,
             duration: ride.duration,
             paymentMode: ride.paymentMode,
