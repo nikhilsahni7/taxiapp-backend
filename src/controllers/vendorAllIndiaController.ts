@@ -164,19 +164,12 @@ export const getVendorAllIndiaFareEstimate = async (
       rates,
     } = calculateAllIndiaAppBasePrice(distance, numberOfDays, vehicleType);
 
-    // Validate vendor price
-    if (vendorPrice < appBasePrice) {
-      return res.status(400).json({
-        error: `Vendor price (₹${vendorPrice}) cannot be less than the app base price (₹${appBasePrice})`,
-      });
-    }
-
     // Calculate commissions and payouts
     const appCommissionFromBase = Math.round(appBasePrice * 0.12); // 12% commission on app base
     const vendorCommission = vendorPrice - appBasePrice;
     const appCommissionFromVendor = Math.round(vendorCommission * 0.1); // 10% of vendor markup
     const totalAppCommission = appCommissionFromBase + appCommissionFromVendor;
-    const driverPayout = appBasePrice - appCommissionFromBase; // Driver gets base price minus app's cut from base
+    const driverPayout = vendorPrice - totalAppCommission; // CORRECTED: Match vendorController logic
     const vendorPayout = vendorCommission - appCommissionFromVendor; // Vendor gets their markup minus app's cut from markup
 
     res.json({
@@ -319,7 +312,7 @@ export const createVendorAllIndiaBooking = async (
     const vendorCommission = vendorPrice - appBasePrice;
     const appCommissionFromVendor = Math.round(vendorCommission * 0.1);
     const totalAppCommission = appCommissionFromBase + appCommissionFromVendor;
-    const driverPayout = appBasePrice - appCommissionFromBase;
+    const driverPayout = vendorPrice - totalAppCommission; // CORRECTED: Match vendorController logic
     const vendorPayout = vendorCommission - appCommissionFromVendor;
 
     // Create booking
