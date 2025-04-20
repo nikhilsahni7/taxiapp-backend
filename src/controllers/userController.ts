@@ -1,4 +1,5 @@
 import { PrismaClient, UserType } from "@prisma/client";
+import type { Request, Response } from "express"; // Ensure express types are imported
 
 const prisma = new PrismaClient();
 
@@ -69,8 +70,8 @@ export const getAllUsersWithDetails = async (req: Request, res: Response) => {
         user.userType === UserType.DRIVER
           ? user.driverDetails
           : user.userType === UserType.VENDOR
-          ? user.vendorDetails
-          : user.userDetails,
+            ? user.vendorDetails
+            : user.userDetails,
       // Include driver status if applicable
       ...(user.userType === UserType.DRIVER && {
         driverStatus: user.driverStatus,
@@ -107,5 +108,34 @@ export const getAllUsersWithDetails = async (req: Request, res: Response) => {
       error: "Failed to fetch users",
       message: error instanceof Error ? error.message : "Unknown error",
     });
+  }
+};
+
+// Get outstanding cancellation fee for the logged-in user
+export const getUserOutstandingFee = async (req: Request, res: Response) => {
+  if (!req.user) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const userId = req.user.userId;
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        outstandingCancellationFee: true,
+      },
+    });
+
+    if (!user) {
+      // Should not happen if token is valid, but good practice
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Return the fee amount directly
+    res.json({ outstandingCancellationFee: user.outstandingCancellationFee });
+  } catch (error) {
+    console.error(`Error fetching outstanding fee for user ${userId}:`, error);
+    res.status(500).json({ error: "Failed to fetch outstanding fee" });
   }
 };

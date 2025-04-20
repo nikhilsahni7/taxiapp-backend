@@ -4,11 +4,12 @@ import {
   PrismaClient,
   RideStatus,
 } from "@prisma/client";
-import type { Request, Response } from "express";
+import type { Request, RequestHandler, Response } from "express";
 import express from "express";
 
 import multer from "multer";
 import { uploadImage } from "../config/cloudinary";
+import { getUserOutstandingFee } from "../controllers/userController";
 import { verifyToken } from "../middlewares/auth";
 
 const router = express.Router();
@@ -610,6 +611,13 @@ router.get(
       res.status(500).json({ error: "Failed to fetch recent rides" });
     }
   }
+);
+
+// Get the outstanding cancellation fee for the logged-in user
+router.get(
+  "/me/outstanding-fee",
+  verifyToken,
+  getUserOutstandingFee as unknown as RequestHandler
 );
 
 export { router as userRouter };
