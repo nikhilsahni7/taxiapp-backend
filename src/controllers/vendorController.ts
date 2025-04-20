@@ -23,20 +23,20 @@ const VENDOR_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
     sedan: { base: 15, short: 20 },
     ertiga: { base: 18, short: 23 },
     innova: { base: 21, short: 27 },
-    tempo_12: { fixed: 8500, extra: 26 },
-    tempo_16: { fixed: 9500, extra: 29 },
-    tempo_20: { fixed: 10500, extra: 33 },
-    tempo_26: { fixed: 11500, extra: 38 },
+    tempo_12: { fixed: 17000, extra: 26 }, // double rates as round trip
+    tempo_16: { fixed: 19000, extra: 29 },
+    tempo_20: { fixed: 21000, extra: 33 },
+    tempo_26: { fixed: 23000, extra: 38 },
   },
   HILL_STATION: {
     mini: { base: 18 },
     sedan: { base: 23 },
     ertiga: { base: 27 },
     innova: { base: 30 },
-    tempo_12: { fixed: 8500, extra: 26 },
-    tempo_16: { fixed: 9500, extra: 29 },
-    tempo_20: { fixed: 10500, extra: 33 },
-    tempo_26: { fixed: 11500, extra: 38 },
+    tempo_12: { fixed: 17000, extra: 26 }, // double rates as round trip
+    tempo_16: { fixed: 19000, extra: 29 }, // double rates as round trip
+    tempo_20: { fixed: 21000, extra: 33 }, // double rates as round trip
+    tempo_26: { fixed: 23000, extra: 38 }, // double rates as round trip
   },
 
   ALL_INDIA_TOUR: {
