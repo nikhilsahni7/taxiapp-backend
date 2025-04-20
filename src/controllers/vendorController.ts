@@ -19,25 +19,26 @@ const razorpay = new Razorpay({
 // Define the rates with proper type
 const VENDOR_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
   OUTSTATION: {
-    mini: { base: 14, short: 17 },
-    sedan: { base: 17, short: 22 },
-    ertiga: { base: 21, short: 27 },
-    innova: { base: 27, short: 30 },
-    tempo_12: { fixed: 14700, extra: 26 },
-    tempo_16: { fixed: 16700, extra: 29 },
-    tempo_20: { fixed: 18700, extra: 33 },
-    tempo_26: { fixed: 20700, extra: 38 },
+    mini: { base: 13, short: 17 },
+    sedan: { base: 15, short: 20 },
+    ertiga: { base: 18, short: 23 },
+    innova: { base: 21, short: 27 },
+    tempo_12: { fixed: 8500, extra: 26 },
+    tempo_16: { fixed: 9500, extra: 29 },
+    tempo_20: { fixed: 10500, extra: 33 },
+    tempo_26: { fixed: 11500, extra: 38 },
   },
   HILL_STATION: {
-    mini: { base: 23 },
-    sedan: { base: 30 },
-    ertiga: { base: 33 },
-    innova: { base: 38 },
-    tempo_12: { fixed: 7700, extra: 26 },
-    tempo_16: { fixed: 8700, extra: 29 },
-    tempo_20: { fixed: 9700, extra: 33 },
-    tempo_26: { fixed: 10700, extra: 38 },
+    mini: { base: 18 },
+    sedan: { base: 23 },
+    ertiga: { base: 27 },
+    innova: { base: 30 },
+    tempo_12: { fixed: 8500, extra: 26 },
+    tempo_16: { fixed: 9500, extra: 29 },
+    tempo_20: { fixed: 10500, extra: 33 },
+    tempo_26: { fixed: 11500, extra: 38 },
   },
+
   ALL_INDIA_TOUR: {
     mini: { perDay: 3450, extraKm: 17 },
     sedan: { perDay: 4200, extraKm: 19 },
@@ -52,14 +53,14 @@ const VENDOR_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
 
 // Chardham Yatra rates based on vehicle type
 const CHARDHAM_RATES = {
-  mini: { perDayRate: 3200, perKmRate: 11 },
-  sedan: { perDayRate: 3500, perKmRate: 14 },
-  ertiga: { perDayRate: 4000, perKmRate: 18 },
-  innova: { perDayRate: 5600, perKmRate: 24 },
-  tempo_12: { perDayRate: 7500, perKmRate: 23 },
-  tempo_16: { perDayRate: 8000, perKmRate: 26 },
-  tempo_20: { perDayRate: 9000, perKmRate: 30 },
-  tempo_26: { perDayRate: 10000, perKmRate: 35 },
+  mini: { perDayRate: 3400, perKmRate: 11 },
+  sedan: { perDayRate: 4000, perKmRate: 14 },
+  ertiga: { perDayRate: 5500, perKmRate: 18 },
+  innova: { perDayRate: 6500, perKmRate: 24 },
+  tempo_12: { perDayRate: 8500, perKmRate: 23 },
+  tempo_16: { perDayRate: 9500, perKmRate: 26 },
+  tempo_20: { perDayRate: 10500, perKmRate: 30 },
+  tempo_26: { perDayRate: 11500, perKmRate: 35 },
 };
 
 // Days required based on number of dhams and starting point
@@ -1004,6 +1005,9 @@ function calculateAppBasePrice(
         }
       } else {
         baseFare = distance * rate.base;
+        if (tripType === "ROUND_TRIP") {
+          baseFare *= 2;
+        }
       }
       break;
 
