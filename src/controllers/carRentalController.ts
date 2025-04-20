@@ -6,6 +6,7 @@ import {
   RideStatus,
   TransactionStatus,
   TransactionType,
+  UserType,
 } from "@prisma/client";
 import crypto from "crypto";
 import type { Request, Response } from "express";
@@ -88,6 +89,19 @@ export const createCarRental = async (req: Request, res: Response) => {
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
 
   try {
+    // Fetch user details including outstanding fee
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.userId },
+      select: { outstandingCancellationFee: true },
+    });
+
+    if (!user) {
+      // This shouldn't happen if req.user is set, but good practice
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const outstandingFee = user.outstandingCancellationFee || 0;
+
     // Validate coordinates
     if (!pickupLat || !pickupLng) {
       const locationData = await getCoordinatesAndAddress(pickupLocation);
@@ -107,9 +121,21 @@ export const createCarRental = async (req: Request, res: Response) => {
 
     // Calculate carrier charge if requested
     const carrierCharge = carrierRequested ? 30 : 0;
-    const totalBasePrice = packageDetails.price + carrierCharge;
+    // Calculate base price including carrier charge
+    let totalBasePrice = packageDetails.price + carrierCharge;
 
-    // Create rental booking with coordinates and carrier option
+    // Apply outstanding fee
+    let appliedOutstandingFee = 0;
+    const rentalMetadata: Prisma.JsonObject = {}; // Initialize metadata
+
+    if (outstandingFee > 0) {
+      appliedOutstandingFee = outstandingFee;
+      totalBasePrice += appliedOutstandingFee; // Add fee to the total base price
+      rentalMetadata.appliedOutstandingFee = appliedOutstandingFee; // Store in metadata
+      // Note: We will reset the user's outstanding fee upon successful payment later
+    }
+
+    // Create rental booking with coordinates, carrier option, fee, and metadata
     const rental = await prisma.ride.create({
       data: {
         userId: req.user.userId,
@@ -122,20 +148,34 @@ export const createCarRental = async (req: Request, res: Response) => {
         isCarRental: true,
         rentalPackageHours: packageHours,
         rentalPackageKms: packageDetails.km,
-        rentalBasePrice: totalBasePrice,
+        rentalBasePrice: totalBasePrice, // Use the potentially increased base price
         carrierRequested: carrierRequested || false,
         carrierCharge: carrierCharge,
         dropLocation: "", // not needed for car rental
         otp: Math.floor(1000 + Math.random() * 9000).toString(),
+        metadata: rentalMetadata, // Add metadata here
+        // totalAmount will be calculated later, ensure fee is included there too
       },
     });
 
     // Start driver search process with carrier filter if required
     const searchResult = await findDriversForRental(rental);
 
+    // Include applied fee in response
     return res.status(201).json({
-      rental,
+      rental: {
+        ...rental,
+        // Explicitly add applied fee to response for frontend clarity
+        appliedOutstandingFee: appliedOutstandingFee,
+      },
       searchResult,
+      // Optional: You might want to send the breakdown explicitly
+      // priceDetails: {
+      //   packagePrice: packageDetails.price,
+      //   carrierCharge: carrierCharge,
+      //   appliedOutstandingFee: appliedOutstandingFee,
+      //   totalBasePrice: totalBasePrice
+      // }
     });
   } catch (error) {
     console.error("Error creating car rental:", error);
@@ -492,47 +532,128 @@ export const cancelRental = async (req: Request, res: Response) => {
   const { reason } = req.body;
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
 
+  const CANCELLATION_FEE = 50; // Define the cancellation fee amount
+
   try {
-    const rental = await prisma.ride.findFirst({
-      where: {
-        id,
-        OR: [{ userId: req.user.userId }, { driverId: req.user.userId }],
-        status: {
-          in: [
-            RideStatus.SEARCHING,
-            RideStatus.ACCEPTED,
-            RideStatus.DRIVER_ARRIVED,
-            RideStatus.RIDE_STARTED,
-          ],
+    // Use transaction to ensure atomicity
+    const result = await prisma.$transaction(async (tx) => {
+      const rental = await tx.ride.findFirst({
+        where: {
+          id,
+          // Ensure the user requesting cancellation is either the user or the driver
+          OR: [{ userId: req.user!.userId }, { driverId: req.user!.userId }],
+          status: {
+            in: [
+              RideStatus.SEARCHING,
+              RideStatus.ACCEPTED,
+              RideStatus.DRIVER_ARRIVED,
+              RideStatus.RIDE_STARTED,
+            ],
+          },
         },
-      },
-    });
+      });
 
-    if (!rental) {
-      return res
-        .status(404)
-        .json({ error: "Rental not found or cannot be cancelled" });
-    }
+      if (!rental) {
+        // Throw an error to rollback the transaction
+        throw new Error("Rental not found or cannot be cancelled");
+      }
 
-    // Calculate cancellation fee based on status and user type
-    let cancellationFee = 0;
-    if (rental.status !== RideStatus.SEARCHING) {
-      cancellationFee = rental.rentalBasePrice! * 0.1; // 10% of base price
-    }
+      let cancellationFeeAmount = 0;
+      // Fee applies if driver arrived or ride started
+      const canApplyFee =
+        rental.status === RideStatus.DRIVER_ARRIVED ||
+        rental.status === RideStatus.RIDE_STARTED;
+      const cancelledByUser = req.user!.userType === UserType.USER;
+      const cancelledByDriver = req.user!.userType === UserType.DRIVER;
 
-    const updatedRental = await prisma.ride.update({
-      where: { id },
-      data: {
+      // Prepare update data for the ride
+      const rideUpdateData: Prisma.RideUpdateInput = {
         status: RideStatus.CANCELLED,
         cancellationReason: reason,
-        cancellationFee,
-        cancelledBy: req.user.userType as CancelledBy,
-      },
+        cancelledBy: req.user!.userType as CancelledBy, // Assuming UserType maps directly to CancelledBy enum names
+      };
+
+      if (canApplyFee) {
+        cancellationFeeAmount = CANCELLATION_FEE;
+        rideUpdateData.cancellationFee = cancellationFeeAmount; // Record the fee on the ride
+
+        if (cancelledByUser) {
+          // User cancels late: Add fee to their outstanding balance
+          await tx.user.update({
+            where: { id: rental.userId },
+            data: {
+              outstandingCancellationFee: {
+                increment: cancellationFeeAmount,
+              },
+            },
+          });
+        } else if (cancelledByDriver && rental.driverId) {
+          // Driver cancels late: Deduct fee from their wallet
+
+          // Check if driver has sufficient balance
+          const driverWallet = await tx.wallet.findUnique({
+            where: { userId: rental.driverId },
+          });
+
+          if (!driverWallet || driverWallet.balance < cancellationFeeAmount) {
+            // Log issue but still cancel the ride and record the fee amount on the ride itself.
+            // The fee won't be deducted from the driver's wallet in this case.
+            console.warn(
+              `Driver ${rental.driverId} has insufficient funds (${driverWallet?.balance}) for cancellation fee ${cancellationFeeAmount}. Fee recorded on ride ${rental.id} but not deducted from wallet.`
+            );
+          } else {
+            // Deduct from wallet
+            await tx.wallet.update({
+              where: { userId: rental.driverId },
+              data: {
+                balance: {
+                  decrement: cancellationFeeAmount,
+                },
+              },
+            });
+
+            // Create transaction record for the penalty using RIDE_PAYMENT type with negative amount
+            await tx.transaction.create({
+              data: {
+                amount: -cancellationFeeAmount, // Negative amount for deduction
+                type: TransactionType.RIDE_PAYMENT, // Re-use existing type
+                status: TransactionStatus.COMPLETED,
+                senderId: rental.driverId, // Driver is the 'sender' of the penalty payment
+                // receiverId: null, // Or admin/system ID if applicable
+                rideId: rental.id,
+                description: `Driver cancellation penalty for rental ${rental.id}`,
+              },
+            });
+          }
+        }
+      }
+
+      // Update the ride itself
+      const updatedRental = await tx.ride.update({
+        where: { id: rental.id },
+        data: rideUpdateData,
+      });
+
+      return updatedRental;
     });
 
-    return res.json(updatedRental);
-  } catch (error) {
+    // If transaction succeeds
+    // TODO: Emit socket event to notify involved parties about cancellation
+    // io.to(result.userId).emit('rental_cancelled', { rideId: result.id, reason, cancelledBy: req.user.userType });
+    // if (result.driverId) io.to(result.driverId).emit('rental_cancelled', { rideId: result.id, reason, cancelledBy: req.user.userType });
+    // You might want to emit the updated user.outstandingCancellationFee to the user if they cancelled
+
+    return res.json(result);
+  } catch (error: any) {
     console.error("Error cancelling rental:", error);
+    // Check for specific error messages thrown from the transaction
+    if (error.message === "Rental not found or cannot be cancelled") {
+      return res.status(404).json({ error: error.message });
+    }
+    // Note: We are not throwing the insufficient funds error anymore, just logging.
+    // if (error.message === "Driver has insufficient funds to cover cancellation fee.") {
+    //    return res.status(400).json({ error: error.message });
+    // }
     return res.status(500).json({ error: "Failed to cancel rental" });
   }
 };
@@ -720,6 +841,7 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
 
   try {
+    // Fetch rental including metadata to check for applied fee
     const rental = await prisma.ride.findFirst({
       where: {
         id,
@@ -727,11 +849,28 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
         status: RideStatus.PAYMENT_PENDING,
         paymentMode: PaymentMode.CASH,
       },
+      // Select metadata explicitly if not always included
+      select: {
+        id: true,
+        userId: true,
+        driverId: true,
+        totalAmount: true,
+        metadata: true, // Ensure metadata is fetched
+        // ... other necessary fields
+      },
     });
 
     if (!rental) {
-      return res.status(404).json({ error: "Rental not found" });
+      return res.status(404).json({
+        error:
+          "Rental not found or in incorrect state for cash payment confirmation",
+      });
     }
+
+    // Type assertion for metadata if needed, adjust based on actual structure
+    const metadata = rental.metadata as Prisma.JsonObject | null;
+    const appliedFee = metadata?.appliedOutstandingFee;
+    const feeWasApplied = typeof appliedFee === "number" && appliedFee > 0;
 
     if (!received) {
       return res.json({
@@ -744,15 +883,18 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // Complete the rental, create transaction, and update wallet in a transaction
-    const [updatedRental, transaction] = await prisma.$transaction([
+    // Prepare transaction operations
+    const transactionOperations = [
+      // 1. Update Ride Status
       prisma.ride.update({
         where: { id },
         data: {
           status: RideStatus.PAYMENT_COMPLETED,
           rideEndedAt: new Date(),
+          paymentStatus: TransactionStatus.COMPLETED, // Mark payment status as completed
         },
       }),
+      // 2. Create Transaction Record
       prisma.transaction.create({
         data: {
           amount: rental.totalAmount!,
@@ -764,7 +906,7 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
           description: "Cash payment for car rental",
         },
       }),
-      // Add wallet update
+      // 3. Update Driver Wallet
       prisma.wallet.upsert({
         where: {
           userId: rental.driverId!,
@@ -779,11 +921,37 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
           },
         },
       }),
-    ]);
+    ];
+
+    // 4. Conditionally add User Fee Reset operation
+    if (feeWasApplied) {
+      transactionOperations.push(
+        prisma.user.update({
+          where: { id: rental.userId },
+          data: {
+            outstandingCancellationFee: 0, // Reset the fee
+          },
+        })
+      );
+      console.log(
+        `Outstanding cancellation fee reset for user ${rental.userId} after rental ${rental.id} payment.`
+      );
+    }
+
+    // Execute all operations in a transaction
+    const results = await prisma.$transaction(transactionOperations);
+
+    // Extract results (adjust indices based on whether fee reset was added)
+    const updatedRental = results[0];
+    const transaction = results[1];
+    // const walletUpdate = results[2];
+    // const userUpdate = feeWasApplied ? results[3] : null;
 
     return res.json({
       success: true,
-      message: "Payment confirmed and rental completed",
+      message:
+        "Payment confirmed and rental completed" +
+        (feeWasApplied ? " (Outstanding fee cleared)." : "."),
       rental: updatedRental,
       transaction,
     });
@@ -795,12 +963,16 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
 
 // Verify Razorpay payment
 export const verifyRazorpayPayment = async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const { id } = req.params; // This is the rideId
   const { razorpay_payment_id, razorpay_order_id, razorpay_signature } =
     req.body;
 
+  if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
+    return res.status(400).json({ error: "Missing Razorpay payment details" });
+  }
+
   try {
-    // Verify payment signature using Razorpay docs
+    // Verify payment signature first
     const body = razorpay_order_id + "|" + razorpay_payment_id;
     const expectedSignature = crypto
       .createHmac("sha256", process.env.RAZORPAY_SECRET!)
@@ -811,19 +983,50 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid payment signature" });
     }
 
-    // Fetch the rental so we have access to driverId and totalAmount needed later
+    // Fetch the rental including metadata and necessary IDs
     const rental = await prisma.ride.findUnique({
       where: { id },
+      select: {
+        id: true,
+        userId: true,
+        driverId: true,
+        totalAmount: true,
+        metadata: true,
+        status: true,
+      },
     });
+
     if (!rental) {
       return res.status(404).json({ error: "Rental not found" });
     }
+    if (rental.status !== RideStatus.PAYMENT_PENDING) {
+      console.warn(
+        `Razorpay verification attempted for rental ${id} not in PAYMENT_PENDING state (state: ${rental.status})`
+      );
+      if (rental.status === RideStatus.PAYMENT_COMPLETED) {
+        return res.json({
+          success: true,
+          message: "Payment already verified.",
+          rental,
+        });
+      }
+      return res.status(400).json({
+        error: `Rental is not awaiting payment (current status: ${rental.status})`,
+      });
+    }
 
-    // Complete the rental, update transaction, and update wallet in a single transaction
-    const [updatedRental, paymentUpdate, walletUpdate] =
+    // Check if an outstanding fee was applied (before the transaction)
+    const metadata = rental.metadata as Prisma.JsonObject | null;
+    const appliedFee = metadata?.appliedOutstandingFee;
+    const feeWasApplied = typeof appliedFee === "number" && appliedFee > 0;
+    const userIdToResetFee = feeWasApplied ? rental.userId : null;
+
+    // Perform main transaction: Update Ride, Transaction, Wallet
+    // Destructure results directly, type inference should work here for these 3 operations
+    const [updatedRental, paymentUpdateResult, walletUpdateResult] =
       await prisma.$transaction([
         prisma.ride.update({
-          where: { id },
+          where: { id: rental.id },
           data: {
             status: RideStatus.PAYMENT_COMPLETED,
             rideEndedAt: new Date(),
@@ -832,14 +1035,14 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
         }),
         prisma.transaction.updateMany({
           where: {
-            rideId: id,
+            rideId: rental.id,
             razorpayOrderId: razorpay_order_id,
             status: TransactionStatus.PENDING,
           },
           data: {
             status: TransactionStatus.COMPLETED,
             razorpayPaymentId: razorpay_payment_id,
-            description: "online payment for car rental",
+            description: "Online payment for car rental",
           },
         }),
         prisma.wallet.upsert({
@@ -856,15 +1059,37 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
         }),
       ]);
 
+    // If the main transaction succeeded AND a fee was applied, reset the user's fee
+    if (userIdToResetFee) {
+      try {
+        await prisma.user.update({
+          where: { id: userIdToResetFee },
+          data: { outstandingCancellationFee: 0 },
+        });
+        console.log(
+          `Outstanding cancellation fee reset for user ${userIdToResetFee} after rental ${rental.id} Razorpay payment.`
+        );
+      } catch (userUpdateError) {
+        // Log error if fee reset fails, but don't fail the overall request
+        console.error(
+          `Failed to reset outstanding fee for user ${userIdToResetFee} after successful payment for rental ${rental.id}:`,
+          userUpdateError
+        );
+      }
+    }
+
     return res.json({
       success: true,
-      message: "Payment verified and rental completed",
-      rental: updatedRental,
-      transaction: paymentUpdate,
-      wallet: walletUpdate,
+      message:
+        "Payment verified and rental completed" +
+        (feeWasApplied ? " (Outstanding fee cleared)." : "."),
+      rental: updatedRental, // Return the updated rental object from the transaction result
+      // Optional: include other results if needed by frontend
+      // transactionUpdateCount: paymentUpdateResult.count,
+      // walletInfo: walletUpdateResult
     });
   } catch (error) {
-    console.error("Error verifying payment:", error);
+    console.error("Error verifying Razorpay payment:", error);
     return res.status(500).json({ error: "Failed to verify payment" });
   }
 };
