@@ -155,11 +155,12 @@ export const getVendorFareEstimate = async (req: Request, res: Response) => {
     );
 
     // Calculate commissions and payouts
+    const appBasePrice = baseFare;
     const appCommissionFromBase = Math.round(baseFare * 0.12); // 12% commission
     const vendorCommission = vendorPrice - baseFare;
     const appCommissionFromVendor = Math.round(vendorCommission * 0.1); // 10% of vendor markup
     const totalAppCommission = appCommissionFromBase + appCommissionFromVendor;
-    const driverPayout = baseFare - appCommissionFromBase;
+    const driverPayout = appBasePrice - appCommissionFromBase;
     const vendorPayout = vendorCommission - appCommissionFromVendor;
 
     res.json({
@@ -232,7 +233,7 @@ export const createVendorBooking = async (req: Request, res: Response) => {
     const appCommissionFromBase = Math.round(appBasePrice * 0.12);
     const appCommissionFromVendor = Math.round(vendorCommission * 0.1); // 10% of vendor markup
     const totalAppCommission = appCommissionFromBase + appCommissionFromVendor;
-    const driverPayout = vendorPrice - totalAppCommission;
+    const driverPayout = appBasePrice - appCommissionFromBase;
     const vendorPayout = vendorCommission - appCommissionFromVendor; // Correct calculation matching estimate
 
     // Determine end date based on service type and trip type

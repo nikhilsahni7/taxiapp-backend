@@ -169,7 +169,7 @@ export const getVendorAllIndiaFareEstimate = async (
     const vendorCommission = vendorPrice - appBasePrice;
     const appCommissionFromVendor = Math.round(vendorCommission * 0.1); // 10% of vendor markup
     const totalAppCommission = appCommissionFromBase + appCommissionFromVendor;
-    const driverPayout = vendorPrice - totalAppCommission; // CORRECTED: Match vendorController logic
+    const driverPayout = appBasePrice - appCommissionFromBase;
     const vendorPayout = vendorCommission - appCommissionFromVendor; // Vendor gets their markup minus app's cut from markup
 
     res.json({
@@ -312,7 +312,7 @@ export const createVendorAllIndiaBooking = async (
     const vendorCommission = vendorPrice - appBasePrice;
     const appCommissionFromVendor = Math.round(vendorCommission * 0.1);
     const totalAppCommission = appCommissionFromBase + appCommissionFromVendor;
-    const driverPayout = vendorPrice - totalAppCommission; // CORRECTED: Match vendorController logic
+    const driverPayout = appBasePrice - appCommissionFromBase;
     const vendorPayout = vendorCommission - appCommissionFromVendor;
 
     // Create booking
