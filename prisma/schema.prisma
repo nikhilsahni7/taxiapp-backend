@@ -57,6 +57,8 @@ enum TransactionType {
   DRIVER_REGISTRATION_FEE
   RENTAL_PAYMENT
   RENTAL_CANCELLATION
+  DRIVER_CANCELLATION_FEE
+  USER_CANCELLATION_FEE_APPLIED
 }
 
 // New enums for long distance services
@@ -99,6 +101,9 @@ model User {
   selfieUrl     String?
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
+
+  // New field to track pending cancellation fees for users
+  outstandingCancellationFee Float @default(0)
 
   // Relations
   userDetails    UserDetails?
@@ -194,7 +199,7 @@ model Ride {
   driverAcceptedAt DateTime?
   requestExpiresAt DateTime?
   cancellationReason String?      // Add cancellation reason
-  cancellationFee   Float?        // Add cancellation fee
+  cancellationFee   Float?        // Existing field: Records the fee applied to THIS ride
   cancelledBy       CancelledBy?
 
   user         User          @relation("UserRides", fields: [userId], references: [id])
