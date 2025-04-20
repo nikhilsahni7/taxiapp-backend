@@ -275,6 +275,9 @@ async function findDriversForRental(rental: any) {
   const maxRadius = 15;
   const attemptedDrivers = new Set<string>();
 
+  // Retrieve existing metadata, default to empty object if null/undefined
+  const existingMetadata = (rental.metadata as Prisma.JsonObject | null) ?? {};
+
   while (currentRadius <= maxRadius) {
     // Include carrier filter if requested
     const filterOptions = rental.carrierRequested ? { hasCarrier: true } : {};
@@ -288,7 +291,8 @@ async function findDriversForRental(rental: any) {
     const newDrivers = drivers.filter((d) => !attemptedDrivers.has(d.driverId));
 
     if (newDrivers.length > 0) {
-      const metadata: Prisma.JsonObject = {
+      // Prepare the new metadata related to driver search
+      const driverSearchMetadata: Prisma.JsonObject = {
         availableDrivers: newDrivers.map((d) => ({
           driverId: d.driverId,
           distance: d.distance,
@@ -297,9 +301,17 @@ async function findDriversForRental(rental: any) {
         expiresAt: new Date(Date.now() + 60000).toISOString(), // 60 seconds from now
       };
 
+      // Merge existing metadata with the new driver search metadata
+      const mergedMetadata = {
+        ...existingMetadata,
+        ...driverSearchMetadata,
+      };
+      console.log("Merging metadata in findDriversForRental:", mergedMetadata);
+
+      // Update the ride with the merged metadata
       await prisma.ride.update({
         where: { id: rental.id },
-        data: { metadata },
+        data: { metadata: mergedMetadata }, // Use the merged object
       });
 
       // Schedule automatic cancellation after 60 seconds
@@ -324,7 +336,7 @@ async function findDriversForRental(rental: any) {
         success: true,
         message: "Drivers found",
         driversCount: newDrivers.length,
-        expiresAt: metadata.expiresAt,
+        expiresAt: driverSearchMetadata.expiresAt, // Return expiry from the new part
       };
     }
 
