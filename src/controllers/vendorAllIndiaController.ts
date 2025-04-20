@@ -4,8 +4,6 @@ import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
 
 const prisma = new PrismaClient();
 
-// Define the rates with proper type - Copied from vendorController.ts for consistency
-// Consider moving this to a shared constants file later
 const VENDOR_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
   OUTSTATION: {
     mini: { base: 13, short: 17 },
@@ -28,14 +26,14 @@ const VENDOR_RATES: Record<LongDistanceServiceType, Record<string, any>> = {
     tempo_26: { fixed: 23000, extra: 38 },
   },
   ALL_INDIA_TOUR: {
-    mini: { perDay: 2750, extraKm: 14 }, // Using rates consistent with allIndiaController initially, adjust if needed
+    mini: { perDay: 2750, extraKm: 13 }, // Using rates consistent with allIndiaController initially, adjust if needed
     sedan: { perDay: 3500, extraKm: 16 },
-    ertiga: { perDay: 4500, extraKm: 16 },
-    innova: { perDay: 6000, extraKm: 18 },
-    tempo_12: { perDay: 7000, extraKm: 20 },
-    tempo_16: { perDay: 8000, extraKm: 22 },
-    tempo_20: { perDay: 9000, extraKm: 24 },
-    tempo_26: { perDay: 10000, extraKm: 26 },
+    ertiga: { perDay: 4500, extraKm: 19 },
+    innova: { perDay: 6000, extraKm: 23 },
+    tempo_12: { perDay: 8500, extraKm: 26 },
+    tempo_16: { perDay: 9500, extraKm: 29 },
+    tempo_20: { perDay: 10500, extraKm: 33 },
+    tempo_26: { perDay: 11500, extraKm: 38 },
   },
   // Ensure CHARDHAM_YATRA exists if needed by type, even if empty
   CHARDHAM_YATRA: {},
