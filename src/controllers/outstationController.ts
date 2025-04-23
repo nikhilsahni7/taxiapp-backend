@@ -51,10 +51,10 @@ const VEHICLE_RATES: Record<string, OutstationCarRate | TempoRate> = {
 
 const HILL_STATION_RATES: Record<string, CarRate | TempoRate> = {
   // Tempo rates
-  tempo_12: { fixed: 7000, extra: 23 },
-  tempo_16: { fixed: 8000, extra: 26 },
-  tempo_20: { fixed: 9000, extra: 30 },
-  tempo_26: { fixed: 10000, extra: 35 },
+  tempo_12: { fixed: 14000, extra: 23 },
+  tempo_16: { fixed: 16000, extra: 26 },
+  tempo_20: { fixed: 18000, extra: 30 },
+  tempo_26: { fixed: 20000, extra: 35 },
   // Car rates
   mini: { base: 20 },
   sedan: { base: 27 },
