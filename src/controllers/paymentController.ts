@@ -56,7 +56,7 @@ export const handleRideEnd = async (req: Request, res: Response) => {
     const fareBreakdown = {
       baseFare: ride.fare || 0,
       waitingCharges: ride.waitingCharges || 0,
-      carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
+      carrierCharge: ride.carrierCharge || 0,
       extraCharges: ride.extraCharges || 0,
       totalAmount: finalAmount,
     };
@@ -199,7 +199,7 @@ export const handleCashPayment = async (ride: any) => {
     const fareBreakdown = {
       baseFare: ride.fare || 0,
       waitingCharges: ride.waitingCharges || 0,
-      carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
+      carrierCharge: ride.carrierCharge || 0,
       extraCharges: ride.extraCharges || 0,
       totalAmount: finalAmount,
     };
@@ -383,19 +383,19 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
 // Calculate final amount
 export const calculateFinalAmount = (ride: any): number => {
-  // If totalAmount is already set (e.g., from ride completion), use it
-  if (ride.totalAmount) {
+  // Prefer the authoritative totalAmount set during ride completion
+  if (typeof ride.totalAmount === 'number') {
     return ride.totalAmount;
   }
 
-  // Otherwise calculate it properly to avoid double-counting
-  const baseFare = ride.fare || 0;
-  const carrierCharge = ride.carrierRequested ? ride.carrierCharge || 0 : 0;
+  // Fallback calculation (should ideally not be needed if flow is correct)
+  console.warn(`[calculateFinalAmount] Warning: Fallback calculation used for ride ${ride.id}. totalAmount was not pre-set.`);
+  const initialFare = ride.fare || 0;
+  const waitingCharges = ride.waitingCharges || 0;
   const extraCharges = ride.extraCharges || 0;
-
-  // Return sum without double-counting waiting charges
-  // Note: waiting charges are already included in the 'fare' field
-  return baseFare + carrierCharge + extraCharges;
+  // Assuming carrierCharge is included in the initial ride.fare calculation.
+  // If it needs to be added separately, ensure consistency across controllers.
+  return initialFare + waitingCharges + extraCharges;
 };
 
 // Socket event handlers
@@ -421,7 +421,7 @@ export const setupPaymentSocketEvents = (socket: any) => {
         const fareBreakdown = {
           baseFare: ride.fare || 0,
           waitingCharges: ride.waitingCharges || 0,
-          carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
+          carrierCharge: ride.carrierCharge || 0,
           extraCharges: ride.extraCharges || 0,
           totalAmount: finalAmount,
         };

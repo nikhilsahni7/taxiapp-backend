@@ -1047,7 +1047,6 @@ const calculateWaitingCharges = async (ride: any) => {
       data: {
         waitingMinutes,
         waitingCharges,
-        fare: ride.fare + waitingCharges, // Add waiting charges to the fare
       },
     });
 
@@ -1120,26 +1119,23 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
       };
     } else {
       // For regular rides, recalculate final amount and breakdown correctly
-      const currentFareFromDB = ride.fare || 0; // Includes initial fare (base, distance, taxes, carrier) + waiting charges
-      const waitingChargesFromDB = ride.waitingCharges || 0;
-      const carrierChargeFromDB = ride.carrierCharge || 0; // This was part of the initial fare calculation
-      const extraChargesFromDB = ride.extraCharges || 0;
+      const initialFare = ride.fare || 0; // Use the initial fare stored in the 'fare' field
+      const waitingCharges = ride.waitingCharges || 0;
+      const carrierCharge = ride.carrierCharge || 0; // Get carrier charge
+      const extraCharges = ride.extraCharges || 0;
 
-      // Calculate the initial fare component by removing waiting charges
-      const initialFareComponent = currentFareFromDB - waitingChargesFromDB;
-
-      // Calculate the final total amount: initial component + waiting charges + extra charges
-      const finalAmount = initialFareComponent + waitingChargesFromDB + extraChargesFromDB;
+      // Calculate the final total amount: initial fare + waiting charges + extra charges
+      const finalAmount = initialFare + waitingCharges + extraCharges;
 
       // Update the database record's totalAmount
       updateData.totalAmount = finalAmount;
 
-      // Create the fare breakdown for display
+      // Create the fare breakdown for display, using the correct components
       fareBreakdown = {
-        baseFare: initialFareComponent, // Represents the fare before waiting charges
-        waitingCharges: waitingChargesFromDB,
-        carrierCharge: carrierChargeFromDB, // Display separately
-        extraCharges: extraChargesFromDB,
+        baseFare: initialFare, // Represents the initial fare (base, distance, taxes, carrier)
+        waitingCharges: waitingCharges,
+        carrierCharge: carrierCharge, // Display carrier charge separately
+        extraCharges: extraCharges,
         totalAmount: finalAmount,
       };
     }
