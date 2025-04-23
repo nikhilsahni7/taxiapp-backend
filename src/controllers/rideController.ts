@@ -13,7 +13,8 @@ import type { Request, Response } from "express";
 import { searchAvailableDrivers } from "../lib/driverService";
 
 import {
-  initiateRazorpayPayment
+  calculateFinalAmount,
+  initiateRazorpayPayment,
 } from "./paymentController";
 
 import axios from "axios";
@@ -276,16 +277,36 @@ export const calculateFare = async (
 // Update the getFareEstimation endpoint
 export const getFareEstimation = async (req: Request, res: Response) => {
   const { pickupLocation, dropLocation, carrierRequested } = req.body;
+  const userId = req.user?.userId; // Get user ID from authentication middleware
+
+  if (!userId) {
+    // This case should ideally be handled by auth middleware, but good to double-check
+    return res.status(401).json({ error: "Unauthorized" });
+  }
 
   try {
     const distance = await calculateDistance(pickupLocation, dropLocation);
     const duration = await calculateDuration(pickupLocation, dropLocation);
 
+    // Fetch user's outstanding cancellation fee
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { outstandingCancellationFee: true },
+    });
+
+    const outstandingFee = user?.outstandingCancellationFee ?? 0;
+    console.log(
+      `[getFareEstimation] User ${userId} outstanding fee: ${outstandingFee}`
+    );
+
     // Calculate fares for all categories with taxes and charges
     const categories: CarCategory[] = ["mini", "sedan", "suv"];
-    const estimates: Record<CarCategory, FareEstimate> = {} as Record<
+    const estimates: Record<
       CarCategory,
-      FareEstimate
+      FareEstimate & { outstandingCancellationFee?: number }
+    > = {} as Record<
+      CarCategory,
+      FareEstimate & { outstandingCancellationFee?: number } // Add fee to type
     >;
 
     for (const category of categories) {
@@ -297,19 +318,27 @@ export const getFareEstimation = async (req: Request, res: Response) => {
         carrierRequested
       );
 
+      // Add the outstanding fee to the total fare estimate
+      const totalFareWithFee = fareDetails.totalFare + outstandingFee;
+
       estimates[category] = {
         ...fareDetails,
         distance,
         duration,
         currency: "INR",
-        totalFare: fareDetails.totalFare,
+        totalFare: totalFareWithFee, // Show total including the fee
         carrierCharge: fareDetails.carrierCharge,
+        outstandingCancellationFee:
+          outstandingFee > 0 ? outstandingFee : undefined, // Include the fee amount if > 0
       };
     }
 
     res.json({
       estimates,
       carrierRequested: carrierRequested || false,
+      // Optionally include the fee at the top level as well for clarity
+      outstandingCancellationFee:
+        outstandingFee > 0 ? outstandingFee : undefined,
     });
   } catch (error) {
     console.error("Error in fare estimation:", error);
@@ -479,7 +508,7 @@ async function findAndRequestDrivers(ride: any) {
             rideId: ride.id,
             pickupLocation: ride.pickupLocation,
             dropLocation: ride.dropLocation,
-            fare: ride.fare,
+            fare: ride.totalAmount,
             distance: ride.distance,
             duration: ride.duration,
             paymentMode: ride.paymentMode,
@@ -705,6 +734,21 @@ export const createRide = async (req: Request, res: Response) => {
   console.log(`[createRide] Received request from user: ${userId}`);
 
   try {
+    // *** START: Fetch user's outstanding fee ***
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { outstandingCancellationFee: true },
+    });
+    const outstandingFee = user?.outstandingCancellationFee ?? 0;
+    let feeAppliedToRide = false; // Flag to track if fee was added
+    if (outstandingFee > 0) {
+      console.log(
+        `[createRide] User ${userId} has outstanding fee: ${outstandingFee}. Will apply to this ride.`
+      );
+      feeAppliedToRide = true;
+    }
+    // *** END: Fetch user's outstanding fee ***
+
     // 3. Prepare common ride data
     console.log(`[createRide] Preparing ride data for user ${userId}`);
     let rideData: any = {
@@ -721,10 +765,12 @@ export const createRide = async (req: Request, res: Response) => {
       waitingMinutes: 0,
       waitingCharges: 0,
       extraCharges: 0,
-      totalAmount: 0, // Initialize totalAmount
+      totalAmount: 0, // Initialize totalAmount (will be calculated below)
     };
 
     // 4. Add specific data based on ride type (Rental vs Local)
+    let calculatedBaseFare = 0; // To store fare BEFORE adding outstanding fee
+
     if (isCarRental) {
       console.log(`[createRide] Processing CAR_RENTAL for user ${userId}`);
       // Validate rental-specific inputs
@@ -745,15 +791,17 @@ export const createRide = async (req: Request, res: Response) => {
         RENTAL_PACKAGES[carCategory.toLowerCase() as CarCategory][
           rentalPackageHours
         ];
-      const baseRentalPrice = packageDetails.price + rideData.carrierCharge;
-      // Add rental-specific fields
+      const baseRentalPrice =
+        packageDetails.price + (rideData.carrierCharge || 0);
+      calculatedBaseFare = baseRentalPrice; // Store base rental price
+
       rideData = {
         ...rideData,
         isCarRental: true,
         rentalPackageHours,
         rentalPackageKms: packageDetails.km,
         rentalBasePrice: baseRentalPrice,
-        fare: baseRentalPrice, // Initial fare is base price for rentals
+        fare: baseRentalPrice, // Initial fare is base price
         totalAmount: baseRentalPrice, // Initial total is base price for rentals
         dropLocation: "", // Default empty drop location for rentals
         actualKmsTravelled: 0, // Initialize rental specific fields
@@ -761,7 +809,7 @@ export const createRide = async (req: Request, res: Response) => {
         extraKmCharges: 0,
         extraMinuteCharges: 0,
       };
-      console.log(`[createRide] Rental data prepared:`, rideData);
+      console.log(`[createRide] Rental data prepared (before fee):`, rideData);
     } else {
       // Regular Local Ride
       console.log(`[createRide] Processing LOCAL ride for user ${userId}`);
@@ -793,8 +841,8 @@ export const createRide = async (req: Request, res: Response) => {
         carCategory,
         carrierRequested
       );
-      console.log(`[createRide] Calculated Fare Details:`, fareDetails);
-      // Add local ride specific fields
+      calculatedBaseFare = fareDetails.totalFare; // Store calculated fare
+
       rideData = {
         ...rideData,
         distance,
@@ -802,40 +850,97 @@ export const createRide = async (req: Request, res: Response) => {
         fare: fareDetails.totalFare, // Store the TOTAL fare including taxes/charges
         totalAmount: fareDetails.totalFare, // Store total calculated fare including taxes/carrier
       };
-      console.log(`[createRide] Local ride data prepared:`, rideData);
+      console.log(
+        `[createRide] Local ride data prepared (before fee):`,
+        rideData
+      );
     }
 
-    // 5. Create the Ride record in the database FIRST
-    console.log(`[createRide] Creating ride record in database...`);
-    const ride = await prisma.ride.create({
-      data: rideData,
-      include: {
-        // Include necessary relations for the response
-        user: { select: { id: true, name: true, phone: true } },
-        driver: {
-          select: { id: true, name: true, phone: true, driverDetails: true },
-        }, // Include driver details
-      },
-    });
+    // *** START: Add outstanding fee to totalAmount ***
+    rideData.totalAmount = calculatedBaseFare + outstandingFee;
+    if (feeAppliedToRide) {
+      console.log(
+        `[createRide] Added outstanding fee ${outstandingFee}. New totalAmount: ${rideData.totalAmount}`
+      );
+    }
+    // *** END: Add outstanding fee to totalAmount ***
+
+    // 5. Create the Ride record and handle fee reset/transaction within a DB transaction
     console.log(
-      `[createRide] Ride record created successfully with ID: ${ride.id}`
+      `[createRide] Creating ride record in database (potentially with fee logic)...`
     );
 
-    // 6. Respond IMMEDIATELY to the frontend with the created ride object
+    const ride = await prisma.$transaction(async (tx) => {
+      // Create the ride first
+      const newRide = await tx.ride.create({
+        data: rideData, // Use the prepared rideData with updated totalAmount
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+              outstandingCancellationFee: true,
+            },
+          }, // Include fee status
+          driver: {
+            select: { id: true, name: true, phone: true, driverDetails: true },
+          },
+        },
+      });
+
+      // If a fee was applied, reset user's fee and create transaction
+      if (feeAppliedToRide && outstandingFee > 0) {
+        console.log(
+          `[createRide Transaction] Resetting user ${userId}'s outstanding fee and creating transaction.`
+        );
+        // Reset user's outstanding fee
+        await tx.user.update({
+          where: { id: userId },
+          data: { outstandingCancellationFee: 0 },
+        });
+
+        // Create a transaction record for applying the fee
+        await tx.transaction.create({
+          data: {
+            amount: outstandingFee,
+            currency: "INR",
+            type: TransactionType.USER_CANCELLATION_FEE_APPLIED, // Use specific type
+            status: TransactionStatus.COMPLETED,
+            senderId: userId, // User 'paid' the fee via this ride
+            receiverId: null, // Or system/admin ID
+            rideId: newRide.id, // Link to the ride where fee was applied
+            description: `Applied outstanding cancellation fee of ${outstandingFee} to ride ${newRide.id}`,
+          },
+        });
+        console.log(
+          `[createRide Transaction] User fee reset and transaction created for ride ${newRide.id}.`
+        );
+      }
+
+      return newRide; // Return the created ride from the transaction
+    });
+
+    console.log(
+      `[createRide] Ride record created/updated successfully with ID: ${ride.id}. Final Total Amount: ${ride.totalAmount}`
+    );
+
+    // 6. Respond IMMEDIATELY
     console.log(
       `[createRide] Sending immediate response (201) for ride ${ride.id}`
     );
-    // *** THE KEY CHANGE: Respond BEFORE searching for drivers ***
     res.status(201).json({
-      message: "Ride created, searching for driver...",
+      message: feeAppliedToRide
+        ? `Ride created, outstanding fee of ${outstandingFee} applied. Searching for driver...`
+        : "Ride created, searching for driver...",
       ride: ride, // Send the full created ride object back
+      outstandingFeeApplied: feeAppliedToRide ? outstandingFee : 0, // Indicate if fee was applied
     });
     console.log(
       `[createRide] Response sent for ride ${ride.id}. Initiating async driver search...`
     );
 
-    // 7. Initiate driver search asynchronously (don't await the IIFE)
-    // *** THE KEY CHANGE: Search happens AFTER response is sent ***
+    // 7. Initiate driver search asynchronously (IIFE)
     (async () => {
       try {
         console.log(
@@ -968,13 +1073,20 @@ export const updateRideStatus = async (req: Request, res: Response) => {
         if (!validateOTP(ride, otp)) {
           return res.status(400).json({ error: "Invalid OTP" });
         }
+        await calculateWaitingCharges(ride);
         break;
       case "RIDE_ENDED":
         return handleRideCompletion(req, res);
       case "CANCELLED":
         if (!userType)
           return res.status(403).json({ error: "User type is required" });
-        return handleRideCancellation(ride, userType, cancellationReason, res);
+        return handleRideCancellation(
+          ride.id,
+          userId!,
+          userType,
+          cancellationReason,
+          res
+        );
     }
     const updatedRide = await updateRideInDatabase(rideId, status);
     emitRideStatusUpdate(ride, status);
@@ -1046,6 +1158,7 @@ const calculateWaitingCharges = async (ride: any) => {
       data: {
         waitingMinutes,
         waitingCharges,
+        fare: ride.fare + waitingCharges, // Add waiting charges to the fare
       },
     });
 
@@ -1076,33 +1189,13 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         .json({ error: "Ride not found or invalid status" });
     }
 
-    // **Recalculate waiting charges RIGHT BEFORE completion**
-    let finalWaitingCharges = 0;
-    let finalWaitingMinutes = ride.waitingMinutes || 0; // Keep existing minutes if recalculation fails
-    if (ride.waitingStartTime) {
-      const now = new Date(); // Use current time as end of waiting
-      const waitingTimeMs = now.getTime() - new Date(ride.waitingStartTime).getTime();
-      finalWaitingMinutes = Math.floor(waitingTimeMs / (1000 * 60));
-      const chargableMinutes = Math.max(0, finalWaitingMinutes - FREE_WAITING_MINUTES);
-      finalWaitingCharges = chargableMinutes * WAITING_CHARGE_PER_MINUTE;
-      // Update the ride object in memory for subsequent calculations
-      ride.waitingCharges = finalWaitingCharges;
-      ride.waitingMinutes = finalWaitingMinutes;
-    } else {
-      finalWaitingCharges = ride.waitingCharges || 0; // Use DB value if no start time
-    }
-
-    let finalAmount: number = 0; // Initialize finalAmount
+    let finalAmount: number;
     let updateData: any = {
       status:
         ride.paymentMode === PaymentMode.CASH
           ? RideStatus.RIDE_ENDED
           : RideStatus.PAYMENT_PENDING,
       dropLocation: finalLocation,
-      // **Include updated waiting charges/minutes in the DB update**
-      waitingCharges: finalWaitingCharges,
-      waitingMinutes: finalWaitingMinutes,
-      rideEndedAt: new Date(), // Add ride end timestamp
     };
 
     let fareBreakdown: any = {};
@@ -1116,20 +1209,16 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         actualMinutes
       );
 
-      // Note: Check if rental calculation needs to include waiting charges separately
-      // Assuming base rental price might cover time, so not adding finalWaitingCharges here explicitly.
-      const rentalTotal = rentalCalculation.totalAmount + (ride.carrierCharge || 0);
-
       updateData = {
         ...updateData,
         actualKmsTravelled,
         actualMinutes,
         extraKmCharges: rentalCalculation.extraKmCharges,
         extraMinuteCharges: rentalCalculation.extraMinuteCharges,
-        totalAmount: rentalTotal, // Use calculated rental total
+        totalAmount: rentalCalculation.totalAmount + (ride.carrierCharge || 0),
       };
 
-      finalAmount = rentalTotal;
+      finalAmount = updateData.totalAmount;
 
       // Create rental-specific fare breakdown
       fareBreakdown = {
@@ -1137,67 +1226,59 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         packageKms: rentalCalculation.packageKms,
         extraKmCharges: rentalCalculation.extraKmCharges,
         extraMinuteCharges: rentalCalculation.extraMinuteCharges,
-        // Add waiting charges to rental breakdown if applicable
-        waitingCharges: finalWaitingCharges, // Add recalculated waiting charge here
         carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
         totalAmount: finalAmount,
       };
     } else {
-      // For regular rides, recalculate final amount and breakdown correctly
-      const initialFare = ride.fare || 0; // Use the initial fare stored in the 'fare' field
-      const carrierCharge = ride.carrierCharge || 0; // Get carrier charge
-      const extraCharges = ride.extraCharges || 0;
+      // Include waiting charges in final amount
+      finalAmount = calculateFinalAmount(ride);
 
-      // Calculate the final total amount: initial fare + RECALCULATED waiting charges + extra charges
-      finalAmount = initialFare + finalWaitingCharges + extraCharges;
-
-      // Update the database record's totalAmount
+      // Make sure waiting charges are included in totalAmount
       updateData.totalAmount = finalAmount;
 
-      // Create the fare breakdown for display, using the correct components
+      // Create standard ride fare breakdown
       fareBreakdown = {
-        baseFare: initialFare, // Represents the initial fare (base, distance, taxes, carrier)
-        waitingCharges: finalWaitingCharges, // Use recalculated value
-        carrierCharge: carrierCharge, // Display carrier charge separately
-        extraCharges: extraCharges,
+        baseFare: ride.fare || 0,
+        waitingCharges: ride.waitingCharges || 0,
+        carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
+        extraCharges: ride.extraCharges || 0,
         totalAmount: finalAmount,
       };
     }
 
     const updatedRide = await prisma.ride.update({
       where: { id: rideId },
-      data: updateData, // This now includes final waiting charges and correct totalAmount
+      data: updateData,
       include: {
         user: true,
         driver: true,
       },
     });
 
-    // Emit ride completion event with detailed fare breakdown using final values
-    io.to(updatedRide.userId).emit("ride_completed", {
-      rideId: updatedRide.id,
+    // Emit ride completion event with detailed fare breakdown
+    io.to(ride.userId).emit("ride_completed", {
+      rideId: ride.id,
       finalLocation,
-      amount: finalAmount, // Use final calculated amount
-      paymentMode: updatedRide.paymentMode,
-      fareBreakdown: fareBreakdown, // Use final breakdown
-      distance: updatedRide.distance || 0,
-      duration: updatedRide.duration || 0,
-      isCarRental: updatedRide.isCarRental,
-      carrierRequested: updatedRide.carrierRequested,
-      carrierCharge: updatedRide.carrierCharge || 0,
-      waitingCharges: finalWaitingCharges, // Emit final waiting charges
-      waitingMinutes: finalWaitingMinutes, // Emit final waiting minutes
-      ...(updatedRide.isCarRental && {
+      amount: finalAmount,
+      paymentMode: ride.paymentMode,
+      fareBreakdown: fareBreakdown,
+      distance: ride.distance || 0,
+      duration: ride.duration || 0,
+      isCarRental: ride.isCarRental,
+      carrierRequested: ride.carrierRequested,
+      carrierCharge: ride.carrierCharge,
+      waitingCharges: ride.waitingCharges || 0,
+      waitingMinutes: ride.waitingMinutes || 0,
+      ...(ride.isCarRental && {
         actualKmsTravelled,
         actualMinutes,
-        extraKmCharges: updatedRide.extraKmCharges,
-        extraMinuteCharges: updatedRide.extraMinuteCharges,
+        extraKmCharges: updateData.extraKmCharges,
+        extraMinuteCharges: updateData.extraMinuteCharges,
       }),
     });
 
-    // Handle payment based on mode, passing the UPDATED ride object
-    if (updatedRide.paymentMode === PaymentMode.CASH) {
-      // Cash payment logic is handled by paymentController
+    // Handle payment based on mode
+    if (ride.paymentMode === PaymentMode.CASH) {
       return res.json({
         success: true,
         message: "Ride completed, awaiting cash collection",
@@ -1332,135 +1413,273 @@ export const getRide = async (req: Request, res: Response) => {
   }
 };
 
+const CANCELLATION_FEE_AMOUNT = 25; // Define the fee amount
+
+// Modify handleRideCancellation to accept rideId and cancellingUserId
 const handleRideCancellation = async (
-  ride: any,
-  userType: string,
+  rideId: string,
+  cancellingUserId: string, // ID of the user/driver initiating the cancellation
+  cancellingUserType: UserType, // Type of the user cancelling
   cancellationReason: string,
-  res: Response
+  res: Response // Pass response object to send result
 ) => {
   try {
-    console.log(
-      `Starting ride cancellation for ride ${ride.id} by ${userType} with reason: ${cancellationReason}`
-    );
-    let cancellationFee = 0;
+    // 1. Fetch the current ride details FIRST
+    const ride = await prisma.ride.findUnique({
+      where: { id: rideId },
+      select: {
+        // Select necessary fields
+        id: true,
+        status: true,
+        driverArrivedAt: true, // Key field to check for fee
+        userId: true,
+        driverId: true,
+        paymentMode: true, // Needed potentially for other logic
+        totalAmount: true, // Needed if we modify it directly (less likely now)
+      },
+    });
 
-    if (ride.driverAcceptedAt) {
-      const currentTime = new Date();
-      const acceptedTime = new Date(ride.driverAcceptedAt);
-      const timeDifference =
-        (currentTime.getTime() - acceptedTime.getTime()) / 60000; // Difference in minutes
+    if (!ride) {
+      console.error(`[handleRideCancellation] Ride not found: ${rideId}`);
+      return res.status(404).json({ error: "Ride not found" });
+    }
 
-      if (timeDifference > 3) {
-        cancellationFee = 50;
-      }
+    // Prevent cancellation if ride is already completed or cancelled
+    if (
+      [
+        RideStatus.RIDE_ENDED,
+        RideStatus.PAYMENT_COMPLETED,
+        RideStatus.CANCELLED,
+      ].includes(ride.status)
+    ) {
       console.log(
-        `Time diff: ${timeDifference} minutes; Cancellation fee: ${cancellationFee}`
+        `[handleRideCancellation] Ride ${rideId} already finished or cancelled. Status: ${ride.status}`
       );
+      return res
+        .status(400)
+        .json({ error: "Ride cannot be cancelled in its current state" });
     }
 
-    console.log("Updating ride in DB...");
-    const updatedRide = await prisma.ride.update({
-      where: { id: ride.id },
-      data: {
-        status: RideStatus.CANCELLED,
-        cancellationReason,
-        cancellationFee,
-        cancelledBy: userType as CancelledBy,
-        totalAmount: {
-          increment: cancellationFee,
-        },
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-        driver: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-          },
-        },
-      },
-    });
-    console.log("Ride updated:", updatedRide);
+    console.log(
+      `[handleRideCancellation] Processing cancellation for ride ${ride.id} by ${cancellingUserType} (${cancellingUserId}). Reason: ${cancellationReason}`
+    );
 
-    // Immediate notification to both users and drivers
-    emitRideStatusUpdate(updatedRide, "CANCELLED");
+    // 2. Determine if cancellation fee applies (Driver has arrived)
+    const feeApplies = ride.driverArrivedAt !== null;
+    let cancellationFee = feeApplies ? CANCELLATION_FEE_AMOUNT : 0;
+    let feeMessage = feeApplies
+      ? `Cancellation fee of ${cancellationFee} INR applied.`
+      : "No cancellation fee applied.";
 
-    // Broadcast cancellation to all connected clients
-    io.emit("ride_cancelled", {
-      rideId: ride.id,
-      status: "CANCELLED",
-      cancelledBy: userType,
-      reason: cancellationReason,
-    });
+    console.log(
+      `[handleRideCancellation] Driver arrived: ${!!ride.driverArrivedAt}. Fee applies: ${feeApplies}. Fee amount: ${cancellationFee}`
+    );
 
-    if (cancellationFee > 0) {
-      if (userType === "USER") {
-        console.log("Updating user's wallet...");
-        await prisma.wallet.update({
-          where: { userId: ride.userId },
+    let updatedRideData: any;
+    let responsePayload: any = {
+      success: true,
+      message: `Ride cancelled successfully. ${feeMessage}`,
+      cancellationFee,
+      cancelledBy: cancellingUserType,
+    };
+
+    // 3. Apply cancellation logic based on who cancelled and if fee applies
+    if (cancellingUserType === UserType.USER) {
+      console.log(
+        `[handleRideCancellation] User cancellation for ride ${ride.id}.`
+      );
+      if (feeApplies) {
+        // User cancels after driver arrived - Add fee to user's outstanding balance
+        console.log(
+          `[handleRideCancellation] Fee applies. Updating user ${ride.userId}'s outstanding fee.`
+        );
+        await prisma.user.update({
+          where: { id: ride.userId },
           data: {
-            balance: {
-              decrement: cancellationFee,
+            outstandingCancellationFee: {
+              increment: cancellationFee,
             },
           },
         });
-        console.log("Creating refund transaction for user...");
-        await prisma.transaction.create({
+        responsePayload.message = `Ride cancelled. A fee of ${cancellationFee} INR will be added to your next ride.`;
+        console.log(
+          `[handleRideCancellation] User ${ride.userId} outstanding fee updated.`
+        );
+      }
+      // Update ride status (common for user cancellation)
+      updatedRideData = await prisma.ride.update({
+        where: { id: ride.id },
+        data: {
+          status: RideStatus.CANCELLED,
+          cancellationReason,
+          cancellationFee, // Record the fee on the ride itself for history
+          cancelledBy: CancelledBy.USER, // Use the enum
+          driverId: null, // Ensure driver is unassigned if cancelled by user
+        },
+        include: { user: true, driver: true }, // Include relations for notification
+      });
+      responsePayload.ride = updatedRideData;
+    } else if (cancellingUserType === UserType.DRIVER) {
+      console.log(
+        `[handleRideCancellation] Driver cancellation for ride ${ride.id}.`
+      );
+      if (feeApplies) {
+        // Driver cancels after arriving - Deduct fee from driver's wallet
+        console.log(
+          `[handleRideCancellation] Fee applies. Deducting from driver ${ride.driverId}'s wallet.`
+        );
+        if (!ride.driverId) {
+          console.error(
+            `[handleRideCancellation] Critical error: Fee applies but driverId is null for ride ${ride.id}`
+          );
+          // Handle this unlikely case - maybe just cancel without fee deduction?
+          return res.status(500).json({
+            error:
+              "Internal server error: Cannot apply driver fee without driver ID.",
+          });
+        }
+        try {
+          const transactionResult = await prisma.$transaction(async (tx) => {
+            // 1. Deduct from wallet
+            const wallet = await tx.wallet.update({
+              where: { userId: ride.driverId! },
+              data: {
+                balance: {
+                  decrement: cancellationFee,
+                },
+              },
+            });
+            console.log(
+              `[handleRideCancellation] Driver ${ride.driverId}'s wallet updated. New balance: ${wallet.balance}`
+            );
+
+            // 2. Create Transaction record
+            await tx.transaction.create({
+              data: {
+                amount: cancellationFee,
+                currency: "INR",
+                type: TransactionType.DRIVER_CANCELLATION_FEE, // Use specific type
+                status: TransactionStatus.COMPLETED,
+                senderId: ride.driverId, // Driver is the 'sender' of the fee
+                receiverId: null, // Or a system/admin ID if you have one
+                rideId: ride.id,
+                description: `Cancellation fee (driver) for ride ${ride.id}`,
+              },
+            });
+            console.log(
+              `[handleRideCancellation] Driver cancellation fee transaction created for ride ${ride.id}.`
+            );
+
+            // 3. Update Ride status
+            const updatedRide = await tx.ride.update({
+              where: { id: ride.id },
+              data: {
+                status: RideStatus.CANCELLED,
+                cancellationReason,
+                cancellationFee,
+                cancelledBy: CancelledBy.DRIVER, // Use the enum
+              },
+              include: { user: true, driver: true },
+            });
+            return updatedRide; // Return the updated ride from the transaction
+          });
+          updatedRideData = transactionResult; // Assign the result from the transaction
+          responsePayload.ride = updatedRideData;
+          responsePayload.message = `Ride cancelled. A fee of ${cancellationFee} INR has been deducted from your wallet.`;
+        } catch (error) {
+          console.error(
+            `[handleRideCancellation] Error processing driver fee transaction for ride ${ride.id}:`,
+            error
+          );
+          // Don't cancel the ride if the transaction fails? Or cancel without fee? Decide policy.
+          // For now, respond with error and don't cancel.
+          return res.status(500).json({
+            error:
+              "Failed to process cancellation fee deduction. Ride not cancelled.",
+          });
+        }
+      } else {
+        // Driver cancels before arriving - No fee
+        updatedRideData = await prisma.ride.update({
+          where: { id: ride.id },
           data: {
-            amount: cancellationFee,
-            currency: "INR",
-            type: TransactionType.REFUND,
-            status: TransactionStatus.COMPLETED,
-            senderId: ride.userId,
-            receiverId: ride.driverId,
-            rideId: ride.id,
-            description: `Cancellation fee (user) for ride ${ride.id}`,
+            status: RideStatus.CANCELLED,
+            cancellationReason,
+            cancellationFee: 0, // Explicitly set fee to 0
+            cancelledBy: CancelledBy.DRIVER,
           },
+          include: { user: true, driver: true },
         });
-      } else if (userType === "DRIVER" && ride.driverId) {
-        console.log("Updating driver's wallet...");
-        await prisma.wallet.update({
-          where: { userId: ride.driverId },
-          data: {
-            balance: {
-              decrement: cancellationFee,
-            },
-          },
-        });
-        console.log("Creating refund transaction for driver...");
-        await prisma.transaction.create({
-          data: {
-            amount: cancellationFee,
-            currency: "INR",
-            type: TransactionType.REFUND,
-            status: TransactionStatus.COMPLETED,
-            senderId: ride.driverId,
-            receiverId: ride.userId,
-            rideId: ride.id,
-            description: `Cancellation fee (driver) for ride ${ride.id}`,
-          },
+        responsePayload.ride = updatedRideData;
+      }
+    } else {
+      console.error(
+        `[handleRideCancellation] Invalid user type for cancellation: ${cancellingUserType}`
+      );
+      return res
+        .status(400)
+        .json({ error: "Invalid user type initiating cancellation." });
+    }
+
+    // 4. Emit socket events AFTER database updates are successful
+    if (updatedRideData) {
+      console.log(
+        `[handleRideCancellation] Emitting cancellation updates for ride ${ride.id}.`
+      );
+      // Notify the other party (if they exist)
+      const targetUserId =
+        cancellingUserType === UserType.USER
+          ? updatedRideData.driverId
+          : updatedRideData.userId;
+      const targetDriverId =
+        cancellingUserType === UserType.DRIVER
+          ? updatedRideData.userId
+          : updatedRideData.driverId;
+
+      if (updatedRideData.userId) {
+        io.to(updatedRideData.userId).emit("ride_status_update", {
+          rideId: ride.id,
+          status: RideStatus.CANCELLED,
+          reason: cancellationReason,
+          cancelledBy: cancellingUserType,
+          cancellationFee: cancellationFee, // Send fee info
+          feeAppliedToNextRide:
+            cancellingUserType === UserType.USER && feeApplies, // Indicate if fee affects user's next ride
         });
       }
+      if (updatedRideData.driverId) {
+        io.to(updatedRideData.driverId).emit("ride_status_update", {
+          rideId: ride.id,
+          status: RideStatus.CANCELLED,
+          reason: cancellationReason,
+          cancelledBy: cancellingUserType,
+          cancellationFee: cancellationFee, // Send fee info
+          feeDeducted: cancellingUserType === UserType.DRIVER && feeApplies, // Indicate if fee was deducted
+        });
+      }
+
+      // Broadcast generic cancellation (optional, maybe remove if specific updates are enough)
+      io.emit("ride_cancelled", {
+        rideId: ride.id,
+        status: "CANCELLED",
+        cancelledBy: cancellingUserType,
+        reason: cancellationReason,
+      });
     }
 
-    console.log("Sending cancellation success response...");
-    res.json({
-      success: true,
-      message: "Ride cancelled successfully",
-      ride: updatedRide,
-      cancellationFee,
-      cancelledBy: userType,
-    });
+    console.log(
+      `[handleRideCancellation] Sending final response for ride ${ride.id}.`
+    );
+    res.json(responsePayload);
   } catch (error) {
-    console.error("Error cancelling ride:", error);
-    res.status(500).json({ error: "Failed to cancel ride" });
+    console.error(
+      `[handleRideCancellation] General error cancelling ride ${rideId}:`,
+      error
+    );
+    // Avoid sending response if headers already sent (e.g., from transaction error)
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to cancel ride" });
+    }
   }
 };
 

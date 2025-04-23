@@ -1,10 +1,10 @@
 // paymentController.ts
 import {
-    PaymentMode,
-    PrismaClient,
-    RideStatus,
-    TransactionStatus,
-    TransactionType,
+  PaymentMode,
+  PrismaClient,
+  RideStatus,
+  TransactionStatus,
+  TransactionType,
 } from "@prisma/client";
 import type { Request, Response } from "express";
 import Razorpay from "razorpay";
@@ -16,9 +16,7 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_SECRET!,
 });
 
-// # RAZORPAY_KEY_ID="rzp_live_hfAQTM2pl9qyV7"
 
-// # RAZORPAY_SECRET="eCARS6to6Gmj5g3TRH5RtSNn"
 
 if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_SECRET) {
   console.error("Razorpay credentials are not configured properly");
@@ -52,15 +50,6 @@ export const handleRideEnd = async (req: Request, res: Response) => {
     // Calculate final amount including any extra charges
     const finalAmount = calculateFinalAmount(ride);
 
-    // Create fare breakdown for detailed billing with correct values
-    const fareBreakdown = {
-      baseFare: ride.fare || 0,
-      waitingCharges: ride.waitingCharges || 0,
-      carrierCharge: ride.carrierCharge || 0,
-      extraCharges: ride.extraCharges || 0,
-      totalAmount: finalAmount,
-    };
-
     // Update ride with final details
     const updatedRide = await prisma.ride.update({
       where: { id: rideId },
@@ -81,6 +70,15 @@ export const handleRideEnd = async (req: Request, res: Response) => {
         driver: true,
       },
     });
+
+    // Create fare breakdown for detailed billing
+    const fareBreakdown = {
+      baseFare: ride.fare || 0,
+      waitingCharges: ride.waitingCharges || 0,
+      carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
+      extraCharges: ride.extraCharges || 0,
+      totalAmount: finalAmount,
+    };
 
     // Emit ride completion event to both user and driver with fare breakdown
     io.to(ride.userId).emit("ride_completed", {
@@ -164,13 +162,10 @@ export const handleRideEnd = async (req: Request, res: Response) => {
 // Handle cash payment
 export const handleCashPayment = async (ride: any) => {
   try {
-    // Ensure we use the correct final amount calculation
-    const finalAmount = calculateFinalAmount(ride);
-
-    // Create transaction record with correct amount
+    // Create transaction record
     const transaction = await prisma.transaction.create({
       data: {
-        amount: finalAmount,
+        amount: ride.totalAmount,
         type: TransactionType.RIDE_PAYMENT,
         status: TransactionStatus.COMPLETED,
         senderId: ride.userId,
@@ -180,34 +175,34 @@ export const handleCashPayment = async (ride: any) => {
       },
     });
 
-    // Update driver's wallet with correct amount
+    // Update driver's wallet
     await prisma.wallet.upsert({
       where: { userId: ride.driverId },
       update: {
         balance: {
-          increment: finalAmount,
+          increment: ride.totalAmount,
         },
       },
       create: {
         userId: ride.driverId,
-        balance: finalAmount,
+        balance: ride.totalAmount,
         currency: "INR",
       },
     });
 
-    // Create fare breakdown with correct values
+    // Create fare breakdown for detailed billing
     const fareBreakdown = {
       baseFare: ride.fare || 0,
       waitingCharges: ride.waitingCharges || 0,
-      carrierCharge: ride.carrierCharge || 0,
+      carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
       extraCharges: ride.extraCharges || 0,
-      totalAmount: finalAmount,
+      totalAmount: ride.totalAmount,
     };
 
     // Emit completion events with fare breakdown
     io.to(ride.userId).emit("ride_completed", {
       rideId: ride.id,
-      amount: finalAmount,
+      amount: ride.totalAmount,
       status: "COMPLETED",
       distance: ride.distance || 0,
       duration: ride.duration || 0,
@@ -216,7 +211,7 @@ export const handleCashPayment = async (ride: any) => {
 
     io.to(ride.driverId).emit("ride_completed", {
       rideId: ride.id,
-      amount: finalAmount,
+      amount: ride.totalAmount,
       status: "COMPLETED",
       fareBreakdown: fareBreakdown,
     });
@@ -383,19 +378,14 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
 // Calculate final amount
 export const calculateFinalAmount = (ride: any): number => {
-  // Prefer the authoritative totalAmount set during ride completion
-  if (typeof ride.totalAmount === 'number') {
+  // If totalAmount is already set (e.g., from ride completion), use it
+  if (ride.totalAmount) {
     return ride.totalAmount;
   }
 
-  // Fallback calculation (should ideally not be needed if flow is correct)
-  console.warn(`[calculateFinalAmount] Warning: Fallback calculation used for ride ${ride.id}. totalAmount was not pre-set.`);
-  const initialFare = ride.fare || 0;
-  const waitingCharges = ride.waitingCharges || 0;
-  const extraCharges = ride.extraCharges || 0;
-  // Assuming carrierCharge is included in the initial ride.fare calculation.
-  // If it needs to be added separately, ensure consistency across controllers.
-  return initialFare + waitingCharges + extraCharges;
+  // Otherwise use fare which should already include waiting charges
+  // from the calculateWaitingCharges function in rideController.ts
+  return ride.fare || 0;
 };
 
 // Socket event handlers
@@ -414,17 +404,8 @@ export const setupPaymentSocketEvents = (socket: any) => {
           return;
         }
 
-        // Calculate final amount using the corrected method
+        // Calculate final amount
         const finalAmount = calculateFinalAmount(ride);
-
-        // Create fare breakdown with correct values
-        const fareBreakdown = {
-          baseFare: ride.fare || 0,
-          waitingCharges: ride.waitingCharges || 0,
-          carrierCharge: ride.carrierCharge || 0,
-          extraCharges: ride.extraCharges || 0,
-          totalAmount: finalAmount,
-        };
 
         // Update ride status
         const updatedRide = await prisma.ride.update({
@@ -438,6 +419,15 @@ export const setupPaymentSocketEvents = (socket: any) => {
                 : RideStatus.PAYMENT_PENDING,
           },
         });
+
+        // Create fare breakdown
+        const fareBreakdown = {
+          baseFare: ride.fare || 0,
+          waitingCharges: ride.waitingCharges || 0,
+          carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
+          extraCharges: ride.extraCharges || 0,
+          totalAmount: finalAmount,
+        };
 
         // Emit ride end event to user with detailed fare breakdown
         socket.to(ride.userId).emit("ride_ended", {
