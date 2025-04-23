@@ -129,6 +129,18 @@ export const getCurrentDayEarnings = async (req: Request, res: Response) => {
       });
     });
 
+    // Find the most recent ride (if any)
+    let lastRide = null;
+    if (completedRides.length > 0) {
+      // Sort rides by completion time (newest first)
+      const sortedRides = [...completedRides].sort((a, b) => {
+        const dateA = a.rideEndedAt || a.updatedAt;
+        const dateB = b.rideEndedAt || b.updatedAt;
+        return dateB.getTime() - dateA.getTime();
+      });
+      lastRide = sortedRides[0];
+    }
+
     const earnings = {
       totalEarnings: 0,
       totalTrips: completedRides.length,
@@ -163,6 +175,7 @@ export const getCurrentDayEarnings = async (req: Request, res: Response) => {
       data: {
         ...earnings,
         date: format(istDate, "yyyy-MM-dd"),
+        lastRideEarnings: lastRide ? (lastRide.totalAmount || 0) + (lastRide.extraCharges || 0) : null,
         debug: {
           currentTime: istDate.toLocaleString("en-IN", {
             timeZone: "Asia/Kolkata",
