@@ -968,7 +968,6 @@ export const updateRideStatus = async (req: Request, res: Response) => {
         if (!validateOTP(ride, otp)) {
           return res.status(400).json({ error: "Invalid OTP" });
         }
-        await calculateWaitingCharges(ride);
         break;
       case "RIDE_ENDED":
         return handleRideCompletion(req, res);
@@ -1077,6 +1076,22 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         .json({ error: "Ride not found or invalid status" });
     }
 
+    // **Recalculate waiting charges RIGHT BEFORE completion**
+    let finalWaitingCharges = 0;
+    let finalWaitingMinutes = ride.waitingMinutes || 0; // Keep existing minutes if recalculation fails
+    if (ride.waitingStartTime) {
+      const now = new Date(); // Use current time as end of waiting
+      const waitingTimeMs = now.getTime() - new Date(ride.waitingStartTime).getTime();
+      finalWaitingMinutes = Math.floor(waitingTimeMs / (1000 * 60));
+      const chargableMinutes = Math.max(0, finalWaitingMinutes - FREE_WAITING_MINUTES);
+      finalWaitingCharges = chargableMinutes * WAITING_CHARGE_PER_MINUTE;
+      // Update the ride object in memory for subsequent calculations
+      ride.waitingCharges = finalWaitingCharges;
+      ride.waitingMinutes = finalWaitingMinutes;
+    } else {
+      finalWaitingCharges = ride.waitingCharges || 0; // Use DB value if no start time
+    }
+
     let finalAmount: number = 0; // Initialize finalAmount
     let updateData: any = {
       status:
@@ -1084,6 +1099,10 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
           ? RideStatus.RIDE_ENDED
           : RideStatus.PAYMENT_PENDING,
       dropLocation: finalLocation,
+      // **Include updated waiting charges/minutes in the DB update**
+      waitingCharges: finalWaitingCharges,
+      waitingMinutes: finalWaitingMinutes,
+      rideEndedAt: new Date(), // Add ride end timestamp
     };
 
     let fareBreakdown: any = {};
@@ -1097,16 +1116,20 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         actualMinutes
       );
 
+      // Note: Check if rental calculation needs to include waiting charges separately
+      // Assuming base rental price might cover time, so not adding finalWaitingCharges here explicitly.
+      const rentalTotal = rentalCalculation.totalAmount + (ride.carrierCharge || 0);
+
       updateData = {
         ...updateData,
         actualKmsTravelled,
         actualMinutes,
         extraKmCharges: rentalCalculation.extraKmCharges,
         extraMinuteCharges: rentalCalculation.extraMinuteCharges,
-        totalAmount: rentalCalculation.totalAmount + (ride.carrierCharge || 0),
+        totalAmount: rentalTotal, // Use calculated rental total
       };
 
-      finalAmount = updateData.totalAmount;
+      finalAmount = rentalTotal;
 
       // Create rental-specific fare breakdown
       fareBreakdown = {
@@ -1114,18 +1137,19 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         packageKms: rentalCalculation.packageKms,
         extraKmCharges: rentalCalculation.extraKmCharges,
         extraMinuteCharges: rentalCalculation.extraMinuteCharges,
+        // Add waiting charges to rental breakdown if applicable
+        waitingCharges: finalWaitingCharges, // Add recalculated waiting charge here
         carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
         totalAmount: finalAmount,
       };
     } else {
       // For regular rides, recalculate final amount and breakdown correctly
       const initialFare = ride.fare || 0; // Use the initial fare stored in the 'fare' field
-      const waitingCharges = ride.waitingCharges || 0;
       const carrierCharge = ride.carrierCharge || 0; // Get carrier charge
       const extraCharges = ride.extraCharges || 0;
 
-      // Calculate the final total amount: initial fare + waiting charges + extra charges
-      const finalAmount = initialFare + waitingCharges + extraCharges;
+      // Calculate the final total amount: initial fare + RECALCULATED waiting charges + extra charges
+      finalAmount = initialFare + finalWaitingCharges + extraCharges;
 
       // Update the database record's totalAmount
       updateData.totalAmount = finalAmount;
@@ -1133,7 +1157,7 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
       // Create the fare breakdown for display, using the correct components
       fareBreakdown = {
         baseFare: initialFare, // Represents the initial fare (base, distance, taxes, carrier)
-        waitingCharges: waitingCharges,
+        waitingCharges: finalWaitingCharges, // Use recalculated value
         carrierCharge: carrierCharge, // Display carrier charge separately
         extraCharges: extraCharges,
         totalAmount: finalAmount,
@@ -1142,37 +1166,38 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
 
     const updatedRide = await prisma.ride.update({
       where: { id: rideId },
-      data: updateData,
+      data: updateData, // This now includes final waiting charges and correct totalAmount
       include: {
         user: true,
         driver: true,
       },
     });
 
-    // Emit ride completion event with detailed fare breakdown
-    io.to(ride.userId).emit("ride_completed", {
-      rideId: ride.id,
+    // Emit ride completion event with detailed fare breakdown using final values
+    io.to(updatedRide.userId).emit("ride_completed", {
+      rideId: updatedRide.id,
       finalLocation,
-      amount: finalAmount,
-      paymentMode: ride.paymentMode,
-      fareBreakdown: fareBreakdown,
-      distance: ride.distance || 0,
-      duration: ride.duration || 0,
-      isCarRental: ride.isCarRental,
-      carrierRequested: ride.carrierRequested,
-      carrierCharge: ride.carrierCharge,
-      waitingCharges: ride.waitingCharges || 0,
-      waitingMinutes: ride.waitingMinutes || 0,
-      ...(ride.isCarRental && {
+      amount: finalAmount, // Use final calculated amount
+      paymentMode: updatedRide.paymentMode,
+      fareBreakdown: fareBreakdown, // Use final breakdown
+      distance: updatedRide.distance || 0,
+      duration: updatedRide.duration || 0,
+      isCarRental: updatedRide.isCarRental,
+      carrierRequested: updatedRide.carrierRequested,
+      carrierCharge: updatedRide.carrierCharge || 0,
+      waitingCharges: finalWaitingCharges, // Emit final waiting charges
+      waitingMinutes: finalWaitingMinutes, // Emit final waiting minutes
+      ...(updatedRide.isCarRental && {
         actualKmsTravelled,
         actualMinutes,
-        extraKmCharges: updateData.extraKmCharges,
-        extraMinuteCharges: updateData.extraMinuteCharges,
+        extraKmCharges: updatedRide.extraKmCharges,
+        extraMinuteCharges: updatedRide.extraMinuteCharges,
       }),
     });
 
-    // Handle payment based on mode
-    if (ride.paymentMode === PaymentMode.CASH) {
+    // Handle payment based on mode, passing the UPDATED ride object
+    if (updatedRide.paymentMode === PaymentMode.CASH) {
+      // Cash payment logic is handled by paymentController
       return res.json({
         success: true,
         message: "Ride completed, awaiting cash collection",
