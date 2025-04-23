@@ -215,12 +215,15 @@ export const createAllIndiaBooking = async (req: Request, res: Response) => {
           1
       ) || 1;
 
+    // Calculate round trip distance
+    const roundTripDistance = distance * 2;
+
     // Calculate fare
     //@ts-ignore
     const rates = ALL_INDIA_RATES[vehicleType];
     const baseFare = rates.baseFare * numberOfDays;
     const allowedDistance = 250 * numberOfDays;
-    const extraDistance = Math.max(0, distance - allowedDistance);
+    const extraDistance = Math.max(0, roundTripDistance - allowedDistance);
     const extraDistanceFare = extraDistance * rates.extraKm;
     const totalFare = baseFare + extraDistanceFare;
     const advanceAmount = totalFare * 0.25;
@@ -238,7 +241,7 @@ export const createAllIndiaBooking = async (req: Request, res: Response) => {
         dropLat: dropLocation.lat,
         dropLng: dropLocation.lng,
         vehicleCategory: vehicleType,
-        distance,
+        distance: roundTripDistance,
         duration,
         paymentMode: PaymentMode.RAZORPAY, // Force Razorpay for advance payment
         startDate: startDateTime,
