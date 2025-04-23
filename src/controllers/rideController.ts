@@ -13,8 +13,7 @@ import type { Request, Response } from "express";
 import { searchAvailableDrivers } from "../lib/driverService";
 
 import {
-  calculateFinalAmount,
-  initiateRazorpayPayment,
+  initiateRazorpayPayment
 } from "./paymentController";
 
 import axios from "axios";
@@ -1120,18 +1119,26 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         totalAmount: finalAmount,
       };
     } else {
-      // Include waiting charges in final amount
-      finalAmount = calculateFinalAmount(ride);
+      // For regular rides, the fare calculation needs to be fixed to prevent double-counting
+      // The baseFare should already include distance-based fare and base charges
+      const baseFare = ride.fare || 0;
+      const waitingCharges = ride.waitingCharges || 0;
+      const carrierCharge = ride.carrierRequested ? ride.carrierCharge || 0 : 0;
+      const extraCharges = ride.extraCharges || 0;
 
-      // Make sure waiting charges are included in totalAmount
+      // Fix: Correctly calculate the final amount
+      // If waiting charges are already included in the fare, we don't add them again
+      finalAmount = baseFare + carrierCharge + extraCharges;
+
+      // Update the total amount field
       updateData.totalAmount = finalAmount;
 
-      // Create standard ride fare breakdown
+      // Create standard ride fare breakdown with correct values
       fareBreakdown = {
-        baseFare: ride.fare || 0,
-        waitingCharges: ride.waitingCharges || 0,
-        carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
-        extraCharges: ride.extraCharges || 0,
+        baseFare: baseFare,
+        waitingCharges: waitingCharges,
+        carrierCharge: carrierCharge,
+        extraCharges: extraCharges,
         totalAmount: finalAmount,
       };
     }
