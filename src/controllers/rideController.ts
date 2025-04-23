@@ -1078,7 +1078,7 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         .json({ error: "Ride not found or invalid status" });
     }
 
-    let finalAmount: number;
+    let finalAmount: number = 0; // Initialize finalAmount
     let updateData: any = {
       status:
         ride.paymentMode === PaymentMode.CASH
@@ -1119,26 +1119,27 @@ export const handleRideCompletion = async (req: Request, res: Response) => {
         totalAmount: finalAmount,
       };
     } else {
-      // For regular rides, the fare calculation needs to be fixed to prevent double-counting
-      // The baseFare should already include distance-based fare and base charges
-      const baseFare = ride.fare || 0;
-      const waitingCharges = ride.waitingCharges || 0;
-      const carrierCharge = ride.carrierRequested ? ride.carrierCharge || 0 : 0;
-      const extraCharges = ride.extraCharges || 0;
+      // For regular rides, recalculate final amount and breakdown correctly
+      const currentFareFromDB = ride.fare || 0; // Includes initial fare (base, distance, taxes, carrier) + waiting charges
+      const waitingChargesFromDB = ride.waitingCharges || 0;
+      const carrierChargeFromDB = ride.carrierCharge || 0; // This was part of the initial fare calculation
+      const extraChargesFromDB = ride.extraCharges || 0;
 
-      // Fix: Correctly calculate the final amount
-      // If waiting charges are already included in the fare, we don't add them again
-      finalAmount = baseFare + carrierCharge + extraCharges;
+      // Calculate the initial fare component by removing waiting charges
+      const initialFareComponent = currentFareFromDB - waitingChargesFromDB;
 
-      // Update the total amount field
+      // Calculate the final total amount: initial component + waiting charges + extra charges
+      const finalAmount = initialFareComponent + waitingChargesFromDB + extraChargesFromDB;
+
+      // Update the database record's totalAmount
       updateData.totalAmount = finalAmount;
 
-      // Create standard ride fare breakdown with correct values
+      // Create the fare breakdown for display
       fareBreakdown = {
-        baseFare: baseFare,
-        waitingCharges: waitingCharges,
-        carrierCharge: carrierCharge,
-        extraCharges: extraCharges,
+        baseFare: initialFareComponent, // Represents the fare before waiting charges
+        waitingCharges: waitingChargesFromDB,
+        carrierCharge: carrierChargeFromDB, // Display separately
+        extraCharges: extraChargesFromDB,
         totalAmount: finalAmount,
       };
     }
