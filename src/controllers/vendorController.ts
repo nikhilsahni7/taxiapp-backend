@@ -438,50 +438,104 @@ export const verifyDriverCommissionPayment = async (
 export const cancelVendorBooking = async (req: Request, res: Response) => {
   const { bookingId } = req.params;
   const { reason } = req.body;
+  const cancellationFee = 500; // Define the cancellation fee amount
 
-  if (!req.user?.userId) {
+  if (!req.user?.userId || !req.user.userType) { // Ensure userType exists
     return res.status(403).json({ error: "Unauthorized" });
   }
 
+  const cancellerUserId = req.user.userId;
+  const cancellerUserType = req.user.userType; // VENDOR or DRIVER
+
   try {
-    const booking = await prisma.vendorBooking.findUnique({
-      where: { id: bookingId },
-    });
+    await prisma.$transaction(async (tx) => {
+      const booking = await tx.vendorBooking.findUnique({
+        where: { id: bookingId },
+      });
 
-    if (!booking) {
-      return res.status(404).json({ error: "Booking not found" });
-    }
+      if (!booking) {
+        throw new Error("Booking not found"); // Throw error to rollback transaction
+      }
 
-    // Check if user is authorized to cancel (either vendor or assigned driver)
-    if (
-      booking.vendorId !== req.user.userId &&
-      booking.driverId !== req.user.userId
-    ) {
-      return res
-        .status(403)
-        .json({ error: "Not authorized to cancel this booking" });
-    }
+      // Check if user is authorized to cancel (either vendor or assigned driver)
+      if (
+        booking.vendorId !== cancellerUserId &&
+        booking.driverId !== cancellerUserId
+      ) {
+        throw new Error("Not authorized to cancel this booking"); // Use throw for transactions
+      }
 
-    // Check if booking can be cancelled
-    if (booking.status === "COMPLETED" || booking.status === "CANCELLED") {
-      return res.status(400).json({ error: "Booking cannot be cancelled" });
-    }
+      // Check if booking can be cancelled
+      if (booking.status === VendorBookingStatus.COMPLETED || booking.status === VendorBookingStatus.CANCELLED) {
+        throw new Error("Booking cannot be cancelled in its current state"); // Use throw
+      }
 
-    // Simply update the booking status - no wallet operations
-    await prisma.vendorBooking.update({
-      where: { id: bookingId },
-      data: {
-        status: "CANCELLED",
-        cancelledBy: CancelledBy.USER || CancelledBy.DRIVER,
-        cancelReason: reason || "No reason provided",
-        cancelledAt: new Date(),
-      },
-    });
+      // Determine if cancellation fee applies
+      const applyCancellationFee =
+        booking.status === VendorBookingStatus.DRIVER_ARRIVED ||
+        booking.status === VendorBookingStatus.STARTED;
+
+      // --- Fee Deduction Logic ---
+      if (applyCancellationFee) {
+        // Deduct fee from canceller's wallet
+        await tx.wallet.upsert({
+          where: { userId: cancellerUserId },
+          create: {
+            userId: cancellerUserId,
+            balance: -cancellationFee, // Start with negative balance if wallet doesn't exist
+          },
+          update: {
+            balance: { decrement: cancellationFee }, // Decrement existing balance
+          },
+        });
+
+        // Record the cancellation fee transaction (fee goes to the app)
+        await tx.vendorBookingTransaction.create({
+          data: {
+            bookingId: bookingId,
+            amount: cancellationFee,
+            type: VendorBookingTransactionType.CANCELLATION_FEE,
+            status: TransactionStatus.COMPLETED,
+            senderId: cancellerUserId, // User paying the fee
+            receiverId: process.env.ADMIN_USER_ID!, // Fee goes to the app admin/system
+            description: `Cancellation fee charged to ${cancellerUserType.toLowerCase()}`,
+            metadata: {
+              cancelledBy: cancellerUserType,
+              bookingStatusAtCancellation: booking.status,
+              reason: reason || "No reason provided",
+            },
+          },
+        });
+      }
+      // --- End Fee Deduction Logic ---
+
+      // Update the booking status (existing logic)
+      await tx.vendorBooking.update({
+        where: { id: bookingId },
+        data: {
+          status: VendorBookingStatus.CANCELLED,
+          cancelledBy: cancellerUserType === "VENDOR" ? CancelledBy.VENDOR : CancelledBy.DRIVER,
+          cancelReason: reason || "No reason provided",
+          cancelledAt: new Date(),
+        },
+      });
+    }); // End transaction
 
     res.json({ success: true, message: "Booking cancelled successfully" });
-  } catch (error) {
+
+  } catch (error: any) { // Catch potential errors from the transaction
     console.error("Error cancelling booking:", error);
-    res.status(500).json({ error: "Failed to cancel booking" });
+    // Provide specific error messages based on the caught error if needed
+    if (error.message === "Booking not found") {
+      return res.status(404).json({ error: "Booking not found" });
+    }
+    if (error.message === "Not authorized to cancel this booking") {
+      return res.status(403).json({ error: "Not authorized to cancel this booking" });
+    }
+     if (error.message === "Booking cannot be cancelled in its current state") {
+       return res.status(400).json({ error: "Booking cannot be cancelled" });
+     }
+    res.status(500).json({ error: error.message || "Failed to cancel booking" });
   }
 };
 

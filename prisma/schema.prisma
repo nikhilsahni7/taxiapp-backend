@@ -535,7 +535,7 @@ enum VendorBookingTransactionType {
   VENDOR_PAYOUT
   APP_COMMISSION
   DRIVER_PAYOUT
-
+  CANCELLATION_FEE
 }
 
 model ChatMessage {
