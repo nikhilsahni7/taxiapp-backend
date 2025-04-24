@@ -280,7 +280,6 @@ export const getFareEstimation = async (req: Request, res: Response) => {
   const userId = req.user?.userId; // Get user ID from authentication middleware
 
   if (!userId) {
-    // This case should ideally be handled by auth middleware, but good to double-check
     return res.status(401).json({ error: "Unauthorized" });
   }
 
@@ -288,25 +287,11 @@ export const getFareEstimation = async (req: Request, res: Response) => {
     const distance = await calculateDistance(pickupLocation, dropLocation);
     const duration = await calculateDuration(pickupLocation, dropLocation);
 
-    // Fetch user's outstanding cancellation fee
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { outstandingCancellationFee: true },
-    });
-
-    const outstandingFee = user?.outstandingCancellationFee ?? 0;
-    console.log(
-      `[getFareEstimation] User ${userId} outstanding fee: ${outstandingFee}`
-    );
-
     // Calculate fares for all categories with taxes and charges
     const categories: CarCategory[] = ["mini", "sedan", "suv"];
-    const estimates: Record<
+    const estimates: Record<CarCategory, FareEstimate> = {} as Record< // <-- Removed outstanding fee from type
       CarCategory,
-      FareEstimate & { outstandingCancellationFee?: number }
-    > = {} as Record<
-      CarCategory,
-      FareEstimate & { outstandingCancellationFee?: number } // Add fee to type
+      FareEstimate // <-- Removed outstanding fee from type
     >;
 
     for (const category of categories) {
@@ -318,27 +303,19 @@ export const getFareEstimation = async (req: Request, res: Response) => {
         carrierRequested
       );
 
-      // Add the outstanding fee to the total fare estimate
-      const totalFareWithFee = fareDetails.totalFare + outstandingFee;
-
       estimates[category] = {
         ...fareDetails,
         distance,
         duration,
         currency: "INR",
-        totalFare: totalFareWithFee, // Show total including the fee
+        totalFare: fareDetails.totalFare, // <-- Use the original totalFare without the fee
         carrierCharge: fareDetails.carrierCharge,
-        outstandingCancellationFee:
-          outstandingFee > 0 ? outstandingFee : undefined, // Include the fee amount if > 0
       };
     }
 
     res.json({
       estimates,
       carrierRequested: carrierRequested || false,
-      // Optionally include the fee at the top level as well for clarity
-      outstandingCancellationFee:
-        outstandingFee > 0 ? outstandingFee : undefined,
     });
   } catch (error) {
     console.error("Error in fare estimation:", error);
