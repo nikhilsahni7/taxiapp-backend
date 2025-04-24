@@ -421,313 +421,358 @@ async function initializeRide(
   });
 }
 
+/**
+ * Finds available drivers within increasing radii and sends requests concurrently within each radius.
+ * Assigns the first driver whose acceptance is successfully processed.
+ * @param ride - The ride object (including user details).
+ * @returns {Promise<object>} Result including success status, message, driver info, etc.
+ */
 async function findAndRequestDrivers(ride: any) {
   let currentRadius = INITIAL_SEARCH_RADIUS;
-  const attemptedDrivers = new Set<string>();
-  const searchedDrivers: any[] = [];
+  const attemptedDrivers = new Set<string>(); // Keep track of all drivers ever attempted for this ride
+  const allSearchedDriversInfo: { driverId: string; distance: number; status: string; radius: number }[] = [];
+  let assignedDriverId: string | null = null;
+  let assignedRideData: any = null; // Store the final ride data if assigned
 
-  while (currentRadius <= MAX_SEARCH_RADIUS) {
-    // Add a check for ride status before continuing search
-    const currentRideStatus = await prisma.ride.findUnique({
+  console.log(`[findAndRequestDrivers] Starting search for ride ${ride.id}. Initial Radius: ${INITIAL_SEARCH_RADIUS}km, Max Radius: ${MAX_SEARCH_RADIUS}km, Timeout: ${DRIVER_REQUEST_TIMEOUT}ms`);
+
+  // Keep searching while within max radius AND no driver has been successfully assigned
+  while (currentRadius <= MAX_SEARCH_RADIUS && !assignedDriverId) {
+    // --- Check Ride Status ---
+    // Crucial check at the beginning of each radius iteration
+    const currentRide = await prisma.ride.findUnique({
       where: { id: ride.id },
-      select: { status: true },
+      select: { status: true, driverId: true },
     });
 
-    if (currentRideStatus?.status !== RideStatus.SEARCHING) {
+    // If ride is no longer searching or already assigned by another process, stop.
+    if (!currentRide || currentRide.status !== RideStatus.SEARCHING || currentRide.driverId) {
+      console.log(`[findAndRequestDrivers] Ride ${ride.id} is no longer searchable (Status: ${currentRide?.status}, Driver: ${currentRide?.driverId}). Stopping search.`);
+      const finalRideState = await prisma.ride.findUnique({
+          where: { id: ride.id },
+          include: { driver: true, user: true } // Fetch final state
+      });
       return {
-        success: true,
-        message: "Ride already assigned",
-        searchedDrivers,
-        finalRadius: currentRadius,
+        success: !!finalRideState?.driverId, // Success if a driver was ultimately assigned
+        message: `Ride status became ${finalRideState?.status} or driver assigned during search.`,
+        searchedDrivers: allSearchedDriversInfo,
+        finalRadius: currentRadius, // Last radius checked
+        ride: finalRideState
       };
     }
 
-    // Prepare filter options including carrier and car category
+    // --- Prepare Filters and Search Drivers ---
     const filterOptions: { hasCarrier?: boolean; carCategory?: string } = {};
     if (ride.carrierRequested) {
       filterOptions.hasCarrier = true;
     }
-    // Ensure we pass the carCategory from the ride object
     if (ride.carCategory) {
-      filterOptions.carCategory = ride.carCategory; // Pass the requested category
+      filterOptions.carCategory = ride.carCategory;
     } else {
        console.warn(`[findAndRequestDrivers] Ride ${ride.id} is missing carCategory for filtering.`);
-       
     }
 
-    console.log(
-      `[findAndRequestDrivers] Searching drivers for ride ${ride.id} in radius ${currentRadius}km with filters:`, filterOptions
-    );
-
-    // Call searchAvailableDrivers with the filter options
-    const drivers = await searchAvailableDrivers(
+    console.log(`[findAndRequestDrivers] Searching drivers for ride ${ride.id} in radius ${currentRadius}km with filters:`, filterOptions);
+    const driversInRadius = await searchAvailableDrivers(
       ride.pickupLocation,
       currentRadius,
-      filterOptions // Pass the options object
+      filterOptions
     );
+    // console.log(`[findAndRequestDrivers] Found ${driversInRadius.length} suitable drivers potentially matching criteria in radius ${currentRadius}km.`); // Log from searchAvailableDrivers is sufficient
 
-    console.log(`[findAndRequestDrivers] Found ${drivers.length} suitable drivers in radius ${currentRadius}km.`);
-
-    const newDrivers = drivers.filter((d) => !attemptedDrivers.has(d.driverId));
+    // Filter out drivers already attempted in previous radii
+    const newDrivers = driversInRadius.filter((d) => !attemptedDrivers.has(d.driverId));
 
     if (newDrivers.length > 0) {
-      searchedDrivers.push(
-        ...newDrivers.map((d) => ({
-          driverId: d.driverId,
-          distance: d.distance,
-          status: "searched",
-          hasCarrier: d.driver?.driverDetails?.hasCarrier || false,
-        }))
-      );
+      const currentBatchDriverIds = newDrivers.map(d => d.driverId); // IDs for this specific radius batch
+      console.log(`[findAndRequestDrivers] Attempting parallel requests to ${newDrivers.length} new drivers in radius ${currentRadius}km: [${currentBatchDriverIds.join(', ')}]`);
 
-      for (const driver of newDrivers) {
-        attemptedDrivers.add(driver.driverId);
-
-        if (!driver.socketId) continue;
-
-        try {
-          // Check ride status before sending request
-          const currentRide = await prisma.ride.findUnique({
-            where: { id: ride.id },
-            select: {
-              status: true,
-              driverId: true,
-              userId: true,
-              carrierRequested: true,
-              carrierCharge: true,
-              user: {
-                select: {
-                  name: true,
-                  phone: true,
-                },
-              },
-            },
-          });
-
-          if (currentRide?.status !== RideStatus.SEARCHING) {
-            return {
-              success: true,
-              message: "Ride already accepted",
-              searchedDrivers,
-              ride: currentRide,
-            };
+      // Add new drivers to the global attempted set and tracking list
+      newDrivers.forEach(d => {
+          attemptedDrivers.add(d.driverId);
+          // Update status for tracking if needed, or just add
+          const existingEntry = allSearchedDriversInfo.find(info => info.driverId === d.driverId);
+          if (!existingEntry) {
+            allSearchedDriversInfo.push({ driverId: d.driverId, distance: d.distance, status: "searched", radius: currentRadius });
           }
+      });
 
-          // Calculate metrics and emit request
-          const pickupMetrics = await calculatePickupMetrics(
-            driver,
-            ride.pickupLocation
-          );
+      // --- Parallel Request Logic ---
+      const requestPromises = newDrivers
+        .filter(driver => driver.socketId) // Ensure driver is connected via socket
+        .map(async (driver) => {
+          const driverId = driver.driverId;
+          const socketId = driver.socketId!; // We filtered non-null socketIds
 
-          io.to(driver.driverId).emit("ride_request", {
+          try {
+            // Double-check ride status just before emitting (minimal delay window)
+            const rideCheckBeforeEmit = await prisma.ride.findUnique({
+            where: { id: ride.id },
+              select: { status: true, driverId: true }
+            });
+            if (rideCheckBeforeEmit?.status !== RideStatus.SEARCHING || rideCheckBeforeEmit?.driverId) {
+              console.log(`[findAndRequestDrivers] Ride ${ride.id} became unavailable before emitting to driver ${driverId}.`);
+              return { driverId, accepted: false, error: 'Ride unavailable before emit' };
+            }
+
+            console.log(`[findAndRequestDrivers] Emitting ride_request to driver ${driverId} for ride ${ride.id}`);
+            const pickupMetrics = await calculatePickupMetrics(driver, ride.pickupLocation);
+
+            // Emit request with comprehensive ride details
+            io.to(driverId).emit("ride_request", {
             rideId: ride.id,
             pickupLocation: ride.pickupLocation,
             dropLocation: ride.dropLocation,
-            fare: ride.totalAmount,
+              fare: ride.totalAmount, // Use totalAmount which includes fee/carrier etc.
             distance: ride.distance,
             duration: ride.duration,
             paymentMode: ride.paymentMode,
             carrierRequested: ride.carrierRequested,
             carrierCharge: ride.carrierCharge,
-            ...pickupMetrics,
-            userId: currentRide.userId,
-            userName: currentRide.user?.name,
-            userPhone: currentRide.user?.phone,
-          });
+              isCarRental: ride.isCarRental,
+              rentalPackageHours: ride.rentalPackageHours,
+              otp: ride.otp, // Send OTP with request
+              userName: ride.user?.name,
+              userPhone: ride.user?.phone,
+              userId: ride.userId,
+              ...pickupMetrics
+            });
 
-          const response = await waitForDriverResponse(
-            ride.id,
-            driver.driverId
-          );
+            // Wait for response using a promise with timeout and listener cleanup
+            const response = await new Promise<{ accepted: boolean }>((resolve) => {
+              let listener: (res: { accepted: boolean }) => void;
+              const timeoutId = setTimeout(() => {
+                io.off(`driver_response_${ride.id}_${driverId}`, listener); // Clean up listener on timeout
+                console.log(`[findAndRequestDrivers] Driver ${driverId} timed out for ride ${ride.id}`);
+                resolve({ accepted: false });
+              }, DRIVER_REQUEST_TIMEOUT);
+
+              listener = (res: { accepted: boolean }) => {
+                clearTimeout(timeoutId);
+                // No need to io.off here as io.once removes itself
+                resolve(res);
+              };
+
+              io.once(`driver_response_${ride.id}_${driverId}`, listener);
+            });
 
           if (response.accepted) {
-            // Use transaction to ensure atomicity
-            const result = await prisma.$transaction(async (prisma) => {
-              // Final check before updating
-              const finalCheck = await prisma.ride.findFirst({
+              console.log(`[findAndRequestDrivers] Driver ${driverId} ACCEPTED ride ${ride.id} (pending assignment)`);
+              // Find the corresponding entry in allSearchedDriversInfo and update status
+              const info = allSearchedDriversInfo.find(i => i.driverId === driverId);
+              if (info) info.status = 'accepted';
+              return { driverId, accepted: true, pickupMetrics }; // Include metrics needed for assignment
+            } else {
+              console.log(`[findAndRequestDrivers] Driver ${driverId} rejected or timed out for ride ${ride.id}`);
+              const info = allSearchedDriversInfo.find(i => i.driverId === driverId);
+              if (info) info.status = 'rejected/timeout';
+              return { driverId, accepted: false };
+            }
+
+          } catch (error) {
+            console.error(`[findAndRequestDrivers] Error processing request for driver ${driverId}:`, error);
+            // Ensure listener is removed if an error occurs before timeout/response
+            io.off(`driver_response_${ride.id}_${driverId}`, () => {}); // Attempt cleanup
+            const info = allSearchedDriversInfo.find(i => i.driverId === driverId);
+            if (info) info.status = 'error';
+            return { driverId, accepted: false, error: error instanceof Error ? error.message : 'Unknown error during request' };
+          }
+        }); // End map
+
+      // Wait for all requests in this batch to settle (complete, either fulfilled or rejected)
+      const results = await Promise.allSettled(requestPromises);
+
+      // --- Process Results ---
+      // Filter for drivers who explicitly accepted
+      const acceptingDrivers = results
+        .filter((result): result is PromiseFulfilledResult<{ driverId: string; accepted: true; pickupMetrics: { pickupDistance: number; pickupDuration: number } }> =>
+          result.status === 'fulfilled' && result.value.accepted === true
+        )
+        .map(result => result.value);
+
+      if (acceptingDrivers.length > 0) {
+        console.log(`[findAndRequestDrivers] ${acceptingDrivers.length} driver(s) accepted ride ${ride.id} in radius ${currentRadius}km. Attempting assignment... [${acceptingDrivers.map(d => d.driverId).join(', ')}]`);
+
+        // Try to assign the ride to the first accepting driver found
+        // (Could potentially prioritize based on distance/ETA later if needed)
+        for (const acceptance of acceptingDrivers) {
+          // If already assigned by a previous acceptance in this loop, break
+          if (assignedDriverId) break;
+
+          const { driverId, pickupMetrics } = acceptance;
+          console.log(`[findAndRequestDrivers] Attempting transaction to assign driver ${driverId} to ride ${ride.id}`);
+
+          try {
+            const assignmentResult = await prisma.$transaction(async (tx) => {
+              // *** CRITICAL CHECK INSIDE TRANSACTION ***
+              const finalCheck = await tx.ride.findFirst({
                 where: {
                   id: ride.id,
-                  status: RideStatus.SEARCHING,
-                  driverId: null,
+                  status: RideStatus.SEARCHING, // Must still be searching
+                  driverId: null,            // Must NOT have a driver yet
                 },
-                select: { status: true },
+                select: { id: true } // Select minimal field
               });
 
               if (!finalCheck) {
-                return null;
+                console.log(`[findAndRequestDrivers Transaction] Ride ${ride.id} already assigned or cancelled. Cannot assign to driver ${driverId}.`);
+                return null; // Indicate ride was not assignable
               }
 
-              // Update ride with driver and metrics
-              return prisma.ride.update({
-                where: {
-                  id: ride.id,
-                },
+              // *** Assign Driver ***
+              console.log(`[findAndRequestDrivers Transaction] Assigning driver ${driverId} to ride ${ride.id}`);
+              return await tx.ride.update({
+                where: { id: ride.id },
                 data: {
-                  driverId: driver.driverId,
+                  driverId: driverId,
                   status: RideStatus.ACCEPTED,
                   pickupDistance: pickupMetrics.pickupDistance,
                   pickupDuration: pickupMetrics.pickupDuration,
                 },
+                // Include necessary relations for subsequent notifications
                 include: {
-                  driver: {
-                    select: {
-                      id: true,
-                      name: true,
-                      phone: true,
-                      driverDetails: true,
-                    },
-                  },
-                  user: true,
+                   driver: { select: { id: true, name: true, phone: true, driverDetails: true } },
+                   user: true // Include user for userId access
                 },
               });
-            });
+            }); // End Transaction
 
-            if (result) {
-              // Notify user about accepted ride
-              io.to(result.userId).emit("ride_status_update", {
+            // --- Post-Transaction Handling ---
+            if (assignmentResult) {
+              // Successfully assigned!
+              assignedDriverId = driverId; // Set flag to stop searching/processing other acceptances
+              assignedRideData = assignmentResult; // Store the updated ride data
+              console.log(`[findAndRequestDrivers] >>> Successfully assigned driver ${driverId} to ride ${ride.id}. Notifying parties. <<<`);
+               const info = allSearchedDriversInfo.find(i => i.driverId === driverId);
+               if (info) info.status = 'assigned';
+
+
+              // 1. Notify User of Acceptance
+              io.to(assignedRideData.userId).emit("ride_status_update", {
                 rideId: ride.id,
                 status: RideStatus.ACCEPTED,
-                driverId: driver.driverId,
-                pickupDistance: pickupMetrics.pickupDistance,
-                pickupDuration: pickupMetrics.pickupDuration,
-                carrierRequested: ride.carrierRequested,
+                driverId: driverId,
+                driverDetails: assignedRideData.driver, // Send assigned driver's details
+                pickupDistance: assignedRideData.pickupDistance,
+                pickupDuration: assignedRideData.pickupDuration,
+                carrierRequested: assignedRideData.carrierRequested,
+                // Add any other relevant details for the user
               });
+              console.log(`[findAndRequestDrivers] Notified user ${assignedRideData.userId} of acceptance by ${driverId}.`);
 
-              // Broadcast ride unavailability
-              io.emit("ride_unavailable", { rideId: ride.id });
+              // 2. Confirm Assignment with Winning Driver (Optional but good)
+              io.to(driverId).emit("ride_assignment_confirmed", {
+                rideId: ride.id,
+                message: "You have been assigned this ride.",
+                rideDetails: assignedRideData // Send full details
+              });
+              console.log(`[findAndRequestDrivers] Confirmed assignment with winning driver ${driverId}.`);
 
-              return {
-                success: true,
-                message: "Driver found successfully",
-                searchedDrivers,
-                finalRadius: currentRadius,
-                ride: result,
-              };
-            }
-          }
-        } catch (error) {
-          console.error(`Error requesting driver ${driver.driverId}:`, error);
-          continue;
-        }
+              // 3. *** CRUCIAL: Notify *other* attempted drivers the ride is gone ***
+              // Notify all drivers attempted SO FAR (across all radii), excluding the winner
+              const otherAttemptedDriverIds = Array.from(attemptedDrivers).filter(id => id !== driverId);
+
+              if (otherAttemptedDriverIds.length > 0) {
+                console.log(`[findAndRequestDrivers] Notifying ${otherAttemptedDriverIds.length} other attempted drivers ride ${ride.id} is unavailable. [${otherAttemptedDriverIds.join(', ')}]`);
+                otherAttemptedDriverIds.forEach(otherId => {
+                  // Check if this other driver was actually part of the latest batch that might still be listening
+                  const otherDriverResult = results.find(r => r.status === 'fulfilled' && r.value.driverId === otherId);
+                   if (otherDriverResult) {
+                        // This driver was part of the latest batch, ensure their listener is cleaned up if they didn't timeout/reject yet
+                         io.off(`driver_response_${ride.id}_${otherId}`, () => {});
+                   }
+
+                  io.to(otherId).emit("ride_request_cancelled", {
+                    rideId: ride.id,
+                    reason: "Ride assigned to another driver"
+                  });
+                });
+              }
+
+              // 4. Broadcast general unavailability (less critical if specific cancellations sent)
+              // io.emit("ride_unavailable", { rideId: ride.id });
+
+              // Break the loop for acceptances since we found our driver
+              break;
+
+            } else {
+              // Transaction failed (ride was likely taken by another driver whose acceptance was processed microseconds earlier)
+              console.log(`[findAndRequestDrivers] Assignment transaction failed for driver ${driverId} (ride ${ride.id} was likely taken).`);
+               const info = allSearchedDriversInfo.find(i => i.driverId === driverId);
+               if (info) info.status = 'accepted_late';
+              // Notify this driver their acceptance was too late
+              io.to(driverId).emit("ride_request_cancelled", {
+                rideId: ride.id,
+                reason: "Ride assigned to another driver just before your acceptance was processed."
+              });
+            } // End if (assignmentResult)
+
+          } catch (error) {
+            console.error(`[findAndRequestDrivers] Error during assignment transaction for driver ${driverId} on ride ${ride.id}:`, error);
+            const info = allSearchedDriversInfo.find(i => i.driverId === driverId);
+            if (info) info.status = 'assignment_error';
+            // If transaction fails due to db error, ride might still be searching. Log and continue.
+            // Notify this driver their acceptance failed to process
+             io.to(driverId).emit("ride_request_cancelled", {
+                 rideId: ride.id,
+                 reason: "An error occurred while processing your acceptance."
+             });
+          } // End catch (transaction error)
+        } // End loop through acceptingDrivers
+      } else {
+        console.log(`[findAndRequestDrivers] No drivers accepted in radius ${currentRadius}km batch for ride ${ride.id}.`);
+      } // End if (acceptingDrivers.length > 0)
+      // --- End Process Results ---
+
+    } // End if (newDrivers.length > 0)
+    else {
+      console.log(`[findAndRequestDrivers] No *new* drivers found in radius ${currentRadius}km for ride ${ride.id}.`);
+    }
+
+    // If a driver was assigned in this radius's batch, the outer loop condition `!assignedDriverId` will be false, and we will exit.
+    if (!assignedDriverId) {
+      // Only increment radius if we haven't assigned a driver yet and haven't reached max
+      if (currentRadius < MAX_SEARCH_RADIUS) {
+          currentRadius += 2; // Increase radius for the next iteration
+          console.log(`[findAndRequestDrivers] Increasing search radius to ${currentRadius}km for ride ${ride.id}.`);
+      } else {
+          console.log(`[findAndRequestDrivers] Reached max search radius (${MAX_SEARCH_RADIUS}km) for ride ${ride.id}.`);
+          // Exit loop after checking max radius
       }
     }
-    currentRadius += 2;
-  }
+  } // End while loop (radius expansion)
 
+  // --- Final Outcome ---
+  if (assignedDriverId && assignedRideData) {
+    // Successfully assigned a driver during the process
+    console.log(`[findAndRequestDrivers] Search completed successfully. Driver ${assignedDriverId} assigned to ride ${ride.id}.`);
   return {
-    success: false,
-    message: ride.carrierRequested
-      ? "No drivers with carrier available"
-      : "No available drivers found",
-    searchedDrivers,
-    finalRadius: currentRadius - 2,
-  };
+      success: true,
+      message: `Driver ${assignedDriverId} assigned successfully.`,
+      searchedDrivers: allSearchedDriversInfo, // Return detailed search info
+      finalRadius: currentRadius, // Radius where the driver was found or max if found earlier but loop finished checks
+      ride: assignedRideData // Return the final updated ride object
+    };
+  } else {
+    // No driver was assigned within the max radius or time allowed
+    console.log(`[findAndRequestDrivers] Search completed. No driver assigned for ride ${ride.id} within max radius ${MAX_SEARCH_RADIUS}km.`);
+    // Fetch ride status one last time to see if it was cancelled externally etc.
+    const finalRideStatusCheck = await prisma.ride.findUnique({ where: { id: ride.id }, select: { status: true } });
+    const finalMessage = ride.carrierRequested
+      ? "No drivers with carrier available within the maximum search radius."
+      : "No available drivers found within the maximum search radius.";
+
+    return {
+      success: false,
+      message: finalMessage,
+      searchedDrivers: allSearchedDriversInfo,
+      finalRadius: MAX_SEARCH_RADIUS,
+      rideStatus: finalRideStatusCheck?.status // Include final status for context
+    };
+  }
 }
 
-// Define types for the package structure
-type PackageDetails = {
-  km: number;
-  price: number;
-};
-
-type PackageHours = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
-
-type RentalPackages = {
-  [K in CarCategory]: {
-    [H in PackageHours]: PackageDetails;
-  };
-};
-
-// Define the rental packages with proper typing
-const RENTAL_PACKAGES: RentalPackages = {
-  mini: {
-    1: { km: 15, price: 380 },
-    2: { km: 25, price: 550 },
-    3: { km: 35, price: 700 },
-    4: { km: 45, price: 950 },
-    5: { km: 60, price: 1250 },
-    6: { km: 70, price: 1550 },
-    7: { km: 80, price: 1850 },
-    8: { km: 90, price: 2100 },
-  },
-  sedan: {
-    1: { km: 15, price: 450 },
-    2: { km: 25, price: 600 },
-    3: { km: 40, price: 850 },
-    4: { km: 50, price: 1100 },
-    5: { km: 65, price: 1400 },
-    6: { km: 75, price: 1650 },
-    7: { km: 85, price: 2000 },
-    8: { km: 90, price: 2300 },
-  },
-  suv: {
-    1: { km: 15, price: 580 },
-    2: { km: 25, price: 750 },
-    3: { km: 40, price: 950 },
-    4: { km: 50, price: 1200 },
-    5: { km: 65, price: 1500 },
-    6: { km: 75, price: 1850 },
-    7: { km: 85, price: 2100 },
-    8: { km: 90, price: 2450 },
-  },
-};
-
-const EXTRA_KM_RATES = {
-  mini: 14,
-  sedan: 16,
-  suv: 18,
-};
-
-const EXTRA_MINUTE_RATE = 2;
-
-// Add this new function to calculate rental fare
-export const calculateRentalFare = (
-  carCategory: string,
-  packageHours: number,
-  actualKms: number,
-  actualMinutes: number
-) => {
-  const category = carCategory.toLowerCase() as keyof typeof RENTAL_PACKAGES;
-  const packageDetails =
-    RENTAL_PACKAGES[category][
-      packageHours as keyof (typeof RENTAL_PACKAGES)[typeof category]
-    ];
-
-  if (!packageDetails) {
-    throw new Error("Invalid package selected");
-  }
-
-  const basePrice = packageDetails.price;
-  const packageKms = packageDetails.km;
-
-  // Calculate extra km charges
-  const extraKms = Math.max(0, actualKms - packageKms);
-  const extraKmCharges = extraKms * EXTRA_KM_RATES[category];
-
-  // Calculate extra minute charges
-  const packageMinutes = packageHours * 60;
-  const extraMinutes = Math.max(0, actualMinutes - packageMinutes);
-  const extraMinuteCharges = extraMinutes * EXTRA_MINUTE_RATE;
-
-  return {
-    basePrice,
-    packageKms,
-    extraKmCharges,
-    extraMinuteCharges,
-    totalAmount: basePrice + extraKmCharges + extraMinuteCharges,
-  };
-};
-
-// Type guards for validation
-const isValidCarCategory = (category: string): category is CarCategory => {
-  return ["mini", "sedan", "suv"].includes(category.toLowerCase());
-};
-
-const isValidPackageHours = (hours: number): hours is PackageHours => {
-  return hours >= 1 && hours <= 8;
-};
-
-// Modify createRide to handle carrier requests for all ride types
+// Modify createRide to use the updated findAndRequestDrivers
 export const createRide = async (req: Request, res: Response) => {
   // 1. Extract request body data
   const {
@@ -881,26 +926,14 @@ export const createRide = async (req: Request, res: Response) => {
     // *** END: Add outstanding fee to totalAmount ***
 
     // 5. Create the Ride record and handle fee reset/transaction within a DB transaction
-    console.log(
-      `[createRide] Creating ride record in database (potentially with fee logic)...`
-    );
-
+    console.log(`[createRide] Creating ride record in database (potentially with fee logic)...`);
     const ride = await prisma.$transaction(async (tx) => {
       // Create the ride first
       const newRide = await tx.ride.create({
         data: rideData, // Use the prepared rideData with updated totalAmount
         include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              phone: true,
-              outstandingCancellationFee: true,
-            },
-          }, // Include fee status
-          driver: {
-            select: { id: true, name: true, phone: true, driverDetails: true },
-          },
+          user: { select: { id: true, name: true, phone: true, outstandingCancellationFee: true } }, // Include required fields for findAndRequestDrivers
+          driver: { select: { id: true, name: true, phone: true, driverDetails: true } },
         },
       });
 
@@ -932,18 +965,13 @@ export const createRide = async (req: Request, res: Response) => {
           `[createRide Transaction] User fee reset and transaction created for ride ${newRide.id}.`
         );
       }
-
       return newRide; // Return the created ride from the transaction
     });
 
-    console.log(
-      `[createRide] Ride record created/updated successfully with ID: ${ride.id}. Final Total Amount: ${ride.totalAmount}`
-    );
+    console.log(`[createRide] Ride record created/updated successfully with ID: ${ride.id}. Final Total Amount: ${ride.totalAmount}`);
 
     // 6. Respond IMMEDIATELY
-    console.log(
-      `[createRide] Sending immediate response (201) for ride ${ride.id}`
-    );
+    console.log(`[createRide] Sending immediate response (201) for ride ${ride.id}`);
     res.status(201).json({
       message: feeAppliedToRide
         ? `Ride created, outstanding fee of ${outstandingFee} applied. Searching for driver...`
@@ -951,92 +979,81 @@ export const createRide = async (req: Request, res: Response) => {
       ride: ride, // Send the full created ride object back
       outstandingFeeApplied: feeAppliedToRide ? outstandingFee : 0, // Indicate if fee was applied
     });
-    console.log(
-      `[createRide] Response sent for ride ${ride.id}. Initiating async driver search...`
-    );
+    console.log(`[createRide] Response sent for ride ${ride.id}. Initiating async driver search...`);
 
-    // 7. Initiate driver search asynchronously (IIFE)
+
+    // 7. Initiate driver search asynchronously (IIFE) - uses the *new* findAndRequestDrivers
     (async () => {
       try {
-        console.log(
-          `[Async Search] Starting background driver search for ride ${ride.id}`
-        );
-        // Pass the newly created ride object with includes to the search function
-        const driverSearchResult = await findAndRequestDrivers(ride); // This function searches and handles acceptance/socket emits
-        console.log(
-          `[Async Search] Background search completed for ride ${ride.id}. Result Success: ${driverSearchResult.success}, Message: ${driverSearchResult.message}`
-        );
+        console.log(`[Async Search] Starting background driver search for ride ${ride.id}`);
+        // Pass the newly created ride object (with includes) to the search function
+        const driverSearchResult = await findAndRequestDrivers(ride); // Use the refactored function
+        console.log(`[Async Search] Background search completed for ride ${ride.id}. Result Success: ${driverSearchResult.success}, Message: ${driverSearchResult.message}`);
 
-        // If the async search fails to find a driver
+        // If the async search fails to find and assign a driver
         if (!driverSearchResult.success) {
-          console.log(
-            `[Async Search] Driver search failed for ride ${ride.id}. Checking current status before potentially cancelling...`
-          );
+          console.log(`[Async Search] Driver search failed for ride ${ride.id}. Checking current status before potentially cancelling...`);
           // Check the ride status again before updating
           const currentRideState = await prisma.ride.findUnique({
             where: { id: ride.id },
             select: { status: true },
           });
 
-          // Only update to CANCELLED if it's still in SEARCHING state
+          // Only update to CANCELLED if it's still in SEARCHING state (wasn't cancelled by user/driver already)
           if (currentRideState?.status === RideStatus.SEARCHING) {
-            console.log(
-              `[Async Search] Ride ${ride.id} still SEARCHING. Updating status to CANCELLED (No drivers found).`
-            );
+            console.log(`[Async Search] Ride ${ride.id} still SEARCHING. Updating status to CANCELLED (No drivers found/assigned).`);
             // Update the database first
-            await updateRideInDatabase(ride.id, RideStatus.CANCELLED);
+            const cancelledRide = await prisma.ride.update({
+                where: { id: ride.id },
+                data: {
+                    status: RideStatus.CANCELLED,
+                    cancellationReason: driverSearchResult.message || "No available drivers found",
+                    cancelledBy: CancelledBy.SYSTEM // Indicate system cancellation
+                }
+            });
             // Notify the user via socket AFTER db update
             io.to(ride.userId).emit("ride_status_update", {
               rideId: ride.id,
               status: RideStatus.CANCELLED,
-              reason:
-                driverSearchResult.message || "No available drivers found",
+              reason: cancelledRide.cancellationReason,
+              cancelledBy: cancelledRide.cancelledBy
             });
-            console.log(
-              `[Async Search] Sent CANCELLED status update to user ${ride.userId} for ride ${ride.id}`
-            );
+            console.log(`[Async Search] Sent CANCELLED status update to user ${ride.userId} for ride ${ride.id}`);
           } else {
-            console.log(
-              `[Async Search] Ride ${ride.id} status is already ${currentRideState?.status}. No cancellation needed from async search failure.`
-            );
+            console.log(`[Async Search] Ride ${ride.id} status is already ${currentRideState?.status}. No cancellation needed from async search failure.`);
           }
         }
-        // If driverSearchResult.success is true, findAndRequestDrivers handles DB updates and socket emits.
+        // If driverSearchResult.success is true, findAndRequestDrivers already handled DB updates and socket emits.
       } catch (searchError) {
-        console.error(
-          `[Async Search] Error during background driver search for ride ${ride.id}:`,
-          searchError
-        );
-        // Attempt to cancel the ride if an error occurred, checking status first
+        console.error(`[Async Search] Error during background driver search process for ride ${ride.id}:`, searchError);
+        // Attempt to cancel the ride if an error occurred during the search process itself, checking status first
         try {
           const currentRideStateOnError = await prisma.ride.findUnique({
             where: { id: ride.id },
             select: { status: true },
           });
           if (currentRideStateOnError?.status === RideStatus.SEARCHING) {
-            console.log(
-              `[Async Search] Error occurred for ${ride.id} while SEARCHING. Updating status to CANCELLED.`
-            );
-            await updateRideInDatabase(ride.id, RideStatus.CANCELLED); // Update DB first
-            io.to(ride.userId).emit("ride_status_update", {
-              // Notify user after DB update
+            console.log(`[Async Search] Error occurred for ${ride.id} while SEARCHING. Updating status to CANCELLED.`);
+            const cancelledRideOnError = await prisma.ride.update({
+                where: { id: ride.id },
+                data: {
+                     status: RideStatus.CANCELLED,
+                     cancellationReason: "Error during driver search process",
+                     cancelledBy: CancelledBy.SYSTEM
+                }
+             }); // Update DB first
+            io.to(ride.userId).emit("ride_status_update", { // Notify user after DB update
               rideId: ride.id,
               status: RideStatus.CANCELLED,
-              reason: "Error during driver search process",
+              reason: cancelledRideOnError.cancellationReason,
+              cancelledBy: cancelledRideOnError.cancelledBy
             });
-            console.log(
-              `[Async Search] Sent CANCELLED status update due to error to user ${ride.userId} for ride ${ride.id}`
-            );
+            console.log(`[Async Search] Sent CANCELLED status update due to error to user ${ride.userId} for ride ${ride.id}`);
           } else {
-            console.log(
-              `[Async Search] Error occurred for ${ride.id}, but status is already ${currentRideStateOnError?.status}. No cancellation needed.`
-            );
+            console.log(`[Async Search] Error occurred for ${ride.id}, but status is already ${currentRideStateOnError?.status}. No cancellation needed.`);
           }
         } catch (dbError) {
-          console.error(
-            `[Async Search] Error updating ride ${ride.id} to CANCELLED after search error:`,
-            dbError
-          );
+          console.error(`[Async Search] Error updating ride ${ride.id} to CANCELLED after search error:`, dbError);
         }
       }
     })(); // End of async IIFE
@@ -1639,48 +1656,48 @@ const handleRideCancellation = async (
     // 4. Emit socket events AFTER database updates are successful
     if (updatedRideData) {
       console.log(
-        `[handleRideCancellation] Emitting cancellation updates for ride ${ride.id}.`
+        `[handleRideCancellation] Emitting cancellation updates for ride ${ride.id}. Cancelled by ${cancellingUserType}`
       );
-      // Notify the other party (if they exist)
-      const targetUserId =
-        cancellingUserType === UserType.USER
-          ? updatedRideData.driverId
-          : updatedRideData.userId;
-      const targetDriverId =
-        cancellingUserType === UserType.DRIVER
-          ? updatedRideData.userId
-          : updatedRideData.driverId;
 
+      // Notify the User (always)
       if (updatedRideData.userId) {
         io.to(updatedRideData.userId).emit("ride_status_update", {
           rideId: ride.id,
           status: RideStatus.CANCELLED,
           reason: cancellationReason,
           cancelledBy: cancellingUserType,
-          cancellationFee: cancellationFee, // Send fee info
-          feeAppliedToNextRide:
-            cancellingUserType === UserType.USER && feeApplies, // Indicate if fee affects user's next ride
+          cancellationFee: cancellationFee,
+          feeAppliedToNextRide: cancellingUserType === UserType.USER && feeApplies,
         });
       }
+
+      // Notify the Driver (if one was assigned and user cancelled, or if driver cancelled)
       if (updatedRideData.driverId) {
-        io.to(updatedRideData.driverId).emit("ride_status_update", {
+         // Check if the driver who cancelled is the one assigned (should be true if driver cancelled)
+         // Or if user cancelled a ride that had an assigned driver
+         const targetDriverId = updatedRideData.driverId;
+         io.to(targetDriverId).emit("ride_status_update", {
           rideId: ride.id,
           status: RideStatus.CANCELLED,
           reason: cancellationReason,
           cancelledBy: cancellingUserType,
-          cancellationFee: cancellationFee, // Send fee info
-          feeDeducted: cancellingUserType === UserType.DRIVER && feeApplies, // Indicate if fee was deducted
-        });
+           cancellationFee: cancellationFee,
+           feeDeducted: cancellingUserType === UserType.DRIVER && feeApplies,
+         });
       }
 
-      // Broadcast generic cancellation (optional, maybe remove if specific updates are enough)
-      io.emit("ride_cancelled", {
+      // *** Notify any drivers who might have been SEARCHING for this ride ***
+      // This is important if cancellation happens *during* the findAndRequestDrivers process
+       // We might not know exactly who received a request, so broadcast a generic cancellation
+       // Alternatively, findAndRequestDrivers should handle this by checking status frequently
+       io.emit("ride_request_cancelled", { // Use the same event as assignment cancellation
         rideId: ride.id,
-        status: "CANCELLED",
-        cancelledBy: cancellingUserType,
-        reason: cancellationReason,
+           reason: `Ride cancelled by ${cancellingUserType}`
       });
-    }
+       console.log(`[handleRideCancellation] Broadcasted ride_request_cancelled for ride ${ride.id}`);
+
+
+    } // End if (updatedRideData)
 
     console.log(
       `[handleRideCancellation] Sending final response for ride ${ride.id}.`
