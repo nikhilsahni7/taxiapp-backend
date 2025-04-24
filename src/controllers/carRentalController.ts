@@ -162,7 +162,7 @@ export const createCarRental = async (req: Request, res: Response) => {
     });
 
     // Start driver search process with carrier filter if required
-    const searchResult = await findDriversForRental(rental);
+    const searchResult = await findDriversForRental(rental, carCategory);
 
     // Include applied fee in response
     return res.status(201).json({
@@ -270,7 +270,7 @@ export const getRentalStatus = async (req: Request, res: Response) => {
 // End rental and calculate final charges
 
 // Helper function to find available drivers
-async function findDriversForRental(rental: any) {
+async function findDriversForRental(rental: any, carCategory: string) {
   let currentRadius = 3;
   const maxRadius = 15;
   const attemptedDrivers = new Set<string>();
@@ -279,13 +279,16 @@ async function findDriversForRental(rental: any) {
   const existingMetadata = (rental.metadata as Prisma.JsonObject | null) ?? {};
 
   while (currentRadius <= maxRadius) {
-    // Include carrier filter if requested
-    const filterOptions = rental.carrierRequested ? { hasCarrier: true } : {};
+    // Include carrier filter if requested AND the car category filter
+    const filterOptions = {
+      hasCarrier: rental.carrierRequested,
+      carCategory: carCategory, // Add carCategory to filter options
+    };
 
     const drivers = await searchAvailableDrivers(
       `${rental.pickupLat},${rental.pickupLng}`,
       currentRadius,
-      filterOptions
+      filterOptions // Pass the updated filter options
     );
 
     const newDrivers = drivers.filter((d) => !attemptedDrivers.has(d.driverId));
