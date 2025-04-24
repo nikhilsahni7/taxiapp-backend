@@ -442,16 +442,31 @@ async function findAndRequestDrivers(ride: any) {
       };
     }
 
-    // Filter for drivers with carrier if requested
-    const filterOptions = ride.carrierRequested
-      ? { hasCarrier: true }
-      : undefined;
+    // Prepare filter options including carrier and car category
+    const filterOptions: { hasCarrier?: boolean; carCategory?: string } = {};
+    if (ride.carrierRequested) {
+      filterOptions.hasCarrier = true;
+    }
+    // Ensure we pass the carCategory from the ride object
+    if (ride.carCategory) {
+      filterOptions.carCategory = ride.carCategory; // Pass the requested category
+    } else {
+       console.warn(`[findAndRequestDrivers] Ride ${ride.id} is missing carCategory for filtering.`);
+       
+    }
 
+    console.log(
+      `[findAndRequestDrivers] Searching drivers for ride ${ride.id} in radius ${currentRadius}km with filters:`, filterOptions
+    );
+
+    // Call searchAvailableDrivers with the filter options
     const drivers = await searchAvailableDrivers(
       ride.pickupLocation,
       currentRadius,
-      filterOptions
+      filterOptions // Pass the options object
     );
+
+    console.log(`[findAndRequestDrivers] Found ${drivers.length} suitable drivers in radius ${currentRadius}km.`);
 
     const newDrivers = drivers.filter((d) => !attemptedDrivers.has(d.driverId));
 

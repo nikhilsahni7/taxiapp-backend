@@ -45,11 +45,14 @@ export const geocodeAddress = async (
 export const searchAvailableDrivers = async (
   pickupLocation: string,
   radius: number,
-  filterOptions?: { hasCarrier?: boolean }
+  filterOptions?: {
+    hasCarrier?: boolean;
+    carCategory?: string;
+  }
 ) => {
   const { lat, lng } = await geocodeAddress(pickupLocation);
 
-  // Find drivers within the radius and not currently on a ride
+  // Find online drivers within the radius, including details needed for filtering
   const drivers = await prisma.driverStatus.findMany({
     where: {
       isOnline: true,
@@ -61,7 +64,7 @@ export const searchAvailableDrivers = async (
         gte: lng - radius / (111 * Math.cos((lat * Math.PI) / 180)),
         lte: lng + radius / (111 * Math.cos((lat * Math.PI) / 180)),
       },
-      // Filter by carrier option if specified
+      // Only filter by carrier in the DB query if specified
       ...(filterOptions?.hasCarrier && {
         driver: {
           driverDetails: {
@@ -69,38 +72,43 @@ export const searchAvailableDrivers = async (
           },
         },
       }),
-      // driver: {
-      //   ridesAsDriver: {
-      //     none: {
-      //       status: {
-      //         in: ["ACCEPTED", "DRIVER_ARRIVED", "RIDE_STARTED"],
-      //       },
-      //     },
-      //   },
-      // },
+      // We will filter by carCategory in the application code below
     },
     include: {
       driver: {
+        // Ensure driverDetails is included to access vehicleCategory
         include: {
           driverDetails: true,
         },
       },
     },
     orderBy: [
-      {
-        locationLat: "asc",
-      },
-      {
-        locationLng: "asc",
-      },
+      { locationLat: "asc" },
+      { locationLng: "asc" },
     ],
   });
 
-  console.log(drivers);
+  console.log(
+    `[searchAvailableDrivers] Found ${drivers.length} drivers within ${radius}km before category filter.`
+  );
 
-  // Calculate exact distance for each driver
+  // In-code filtering based on carCategory
+  const categoryFilteredDrivers = filterOptions?.carCategory
+    ? drivers.filter((driverStatus) => {
+        const driverCategory = driverStatus.driver?.driverDetails?.vehicleCategory?.toLowerCase();
+        const requestedCategory = filterOptions.carCategory!.toLowerCase();
+        // Check if driver has details and their category matches the request
+        return driverCategory === requestedCategory;
+      })
+    : drivers; // If no category filter, use all found drivers
+
+  console.log(
+    `[searchAvailableDrivers] Found ${categoryFilteredDrivers.length} drivers after category filter (${filterOptions?.carCategory || "none"}).`
+  );
+
+  // Calculate exact distance for the filtered drivers
   const driversWithDistance = await Promise.all(
-    drivers.map(async (driver) => {
+    categoryFilteredDrivers.map(async (driver) => { // Use categoryFilteredDrivers here
       const distance = await calculateDistance(
         `${driver.locationLat},${driver.locationLng}`,
         pickupLocation
