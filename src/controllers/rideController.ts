@@ -1465,21 +1465,21 @@ const handleRideCancellation = async (
               `[handleRideCancellation] User ${ride.userId}'s wallet updated. New balance: ${wallet.balance}`
             );
 
-            // 2. Create Transaction record
+            // 2. Create Transaction record using existing type
             await tx.transaction.create({
               data: {
                 amount: cancellationFee,
                 currency: "INR",
-                type: TransactionType.USER_CANCELLATION_FEE_DEDUCTION, // Use a specific type for user fee deduction
+                type: TransactionType.USER_CANCELLATION_FEE_APPLIED,
                 status: TransactionStatus.COMPLETED,
                 senderId: ride.userId, // User is the 'sender' of the fee
                 receiverId: null, // Or system/admin ID
                 rideId: ride.id,
-                description: `Cancellation fee (user) deducted for ride ${ride.id}`,
+                description: `Cancellation fee (user) deducted from wallet for ride ${ride.id}`,
               },
             });
             console.log(
-              `[handleRideCancellation] User cancellation fee transaction created for ride ${ride.id}.`
+              `[handleRideCancellation] User cancellation fee transaction created (using USER_CANCELLATION_FEE_APPLIED type) for ride ${ride.id}.`
             );
 
             // 3. Update Ride status
