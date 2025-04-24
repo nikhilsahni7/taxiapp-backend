@@ -726,7 +726,12 @@ async function findAndRequestDrivers(ride: any) {
 
     } // End if (newDrivers.length > 0)
     else {
-      console.log(`[findAndRequestDrivers] No *new* drivers found in radius ${currentRadius}km for ride ${ride.id}.`);
+      console.log(`[findAndRequestDrivers] No *new* drivers found matching criteria in radius ${currentRadius}km for ride ${ride.id}.`);
+      // *** Optimization: If we are already at max radius and found no new drivers, stop searching ***
+      if (currentRadius >= MAX_SEARCH_RADIUS) {
+          console.log(`[findAndRequestDrivers] Reached max search radius (${MAX_SEARCH_RADIUS}km) and no new drivers found. Stopping search.`);
+          break; // Exit the while loop early
+      }
     }
 
     // If a driver was assigned in this radius's batch, the outer loop condition `!assignedDriverId` will be false, and we will exit.
@@ -734,10 +739,14 @@ async function findAndRequestDrivers(ride: any) {
       // Only increment radius if we haven't assigned a driver yet and haven't reached max
       if (currentRadius < MAX_SEARCH_RADIUS) {
           currentRadius += 2; // Increase radius for the next iteration
-          console.log(`[findAndRequestDrivers] Increasing search radius to ${currentRadius}km for ride ${ride.id}.`);
+          // Avoid logging increase if the next iteration will break immediately due to the optimization above
+          if (currentRadius <= MAX_SEARCH_RADIUS) {
+             console.log(`[findAndRequestDrivers] Increasing search radius to ${currentRadius}km for ride ${ride.id}.`);
+          }
       } else {
-          console.log(`[findAndRequestDrivers] Reached max search radius (${MAX_SEARCH_RADIUS}km) for ride ${ride.id}.`);
-          // Exit loop after checking max radius
+           // This log might become less common due to the early break, but keep for edge cases
+           console.log(`[findAndRequestDrivers] Reached max search radius (${MAX_SEARCH_RADIUS}km) in loop increment logic.`);
+          // The loop condition `currentRadius <= MAX_SEARCH_RADIUS` will handle termination
       }
     }
   } // End while loop (radius expansion)
