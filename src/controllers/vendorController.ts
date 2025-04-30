@@ -176,7 +176,7 @@ export const getVendorFareEstimate = async (req: Request, res: Response) => {
         breakdown: {
           appCommissionFromBase,
           appCommissionFromVendor,
-          driverCommission: appCommissionFromBase,
+          driverCommission: totalAppCommission,
         },
         tripDetails: {
           type: tripType || "ONE_WAY",
