@@ -1555,7 +1555,7 @@ export const createVendorChardhamBooking = async (
         serviceType: "CHARDHAM_YATRA",
         tripType: "ONE_WAY", // Chardham is always a circuit
         pickupLocation,
-        dropLocation: "Chardham Circuit", // Fixed for Chardham
+        dropLocation: "Chardham Yatra", // Fixed for Chardham
         pickupLat,
         pickupLng,
         dropLat: null, // Not applicable for Chardham
