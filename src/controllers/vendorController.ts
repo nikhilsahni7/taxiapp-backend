@@ -325,12 +325,13 @@ export const createDriverCommissionPayment = async (
       return res.status(404).json({ error: "Booking not found" });
     }
 
-    // Calculate exactly as the frontend does
-    const vendorMarkup = booking.vendorCommission; // This is vendorPrice - appBasePrice
-    const appCommissionFromVendor = Math.round(vendorMarkup * 0.1); // 10% of vendor markup
+    // Calculate total commission correctly
+    // App commission is calculated as 12% of appBasePrice
+    const appCommissionFromBase = Math.round(booking.appBasePrice * 0.12);
 
-    // Driver only pays: vendorMarkup + appCommissionFromVendor (not the entire app commission)
-    const commissionAmount = vendorMarkup + appCommissionFromVendor;
+    // The total commission the driver should pay is:
+    // vendorCommission + appCommissionFromBase
+    const commissionAmount = booking.vendorCommission + appCommissionFromBase;
 
     const shortBookingId = bookingId.slice(-8);
     const receiptId = `comm_${shortBookingId}`;
@@ -344,8 +345,8 @@ export const createDriverCommissionPayment = async (
         type: "driver_commission",
         amount: commissionAmount,
         breakdown: {
-          vendorMarkup,
-          appCommissionFromVendor,
+          vendorCommission: booking.vendorCommission,
+          appCommissionFromBase,
         },
       },
     });
@@ -391,10 +392,9 @@ export const verifyDriverCommissionPayment = async (
         throw new Error("Booking not found");
       }
 
-      // Calculate exactly as the frontend does
-      const vendorMarkup = booking.vendorCommission;
-      const appCommissionFromVendor = Math.round(vendorMarkup * 0.1);
-      const commissionAmount = vendorMarkup + appCommissionFromVendor;
+      // Calculate commission correctly
+      const appCommissionFromBase = Math.round(booking.appBasePrice * 0.12);
+      const commissionAmount = booking.vendorCommission + appCommissionFromBase;
 
       // Add commission to app wallet
       await createAppWalletTransaction(
