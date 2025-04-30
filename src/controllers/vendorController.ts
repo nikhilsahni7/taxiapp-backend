@@ -325,24 +325,27 @@ export const createDriverCommissionPayment = async (
       return res.status(404).json({ error: "Booking not found" });
     }
 
-    // Driver pays both vendor commission and app commission
-    // This is the total commission calculation that needs to be fixed
-    const totalCommissionAmount = booking.vendorCommission + booking.appCommission;
+    // Calculate exactly as the frontend does
+    const vendorMarkup = booking.vendorCommission; // This is vendorPrice - appBasePrice
+    const appCommissionFromVendor = Math.round(vendorMarkup * 0.1); // 10% of vendor markup
+
+    // Driver only pays: vendorMarkup + appCommissionFromVendor (not the entire app commission)
+    const commissionAmount = vendorMarkup + appCommissionFromVendor;
 
     const shortBookingId = bookingId.slice(-8);
     const receiptId = `comm_${shortBookingId}`;
 
     const order = await razorpay.orders.create({
-      amount: Math.round(totalCommissionAmount * 100), // Convert to paise
+      amount: Math.round(commissionAmount * 100), // Convert to paise
       currency: "INR",
       receipt: receiptId,
       notes: {
         bookingId,
         type: "driver_commission",
-        amount: totalCommissionAmount,
+        amount: commissionAmount,
         breakdown: {
-          vendorCommission: booking.vendorCommission,
-          appCommission: booking.appCommission,
+          vendorMarkup,
+          appCommissionFromVendor,
         },
       },
     });
@@ -388,13 +391,15 @@ export const verifyDriverCommissionPayment = async (
         throw new Error("Booking not found");
       }
 
-      // The total commission amount
-      const totalCommissionAmount = booking.vendorCommission + booking.appCommission;
+      // Calculate exactly as the frontend does
+      const vendorMarkup = booking.vendorCommission;
+      const appCommissionFromVendor = Math.round(vendorMarkup * 0.1);
+      const commissionAmount = vendorMarkup + appCommissionFromVendor;
 
-      // Add app commission to app wallet
+      // Add commission to app wallet
       await createAppWalletTransaction(
-        totalCommissionAmount, // The app collects total commission
-        "Total commission from driver",
+        commissionAmount,
+        "Commission from driver",
         {
           bookingId,
           senderId: req.user!.userId,
@@ -408,12 +413,12 @@ export const verifyDriverCommissionPayment = async (
       await prisma.vendorBookingTransaction.create({
         data: {
           bookingId,
-          amount: totalCommissionAmount,
+          amount: commissionAmount,
           type: VendorBookingTransactionType.APP_COMMISSION,
           status: TransactionStatus.COMPLETED,
           senderId: req.user!.userId,
           receiverId: process.env.ADMIN_USER_ID!,
-          description: "Total commission from driver",
+          description: "Commission from driver",
         },
       });
 
