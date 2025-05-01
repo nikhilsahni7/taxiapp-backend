@@ -724,13 +724,22 @@ export const completeVendorRide = async (req: Request, res: Response) => {
   }
 };
 
+
 // Get vendor bookings
 export const getVendorBookings = async (req: Request, res: Response) => {
   if (!req.user?.userId) {
     return res.status(401).json({ error: "User not authenticated" });
   }
 
-  const { status, statuses, page = 1, limit = 10, date } = req.query;
+  const {
+    status,
+    statuses,
+    page = 1,
+    limit = 10,
+    date,
+    showAllCategories,
+    vehicleCategory
+  } = req.query;
 
   try {
     // For drivers, first get their vehicle category
@@ -774,6 +783,23 @@ export const getVendorBookings = async (req: Request, res: Response) => {
       };
     }
 
+    // Handle vehicle category filter
+    let vehicleCategoryFilter = {};
+    if (req.user.userType === "DRIVER") {
+      if (showAllCategories === "true" && vehicleCategory) {
+        // Show specific vehicle category if requested
+        vehicleCategoryFilter = {
+          vehicleCategory: vehicleCategory as string,
+        };
+      } else if (!showAllCategories) {
+        // Show only driver's vehicle category (default behavior)
+        vehicleCategoryFilter = {
+          vehicleCategory: driverVehicleCategory,
+        };
+      }
+      // If showAllCategories=true without vehicleCategory, don't filter by vehicle category
+    }
+
     const where = {
       ...(req.user.userType === "VENDOR"
         ? {
@@ -784,7 +810,6 @@ export const getVendorBookings = async (req: Request, res: Response) => {
         : req.user.userType === "DRIVER"
           ? {
               // For drivers: show only pending bookings if no status specified
-              // AND match their vehicle category
               ...(status || statuses
                 ? {
                     ...statusFilter,
@@ -793,7 +818,7 @@ export const getVendorBookings = async (req: Request, res: Response) => {
                   }
                 : {
                     status: VendorBookingStatus.PENDING,
-                    vehicleCategory: driverVehicleCategory, // Only show bookings matching driver's vehicle
+                    ...vehicleCategoryFilter, // Use the new filter
                     ...dateFilter,
                   }),
             }
