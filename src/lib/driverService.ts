@@ -64,14 +64,21 @@ export const searchAvailableDrivers = async (
         gte: lng - radius / (111 * Math.cos((lat * Math.PI) / 180)),
         lte: lng + radius / (111 * Math.cos((lat * Math.PI) / 180)),
       },
-      // Only filter by carrier in the DB query if specified
-      ...(filterOptions?.hasCarrier && {
-        driver: {
+      driver: {
+        ridesAsDriver: {
+          none: {
+            status: {
+              in: ["ACCEPTED", "DRIVER_ARRIVED", "RIDE_STARTED"],
+            },
+          },
+        },
+        // Only filter by carrier in the DB query if specified
+        ...(filterOptions?.hasCarrier && {
           driverDetails: {
             hasCarrier: true,
           },
-        },
-      }),
+        }),
+      },
       // We will filter by carCategory in the application code below
     },
     include: {
