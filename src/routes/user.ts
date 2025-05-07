@@ -620,4 +620,287 @@ router.get(
   getUserOutstandingFee as unknown as RequestHandler
 );
 
+// Complete account deletion route (protected version)
+router.delete(
+  "/account/delete",
+  verifyToken,
+  async (req: Request, res: Response) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+
+      const userId = req.user.userId;
+
+      // Start a transaction to ensure all related data is deleted or none at all
+      await prisma.$transaction(async (tx) => {
+        // 1. First get all rides where user is driver or user
+        const userRides = await tx.ride.findMany({
+          where: {
+            OR: [{ userId: userId }, { driverId: userId }],
+          },
+          select: { id: true },
+        });
+
+        const rideIds = userRides.map((ride) => ride.id);
+
+        // 2. Delete chat messages for these rides first
+        if (rideIds.length > 0) {
+          await tx.chatMessage.deleteMany({
+            where: {
+              rideId: { in: rideIds },
+            },
+          });
+        }
+
+        // 3. Delete chat messages sent by user (that might not be related to rides)
+        await tx.chatMessage.deleteMany({
+          where: { senderId: userId },
+        });
+
+        // 4. Delete transactions
+        await tx.transaction.deleteMany({
+          where: {
+            OR: [{ senderId: userId }, { receiverId: userId }],
+          },
+        });
+
+        // 5. Delete long distance transactions
+        await tx.longDistanceTransaction.deleteMany({
+          where: {
+            OR: [{ senderId: userId }, { receiverId: userId }],
+          },
+        });
+
+        // 6. Delete vendor booking transactions
+        await tx.vendorBookingTransaction.deleteMany({
+          where: {
+            OR: [{ senderId: userId }, { receiverId: userId }],
+          },
+        });
+
+        // 7. Delete ride location logs for rides
+        if (rideIds.length > 0) {
+          await tx.rideLocationLog.deleteMany({
+            where: {
+              rideId: { in: rideIds },
+            },
+          });
+        }
+
+        // 8. Now delete rides as driver
+        await tx.ride.deleteMany({
+          where: { driverId: userId },
+        });
+
+        // 9. Delete rides as user
+        await tx.ride.deleteMany({
+          where: { userId: userId },
+        });
+
+        // 10. Delete long distance bookings as driver
+        await tx.longDistanceBooking.deleteMany({
+          where: { driverId: userId },
+        });
+
+        // 11. Delete long distance bookings as user
+        await tx.longDistanceBooking.deleteMany({
+          where: { userId: userId },
+        });
+
+        // 12. Delete vendor bookings as driver
+        await tx.vendorBooking.deleteMany({
+          where: { driverId: userId },
+        });
+
+        // 13. Delete vendor bookings as vendor
+        await tx.vendorBooking.deleteMany({
+          where: { vendorId: userId },
+        });
+
+        // 14. Delete driver status
+        await tx.driverStatus.deleteMany({
+          where: { driverId: userId },
+        });
+
+        // 15. Delete wallet
+        await tx.wallet.deleteMany({
+          where: { userId: userId },
+        });
+
+        // 16. Delete user details
+        await tx.userDetails.deleteMany({
+          where: { userId: userId },
+        });
+
+        // 17. Delete driver details
+        await tx.driverDetails.deleteMany({
+          where: { userId: userId },
+        });
+
+        // 18. Delete vendor details
+        await tx.vendorDetails.deleteMany({
+          where: { userId: userId },
+        });
+
+        // 19. Finally, delete the user
+        await tx.user.delete({
+          where: { id: userId },
+        });
+      });
+
+      res.status(200).json({
+        message: "Account and all associated data deleted successfully",
+      });
+    } catch (error) {
+      console.error("Error deleting account:", error);
+      res.status(500).json({ error: "Failed to delete account" });
+    }
+  }
+);
+
+// Public account deletion route for testing (PlayStore review)
+router.delete("/public/delete/:userId", async (req: Request, res: Response) => {
+  try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({ error: "User ID is required" });
+    }
+
+    // Check if user exists
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Start a transaction to ensure all related data is deleted or none at all
+    await prisma.$transaction(async (tx) => {
+      // 1. First get all rides where user is driver or user
+      const userRides = await tx.ride.findMany({
+        where: {
+          OR: [{ userId: userId }, { driverId: userId }],
+        },
+        select: { id: true },
+      });
+
+      const rideIds = userRides.map((ride) => ride.id);
+
+      // 2. Delete chat messages for these rides first
+      if (rideIds.length > 0) {
+        await tx.chatMessage.deleteMany({
+          where: {
+            rideId: { in: rideIds },
+          },
+        });
+      }
+
+      // 3. Delete chat messages sent by user (that might not be related to rides)
+      await tx.chatMessage.deleteMany({
+        where: { senderId: userId },
+      });
+
+      // 4. Delete transactions
+      await tx.transaction.deleteMany({
+        where: {
+          OR: [{ senderId: userId }, { receiverId: userId }],
+        },
+      });
+
+      // 5. Delete long distance transactions
+      await tx.longDistanceTransaction.deleteMany({
+        where: {
+          OR: [{ senderId: userId }, { receiverId: userId }],
+        },
+      });
+
+      // 6. Delete vendor booking transactions
+      await tx.vendorBookingTransaction.deleteMany({
+        where: {
+          OR: [{ senderId: userId }, { receiverId: userId }],
+        },
+      });
+
+      // 7. Delete ride location logs for rides
+      if (rideIds.length > 0) {
+        await tx.rideLocationLog.deleteMany({
+          where: {
+            rideId: { in: rideIds },
+          },
+        });
+      }
+
+      // 8. Now delete rides as driver
+      await tx.ride.deleteMany({
+        where: { driverId: userId },
+      });
+
+      // 9. Delete rides as user
+      await tx.ride.deleteMany({
+        where: { userId: userId },
+      });
+
+      // 10. Delete long distance bookings as driver
+      await tx.longDistanceBooking.deleteMany({
+        where: { driverId: userId },
+      });
+
+      // 11. Delete long distance bookings as user
+      await tx.longDistanceBooking.deleteMany({
+        where: { userId: userId },
+      });
+
+      // 12. Delete vendor bookings as driver
+      await tx.vendorBooking.deleteMany({
+        where: { driverId: userId },
+      });
+
+      // 13. Delete vendor bookings as vendor
+      await tx.vendorBooking.deleteMany({
+        where: { vendorId: userId },
+      });
+
+      // 14. Delete driver status
+      await tx.driverStatus.deleteMany({
+        where: { driverId: userId },
+      });
+
+      // 15. Delete wallet
+      await tx.wallet.deleteMany({
+        where: { userId: userId },
+      });
+
+      // 16. Delete user details
+      await tx.userDetails.deleteMany({
+        where: { userId: userId },
+      });
+
+      // 17. Delete driver details
+      await tx.driverDetails.deleteMany({
+        where: { userId: userId },
+      });
+
+      // 18. Delete vendor details
+      await tx.vendorDetails.deleteMany({
+        where: { userId: userId },
+      });
+
+      // 19. Finally, delete the user
+      await tx.user.delete({
+        where: { id: userId },
+      });
+    });
+
+    res.status(200).json({
+      message: "Account and all associated data deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting account:", error);
+    res.status(500).json({ error: "Failed to delete account" });
+  }
+});
+
 export { router as userRouter };
