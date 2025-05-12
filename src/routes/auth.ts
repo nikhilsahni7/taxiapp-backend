@@ -53,14 +53,12 @@ router.post("/send-otp", async (req, res) => {
     const existingUser = await prisma.user.findFirst({
       where: {
         phone,
-
       },
     });
 
     if (existingUser) {
       // If user exists and is verified, return success with existingUser flag
       return res.json({
-        
         message: "User already exists",
         existingUser: true,
         userType: existingUser.userType,
@@ -491,10 +489,12 @@ router.post("/sign-in", async (req: Request, res: Response) => {
     const { phone } = req.body;
 
     const user = await prisma.user.findUnique({ where: { phone } });
-    if (!user || !user.verified) {
+    if (!user || !user.verified || !user.userType) {
       return res
         .status(400)
-        .json({ error: "Invalid phone number or user not verified" });
+        .json({
+          error: "Invalid phone number or user not verified or user type",
+        });
     }
 
     const token = jwt.sign(
