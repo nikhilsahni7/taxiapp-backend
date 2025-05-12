@@ -8,7 +8,10 @@
     "build": "bun build src/server.ts --outdir dist --target node",
     "lint": "bun run eslint src/**/*.ts",
     "format": "bun run prettier --write src/**/*.ts",
-    "test": "bun run vitest"
+    "test": "bun run vitest",
+    "db:clear": "bun run src/scripts/clear-database.ts",
+    "db:reset": "bun run src/scripts/reset-database.ts",
+    "db:full-reset": "bun run src/scripts/full-db-reset.ts"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",
