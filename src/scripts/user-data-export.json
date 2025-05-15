@@ -1,0 +1,580 @@
+{
+  "stats": {
+    "totalUsers": 16,
+    "regularUsers": 4,
+    "drivers": 7,
+    "vendors": 4,
+    "admins": 1
+  },
+  "regularUsers": [
+    {
+      "id": "a0e4d99b-3b22-4e8f-b6a6-594c5acde1b7",
+      "name": "Neha Gupta",
+      "phone": "+919876543214",
+      "email": "neha.gupta@example.com",
+      "verified": true,
+      "state": "Delhi",
+      "city": "New Delhi",
+      "selfieUrl": null,
+      "createdAt": "2025-05-12T12:30:49.747Z",
+      "wallet": null,
+      "userDetails": null
+    },
+    {
+      "id": "5882d3eb-60b5-4255-8f8a-f3de644164f3",
+      "name": "Rahul Mehta",
+      "phone": "+919876543215",
+      "email": "rahul.mehta@example.com",
+      "verified": true,
+      "state": "Delhi",
+      "city": "New Delhi",
+      "selfieUrl": null,
+      "createdAt": "2025-05-12T12:30:50.347Z",
+      "wallet": null,
+      "userDetails": null
+    },
+    {
+      "id": "63d4e024-654c-4589-b78d-04f39680ae16",
+      "name": "Priya Verma",
+      "phone": "+919876543216",
+      "email": "priya.verma@example.com",
+      "verified": true,
+      "state": "Delhi",
+      "city": "New Delhi",
+      "selfieUrl": null,
+      "createdAt": "2025-05-12T12:30:50.757Z",
+      "wallet": null,
+      "userDetails": null
+    },
+    {
+      "id": "2d8ec229-54f0-4d3e-be9c-689cb36fc643",
+      "name": "davender Singh ",
+      "phone": "+919210069494",
+      "email": "devendersingh.singh1973@gmail.com",
+      "verified": true,
+      "state": "delhi ",
+      "city": "delhi ",
+      "selfieUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747072816/auth_images/sv4pa47kzyohhzfimfmg.jpg",
+      "createdAt": "2025-05-12T17:57:03.313Z",
+      "wallet": null,
+      "userDetails": {
+        "id": "6dc5e252-2db7-487a-afc4-0e87fbccafb2",
+        "userId": "2d8ec229-54f0-4d3e-be9c-689cb36fc643"
+      }
+    }
+  ],
+  "drivers": [
+    {
+      "id": "d9144a1a-c7ac-48aa-b9d4-67ebeb0d3d14",
+      "name": "Amit Sharma",
+      "phone": "+919876543210",
+      "email": "amit.sharma@example.com",
+      "verified": true,
+      "state": "Delhi",
+      "city": "New Delhi",
+      "selfieUrl": null,
+      "createdAt": "2025-05-12T12:30:46.864Z",
+      "wallet": null,
+      "driverDetails": {
+        "id": "4214d2d3-3999-48d0-bf37-9e5f440394b0",
+        "userId": "d9144a1a-c7ac-48aa-b9d4-67ebeb0d3d14",
+        "aadharNumber": "1234-5678-9012",
+        "panNumber": "ABCDE1234F",
+        "dlNumber": "DL05 20230012345",
+        "vehicleNumber": "DL05AB1234",
+        "vehicleName": "Maruti Suzuki Swift",
+        "vehicleCategory": "Mini",
+        "dlUrl": null,
+        "permitUrls": [],
+        "carFrontUrl": null,
+        "carBackUrl": null,
+        "hasCarrier": false,
+        "rcUrl": null,
+        "fitnessUrl": null,
+        "pollutionUrl": null,
+        "insuranceUrl": null,
+        "carCategory": null,
+        "registrationFeePaid": false,
+        "documentUrls": {
+          "dlUrl": null,
+          "permitUrls": [],
+          "rcUrl": null,
+          "fitnessUrl": null,
+          "pollutionUrl": null,
+          "insuranceUrl": null,
+          "carFrontUrl": null,
+          "carBackUrl": null
+        }
+      },
+      "driverStatus": {
+        "isOnline": true,
+        "lastLocationUpdate": null,
+        "location": "28.632,77.2183"
+      },
+      "recentRides": []
+    },
+    {
+      "id": "ad973f0c-bf9a-4140-bb17-ff1b308e2846",
+      "name": "Ramesh Kumar",
+      "phone": "+919876543211",
+      "email": "ramesh.kumar@example.com",
+      "verified": true,
+      "state": "Delhi",
+      "city": "New Delhi",
+      "selfieUrl": null,
+      "createdAt": "2025-05-12T12:30:48.093Z",
+      "wallet": null,
+      "driverDetails": {
+        "id": "be5121e6-02a3-47d3-b170-c6fd9c5262f2",
+        "userId": "ad973f0c-bf9a-4140-bb17-ff1b308e2846",
+        "aadharNumber": "5678-1234-9012",
+        "panNumber": "FGHIJ5678K",
+        "dlNumber": "DL05 20230067890",
+        "vehicleNumber": "DL05CD5678",
+        "vehicleName": "Hyundai Verna",
+        "vehicleCategory": "Sedan",
+        "dlUrl": null,
+        "permitUrls": [],
+        "carFrontUrl": null,
+        "carBackUrl": null,
+        "hasCarrier": false,
+        "rcUrl": null,
+        "fitnessUrl": null,
+        "pollutionUrl": null,
+        "insuranceUrl": null,
+        "carCategory": null,
+        "registrationFeePaid": false,
+        "documentUrls": {
+          "dlUrl": null,
+          "permitUrls": [],
+          "rcUrl": null,
+          "fitnessUrl": null,
+          "pollutionUrl": null,
+          "insuranceUrl": null,
+          "carFrontUrl": null,
+          "carBackUrl": null
+        }
+      },
+      "driverStatus": {
+        "isOnline": true,
+        "lastLocationUpdate": null,
+        "location": "28.63,77.219"
+      },
+      "recentRides": []
+    },
+    {
+      "id": "c112ae8d-9bba-4a28-ac99-9cbc937b89df",
+      "name": "Suresh Patil",
+      "phone": "+919876543212",
+      "email": "suresh.patil@example.com",
+      "verified": true,
+      "state": "Delhi",
+      "city": "New Delhi",
+      "selfieUrl": null,
+      "createdAt": "2025-05-12T12:30:48.913Z",
+      "wallet": null,
+      "driverDetails": {
+        "id": "8cb3101a-c4f4-4cf4-ab8b-6331e2119ff0",
+        "userId": "c112ae8d-9bba-4a28-ac99-9cbc937b89df",
+        "aadharNumber": "9012-3456-7890",
+        "panNumber": "KLMNO9012P",
+        "dlNumber": "DL05 20230123456",
+        "vehicleNumber": "DL05EF9012",
+        "vehicleName": "Toyota Fortuner",
+        "vehicleCategory": "SUV",
+        "dlUrl": null,
+        "permitUrls": [],
+        "carFrontUrl": null,
+        "carBackUrl": null,
+        "hasCarrier": false,
+        "rcUrl": null,
+        "fitnessUrl": null,
+        "pollutionUrl": null,
+        "insuranceUrl": null,
+        "carCategory": null,
+        "registrationFeePaid": true,
+        "documentUrls": {
+          "dlUrl": null,
+          "permitUrls": [],
+          "rcUrl": null,
+          "fitnessUrl": null,
+          "pollutionUrl": null,
+          "insuranceUrl": null,
+          "carFrontUrl": null,
+          "carBackUrl": null
+        }
+      },
+      "driverStatus": {
+        "isOnline": true,
+        "lastLocationUpdate": "2025-05-14T07:06:23.276Z",
+        "location": "28.6440918,77.2734408"
+      },
+      "recentRides": []
+    },
+    {
+      "id": "f6ac0703-5695-4f7a-917b-58a57889bd91",
+      "name": null,
+      "phone": "+917289042058",
+      "email": null,
+      "verified": true,
+      "state": null,
+      "city": null,
+      "selfieUrl": null,
+      "createdAt": "2025-05-12T18:05:04.058Z",
+      "wallet": null,
+      "driverDetails": {
+        "documentUrls": {}
+      },
+      "driverStatus": null,
+      "recentRides": []
+    },
+    {
+      "id": "80886ec1-6f0f-4533-934e-9f4cb0a884dc",
+      "name": "Nikhil Sahni ",
+      "phone": "+918800244926",
+      "email": "nikhilsahni720@gmail.com",
+      "verified": true,
+      "state": "hhh",
+      "city": "ub",
+      "selfieUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747126891/auth_images/yxsjwhgkrdf8lyeswqe3.jpg",
+      "createdAt": "2025-05-12T12:14:27.564Z",
+      "wallet": {
+        "balance": 25614.444,
+        "currency": "INR"
+      },
+      "driverDetails": {
+        "id": "39d02474-025e-4f95-85bb-8075ff7b990b",
+        "userId": "80886ec1-6f0f-4533-934e-9f4cb0a884dc",
+        "aadharNumber": "888800",
+        "panNumber": "vvv",
+        "dlNumber": "",
+        "vehicleNumber": "nn",
+        "vehicleName": "nn",
+        "vehicleCategory": "mini",
+        "dlUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747052466/auth_images/wqud6vhzkdugxkosmfcc.jpg",
+        "permitUrls": [
+          "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747052467/auth_images/aitkoxa9ouxwayhahvyp.jpg"
+        ],
+        "carFrontUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747052467/auth_images/ax4nr5zbkfit3wnisfmw.jpg",
+        "carBackUrl": null,
+        "hasCarrier": false,
+        "rcUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747052468/auth_images/egkbzrcjfaylk07seyv6.jpg",
+        "fitnessUrl": null,
+        "pollutionUrl": null,
+        "insuranceUrl": null,
+        "carCategory": "mini",
+        "registrationFeePaid": false,
+        "documentUrls": {
+          "dlUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747052466/auth_images/wqud6vhzkdugxkosmfcc.jpg",
+          "permitUrls": [
+            "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747052467/auth_images/aitkoxa9ouxwayhahvyp.jpg"
+          ],
+          "rcUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747052468/auth_images/egkbzrcjfaylk07seyv6.jpg",
+          "fitnessUrl": null,
+          "pollutionUrl": null,
+          "insuranceUrl": null,
+          "carFrontUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747052467/auth_images/ax4nr5zbkfit3wnisfmw.jpg",
+          "carBackUrl": null
+        }
+      },
+      "driverStatus": {
+        "isOnline": true,
+        "lastLocationUpdate": "2025-05-15T18:00:56.601Z",
+        "location": "28.4819148,77.330931"
+      },
+      "recentRides": [
+        {
+          "id": "2b813f80-60cf-47d0-b50c-e9695aa902b7",
+          "status": "RIDE_ENDED",
+          "pickup": "Madangir, New Delhi, Delhi, India",
+          "drop": "CP, New Delhi, Delhi, India",
+          "fare": 270.444,
+          "distance": 15.746,
+          "createdAt": "2025-05-15T07:55:11.411Z"
+        },
+        {
+          "id": "0f89303b-4a21-4334-af77-7d075df57943",
+          "status": "ACCEPTED",
+          "pickup": "517/91, 517/91, Sector 91, Faridabad, 121013",
+          "drop": "Goa, India",
+          "fare": 26474.79,
+          "distance": 1887.485,
+          "createdAt": "2025-05-13T11:42:13.713Z"
+        },
+        {
+          "id": "f26b752f-d797-4a3c-9b29-91023208f0ec",
+          "status": "ACCEPTED",
+          "pickup": "527, 527, Sector 91, Faridabad, 121013",
+          "drop": "Gip Mall, 3, Sector 38, Noida, Uttar Pradesh, India ",
+          "fare": 471.278,
+          "distance": 14.377,
+          "createdAt": "2025-05-13T11:34:13.317Z"
+        },
+        {
+          "id": "a7897fdc-f096-42c0-b7d7-59f54ca4857e",
+          "status": "CANCELLED",
+          "pickup": "524, Sector 91, Faridabad, 121013",
+          "drop": "",
+          "fare": null,
+          "distance": null,
+          "createdAt": "2025-05-13T09:02:37.934Z"
+        },
+        {
+          "id": "8ea1bcbc-8889-4adc-8a51-55550f1baef1",
+          "status": "CANCELLED",
+          "pickup": "302/G, Sector 91, Faridabad, 121013",
+          "drop": "",
+          "fare": null,
+          "distance": null,
+          "createdAt": "2025-05-13T09:02:04.508Z"
+        }
+      ]
+    },
+    {
+      "id": "75f4dcf7-9be0-40bd-9a2c-10f3f52fd844",
+      "name": "Kishan Maitin",
+      "phone": "+919318369421",
+      "email": "maitinkishan@gmail.com",
+      "verified": true,
+      "state": "delhi",
+      "city": "delhi",
+      "selfieUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747304098/auth_images/t9koa3g2ycplya8raw5c.jpg",
+      "createdAt": "2025-05-15T10:12:26.561Z",
+      "wallet": null,
+      "driverDetails": {
+        "id": "c354ab8b-78c8-4e20-8516-0d04386739f4",
+        "userId": "75f4dcf7-9be0-40bd-9a2c-10f3f52fd844",
+        "aadharNumber": "90134918477",
+        "panNumber": "abdlsjxsba",
+        "dlNumber": "",
+        "vehicleNumber": "DL2CAN7652",
+        "vehicleName": "Wagnar",
+        "vehicleCategory": "mini",
+        "dlUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747304099/auth_images/a0pnzhy8xdwtg8q4ptqc.jpg",
+        "permitUrls": [
+          "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747304101/auth_images/nk1raiuvrcgs7etn75rv.jpg"
+        ],
+        "carFrontUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747304100/auth_images/j1zdyfxkeesfekmcuyk0.jpg",
+        "carBackUrl": null,
+        "hasCarrier": false,
+        "rcUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747304102/auth_images/i9sb8izkihxnxcfdgufy.jpg",
+        "fitnessUrl": null,
+        "pollutionUrl": null,
+        "insuranceUrl": null,
+        "carCategory": "mini",
+        "registrationFeePaid": false,
+        "documentUrls": {
+          "dlUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747304099/auth_images/a0pnzhy8xdwtg8q4ptqc.jpg",
+          "permitUrls": [
+            "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747304101/auth_images/nk1raiuvrcgs7etn75rv.jpg"
+          ],
+          "rcUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747304102/auth_images/i9sb8izkihxnxcfdgufy.jpg",
+          "fitnessUrl": null,
+          "pollutionUrl": null,
+          "insuranceUrl": null,
+          "carFrontUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747304100/auth_images/j1zdyfxkeesfekmcuyk0.jpg",
+          "carBackUrl": null
+        }
+      },
+      "driverStatus": {
+        "isOnline": false,
+        "lastLocationUpdate": "2025-05-15T10:15:13.777Z",
+        "location": "28.6575627,77.0923643"
+      },
+      "recentRides": []
+    },
+    {
+      "id": "b776044a-4290-4912-9594-26a778c878b8",
+      "name": "nikhil",
+      "phone": "+919871393813",
+      "email": "nikhilsahni661@gmail.com",
+      "verified": true,
+      "state": "hh",
+      "city": "hb",
+      "selfieUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747332333/auth_images/ccjtnlckivnhfben1jlr.jpg",
+      "createdAt": "2025-05-15T18:02:27.564Z",
+      "wallet": null,
+      "driverDetails": {
+        "id": "343f7b8f-21db-49a0-bcb4-2cdfe685acdd",
+        "userId": "b776044a-4290-4912-9594-26a778c878b8",
+        "aadharNumber": "5555555",
+        "panNumber": "v vvv",
+        "dlNumber": "",
+        "vehicleNumber": "bbb",
+        "vehicleName": "bb",
+        "vehicleCategory": "sedan",
+        "dlUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747332334/auth_images/l2f37kjd8ino4u4zbwc3.jpg",
+        "permitUrls": [
+          "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747332337/auth_images/vk0pvnc9vu9kanlahva3.jpg"
+        ],
+        "carFrontUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747332336/auth_images/ikd9xwoe7eczwec9g5dp.jpg",
+        "carBackUrl": null,
+        "hasCarrier": false,
+        "rcUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747332338/auth_images/lhet8ixsugtg88rgzbzd.jpg",
+        "fitnessUrl": null,
+        "pollutionUrl": null,
+        "insuranceUrl": null,
+        "carCategory": "sedan",
+        "registrationFeePaid": false,
+        "documentUrls": {
+          "dlUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747332334/auth_images/l2f37kjd8ino4u4zbwc3.jpg",
+          "permitUrls": [
+            "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747332337/auth_images/vk0pvnc9vu9kanlahva3.jpg"
+          ],
+          "rcUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747332338/auth_images/lhet8ixsugtg88rgzbzd.jpg",
+          "fitnessUrl": null,
+          "pollutionUrl": null,
+          "insuranceUrl": null,
+          "carFrontUrl": "https://res.cloudinary.com/dwkdf5cqv/image/upload/v1747332336/auth_images/ikd9xwoe7eczwec9g5dp.jpg",
+          "carBackUrl": null
+        }
+      },
+      "driverStatus": {
+        "isOnline": true,
+        "lastLocationUpdate": "2025-05-15T18:07:09.319Z",
+        "location": "28.4819291,77.3309964"
+      },
+      "recentRides": []
+    }
+  ],
+  "vendors": [
+    {
+      "id": "c5cd0657-27a2-4e10-8d76-07bf0126a5c1",
+      "name": "Rajesh Kumar Sharma",
+      "phone": "7297366257",
+      "email": "rajesh.sharma@gmail.com",
+      "verified": true,
+      "state": "Uttar Pradesh",
+      "city": "Noida",
+      "selfieUrl": "https://storage.googleapis.com/your-bucket/vendors/selfies/vendor_1.jpg",
+      "createdAt": "2025-05-12T12:31:04.889Z",
+      "wallet": {
+        "balance": 36888,
+        "currency": "INR"
+      },
+      "vendorDetails": {
+        "id": "e0981388-8081-42e9-bcfd-9f56646b89ee",
+        "userId": "c5cd0657-27a2-4e10-8d76-07bf0126a5c1",
+        "businessName": "Sharma Tours & Travels",
+        "address": "Shop No. 123, Sector 18, Noida, Uttar Pradesh",
+        "experience": "15+ years in tourism",
+        "gstNumber": "09AAACS8432H1ZA",
+        "aadharNumber": "8224-9234-3027",
+        "panNumber": "OOW2900D",
+        "aadharFrontUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/aadhar_front_1.jpg",
+        "aadharBackUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/aadhar_back_1.jpg",
+        "panUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/pan_1.jpg",
+        "createdAt": "2025-05-12T12:31:04.889Z",
+        "updatedAt": "2025-05-12T12:31:04.889Z",
+        "documentUrls": {
+          "aadharFrontUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/aadhar_front_1.jpg",
+          "aadharBackUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/aadhar_back_1.jpg",
+          "panUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/pan_1.jpg"
+        }
+      }
+    },
+    {
+      "id": "315b95f1-8379-41b6-aee8-132f66719a22",
+      "name": "Priya Patel",
+      "phone": "7804445286",
+      "email": "priya.patel@hotmail.com",
+      "verified": true,
+      "state": "Gujarat",
+      "city": "Ahmedabad",
+      "selfieUrl": "https://storage.googleapis.com/your-bucket/vendors/selfies/vendor_2.jpg",
+      "createdAt": "2025-05-12T12:31:06.334Z",
+      "wallet": {
+        "balance": 13283,
+        "currency": "INR"
+      },
+      "vendorDetails": {
+        "id": "8b6590fd-8758-4c6e-ae16-c7c5b443c3d0",
+        "userId": "315b95f1-8379-41b6-aee8-132f66719a22",
+        "businessName": "Gujarat Tourism Solutions",
+        "address": "A-45, Vastrapur, Ahmedabad, Gujarat",
+        "experience": "8+ years in tourism",
+        "gstNumber": "24AALCS2346K1ZB",
+        "aadharNumber": "7119-0681-6714",
+        "panNumber": "PPP2064T",
+        "aadharFrontUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/aadhar_front_2.jpg",
+        "aadharBackUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/aadhar_back_2.jpg",
+        "panUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/pan_2.jpg",
+        "createdAt": "2025-05-12T12:31:06.334Z",
+        "updatedAt": "2025-05-12T12:31:06.334Z",
+        "documentUrls": {
+          "aadharFrontUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/aadhar_front_2.jpg",
+          "aadharBackUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/aadhar_back_2.jpg",
+          "panUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/pan_2.jpg"
+        }
+      }
+    },
+    {
+      "id": "72dfee90-666b-48c9-8652-747c57a69b20",
+      "name": "Mohammed Siddiqui",
+      "phone": "7058838464",
+      "email": "siddiqui.travels@yahoo.com",
+      "verified": true,
+      "state": "Telangana",
+      "city": "Hyderabad",
+      "selfieUrl": "https://storage.googleapis.com/your-bucket/vendors/selfies/vendor_3.jpg",
+      "createdAt": "2025-05-12T12:31:07.041Z",
+      "wallet": {
+        "balance": 49365,
+        "currency": "INR"
+      },
+      "vendorDetails": {
+        "id": "bc410e08-bff4-4c7e-960f-23e331d9ff77",
+        "userId": "72dfee90-666b-48c9-8652-747c57a69b20",
+        "businessName": "Royal India Tours",
+        "address": "1st Floor, City Center Mall, Banjara Hills, Hyderabad",
+        "experience": "12+ years in tourism",
+        "gstNumber": "36AADCS4567H1ZC",
+        "aadharNumber": "2243-0606-3216",
+        "panNumber": "STQ9807F",
+        "aadharFrontUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/aadhar_front_3.jpg",
+        "aadharBackUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/aadhar_back_3.jpg",
+        "panUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/pan_3.jpg",
+        "createdAt": "2025-05-12T12:31:07.041Z",
+        "updatedAt": "2025-05-12T12:31:07.041Z",
+        "documentUrls": {
+          "aadharFrontUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/aadhar_front_3.jpg",
+          "aadharBackUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/aadhar_back_3.jpg",
+          "panUrl": "https://storage.googleapis.com/your-bucket/vendors/docs/pan_3.jpg"
+        }
+      }
+    },
+    {
+      "id": "91719f70-a229-446b-ac64-09dd3a338528",
+      "name": null,
+      "phone": "+918445721334",
+      "email": null,
+      "verified": true,
+      "state": null,
+      "city": null,
+      "selfieUrl": null,
+      "createdAt": "2025-05-15T13:30:36.101Z",
+      "wallet": null,
+      "vendorDetails": {
+        "documentUrls": {}
+      }
+    }
+  ],
+  "admins": [
+    {
+      "id": "42c75bce-d946-4242-a839-b10c9659fb38",
+      "name": "Admin",
+      "phone": "9999999999",
+      "email": null,
+      "verified": true,
+      "state": null,
+      "city": null,
+      "selfieUrl": null,
+      "createdAt": "2025-05-12T12:33:05.476Z",
+      "wallet": {
+        "balance": 3065,
+        "currency": "INR"
+      },
+      "userDetails": null
+    }
+  ]
+}

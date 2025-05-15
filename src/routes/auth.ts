@@ -49,21 +49,21 @@ router.post("/send-otp", async (req, res) => {
   try {
     const { phone } = req.body;
 
-    // ww are checking here if the user already exists
-    const existingUser = await prisma.user.findFirst({
-      where: {
-        phone,
-      },
-    });
+    // // ww are checking here if the user already exists
+    // const existingUser = await prisma.user.findFirst({
+    //   where: {
+    //     phone,
+    //   },
+    // });
 
-    if (existingUser) {
-      // If user exists and is verified, return success with existingUser flag
-      return res.json({
-        message: "User already exists",
-        existingUser: true,
-        userType: existingUser.userType,
-      });
-    }
+    // if (existingUser) {
+    //   // If user exists and is verified, return success with existingUser flag
+    //   return res.json({
+    //     message: "User already exists",
+    //     existingUser: true,
+    //     userType: existingUser.userType,
+    //   });
+    // }
 
     // If user doesn't exist or isn't verified, send OTP
     await twilioClient.verify.v2
@@ -92,11 +92,11 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Check if user already exists
-    const existingUser = await prisma.user.findUnique({ where: { phone } });
-    if (existingUser) {
-      return res.status(400).json({ error: "User already exists" });
-    }
+    // // Check if user already exists
+    // const existingUser = await prisma.user.findUnique({ where: { phone } });
+    // if (existingUser) {
+    //   return res.status(400).json({ error: "User already exists" });
+    // }
 
     // Verify OTP using Twilio Verify Service
     const verification = await twilioClient.verify.v2
@@ -148,17 +148,16 @@ router.post("/send-driver-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Phone number is required" });
     }
 
-    // Check if driver already exists
-    const existingDriver = await prisma.user.findFirst({
-      where: {
-        phone,
-        userType: "DRIVER",
-      },
-    });
+    // // Check if driver already exists
+    // const existingDriver = await prisma.user.findFirst({
+    //   where: {
+    //     phone,
+    //     userType: "DRIVER",
+    //   },
+    // });
 
-    if (existingDriver) {
-      return res.status(400).json({ error: "Driver already exists" });
-    }
+    // if (existingDriver) {
+    //   return res.status(400).json({ error: "Driver already exists" });
 
     // Send OTP via Twilio Verify Service
     await twilioClient.verify.v2
@@ -188,17 +187,17 @@ router.post("/verify-driver-otp", async (req: Request, res: Response) => {
     // Format phone number
     const formattedPhone = phone.startsWith("+") ? phone : `+${phone}`;
 
-    // Check if driver already exists
-    const existingDriver = await prisma.user.findFirst({
-      where: {
-        phone: formattedPhone,
-        userType: "DRIVER",
-      },
-    });
+    // // Check if driver already exists
+    // const existingDriver = await prisma.user.findFirst({
+    //   where: {
+    //     phone: formattedPhone,
+    //     userType: "DRIVER",
+    //   },
+    // });
 
-    if (existingDriver) {
-      return res.status(400).json({ error: "Driver already exists" });
-    }
+    // if (existingDriver) {
+    //   return res.status(400).json({ error: "Driver already exists" });
+    // }
 
     // Verify OTP using Twilio Verify Service
     try {
@@ -260,16 +259,16 @@ router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
     }
 
     // Check if vendor already exists
-    const existingVendor = await prisma.user.findUnique({
-      where: {
-        phone,
-        userType: "VENDOR",
-      },
-    });
+    // const existingVendor = await prisma.user.findUnique({
+    //   where: {
+    //     phone,
+    //     userType: "VENDOR",
+    //   },
+    // });
 
-    if (existingVendor) {
-      return res.status(400).json({ error: "Vendor already exists" });
-    }
+    // if (existingVendor) {
+    //   return res.status(400).json({ error: "Vendor already exists" });
+    // }
 
     // Verify OTP using Twilio Verify Service
     const verification = await twilioClient.verify.v2
@@ -490,11 +489,9 @@ router.post("/sign-in", async (req: Request, res: Response) => {
 
     const user = await prisma.user.findUnique({ where: { phone } });
     if (!user || !user.verified || !user.userType) {
-      return res
-        .status(400)
-        .json({
-          error: "Invalid phone number or user not verified or user type",
-        });
+      return res.status(400).json({
+        error: "Invalid phone number or user not verified or user type",
+      });
     }
 
     const token = jwt.sign(

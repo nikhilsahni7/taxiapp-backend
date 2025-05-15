@@ -1,6 +1,6 @@
 import { PrismaClient, UserType } from "@prisma/client";
-import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
+import jwt from "jsonwebtoken";
 import path from "path";
 
 // Load environment variables from the root .env file
@@ -224,3 +224,70 @@ main()
   .finally(async () => {
     await prisma.$disconnect();
   });
+
+// taxisure-backend on  main [!] via ⬢ v22.5.1 …
+// ➜ bun run db:reset
+// $ bun run src/scripts/reset-database.ts
+// 🔄 Starting database reset process using SQL TRUNCATE...
+// ✅ Database reset successfully using SQL TRUNCATE!
+// Database reset completed.
+
+// taxisure-backend on  main [!] via ⬢ v22.5.1 via 🍞 v1.2.2 took 4.7s …
+// ➜ bun prisma studio
+// Environment variables loaded from .env
+// Prisma schema loaded from prisma/schema.prisma
+// Prisma Studio is up on http://localhost:5555
+// ^Cerror: Failed to run "prisma" due to exit code 130
+
+// taxisure-backend on  main via ⬢ v22.5.1 via 🍞 v1.2.2 took 21m 53.3s …
+// ➜ bun run db:reset
+// $ bun run src/scripts/reset-database.ts
+// 🔄 Starting database reset process using SQL TRUNCATE...
+// ✅ Database reset successfully using SQL TRUNCATE!
+// Database reset completed.
+
+// taxisure-backend on  main via ⬢ v22.5.1 took 5.1s …
+// ➜ bun run seed.ts
+// error: Module not found "seed.ts"
+
+// taxisure-backend on  main via ⬢ v22.5.1 via 🍞 v1.2.2 …
+// ➜ cd scripts
+// cd: no such file or directory: scripts
+
+// taxisure-backend on  main via ⬢ v22.5.1 via 🍞 v1.2.2 …
+// ➜ cd src/scripts
+
+// taxisure-backend/src/scripts on  main via 🍞 v1.2.2 …
+// ➜ bun run seed.ts
+// Driver and user records added successfully.
+
+// taxisure-backend/src/scripts on  main via 🍞 v1.2.2 took 5.7s …
+// ➜ ls
+// cols
+// clear-database.ts  full-db-reset.ts  reset-database.ts  seed.ts  vseed.ts
+
+// taxisure-backend/src/scripts on  main via 🍞 v1.2.2 …
+// ➜ bun run vseed.ts
+
+// Seeded Vendors:
+// ┌───┬──────────────────────────────────────┬─────────────────────┬────────────┬────────────────────────────┬───────────────────────────┬───────────┬───────────────┬───────────────┬──────────────────────────────┐
+// │   │ id                                   │ name                │ phone      │ email                      │ businessName              │ city      │ state         │ walletBalance │ token                        │
+// ├───┼──────────────────────────────────────┼─────────────────────┼────────────┼────────────────────────────┼───────────────────────────┼───────────┼───────────────┼───────────────┼──────────────────────────────┤
+// │ 0 │ c5cd0657-27a2-4e10-8d76-07bf0126a5c1 │ Rajesh Kumar Sharma │ 7297366257 │ rajesh.sharma@gmail.com    │ Sharma Tours & Travels    │ Noida     │ Uttar Pradesh │ 36888         │ eyJhbGciOiJIUzI1NiIsInR5c... │
+// │ 1 │ 315b95f1-8379-41b6-aee8-132f66719a22 │ Priya Patel         │ 7804445286 │ priya.patel@hotmail.com    │ Gujarat Tourism Solutions │ Ahmedabad │ Gujarat       │ 13283         │ eyJhbGciOiJIUzI1NiIsInR5c... │
+// │ 2 │ 72dfee90-666b-48c9-8652-747c57a69b20 │ Mohammed Siddiqui   │ 7058838464 │ siddiqui.travels@yahoo.com │ Royal India Tours         │ Hyderabad │ Telangana     │ 49365         │ eyJhbGciOiJIUzI1NiIsInR5c... │
+// └───┴──────────────────────────────────────┴─────────────────────┴────────────┴────────────────────────────┴───────────────────────────┴───────────┴───────────────┴───────────────┴──────────────────────────────┘
+
+// Vendor Tokens (for testing):
+
+// Vendor 1: Sharma Tours & Travels
+// ID: c5cd0657-27a2-4e10-8d76-07bf0126a5c1
+// Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJjNWNkMDY1Ny0yN2EyLTRlMTAtOGQ3Ni0wN2JmMDEyNmE1YzEiLCJ1c2VyVHlwZSI6IlZFTkRPUiIsImlhdCI6MTc0NzA1MzA2NiwiZXhwIjoxNzQ5NjQ1MDY2fQ.7sPQ5p2McRq0h83zd6wO3AXVz53SN2cnTCbl-Qj7OpE
+
+// Vendor 2: Gujarat Tourism Solutions
+// ID: 315b95f1-8379-41b6-aee8-132f66719a22
+// Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIzMTViOTVmMS04Mzc5LTQxYjYtYWVlOC0xMzJmNjY3MTlhMjIiLCJ1c2VyVHlwZSI6IlZFTkRPUiIsImlhdCI6MTc0NzA1MzA2NywiZXhwIjoxNzQ5NjQ1MDY3fQ.0JDCLXjpUn55UEXogIA9uXSvEXNYCzS1UjzYZ3UDWCw
+
+// Vendor 3: Royal India Tours
+// ID: 72dfee90-666b-48c9-8652-747c57a69b20
+// Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI3MmRmZWU5MC02NjZiLTQ4YzktODY1Mi03NDdjNTdhNjliMjAiLCJ1c2VyVHlwZSI6IlZFTkRPUiIsImlhdCI6MTc0NzA1MzA2NywiZXhwIjoxNzQ5NjQ1MDY3fQ.lHKeowHbFrdqEtou4MVSa02Yxv6U5U0M_O-OpWeiLGM
