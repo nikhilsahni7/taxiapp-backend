@@ -7,6 +7,7 @@ import { uploadImage } from "../config/cloudinary";
 import {
   getDriverCurrentRide,
   getDriverRideHistory,
+  updateDriverProfile,
 } from "../controllers/driverController";
 import { verifyToken } from "../middlewares/auth";
 import { io } from "../server";
@@ -344,6 +345,24 @@ router.get(
       res.status(500).json({ error: "Failed to fetch driver details" });
     }
   }
+);
+
+// Update driver profile with all details and documents
+router.put(
+  "/profile",
+  verifyToken,
+  upload.fields([
+    { name: "selfiePath", maxCount: 1 },
+    { name: "dlPath", maxCount: 1 },
+    { name: "permitImages", maxCount: 4 },
+    { name: "carFront", maxCount: 1 },
+    { name: "carBack", maxCount: 1 },
+    { name: "rcDocument", maxCount: 1 },
+    { name: "fitnessDocument", maxCount: 1 },
+    { name: "pollutionDocument", maxCount: 1 },
+    { name: "insuranceDocument", maxCount: 1 },
+  ]),
+  updateDriverProfile
 );
 
 export { router as driverRouter };

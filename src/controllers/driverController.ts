@@ -1,7 +1,46 @@
-import type { Request, Response } from "express";
 import { PrismaClient } from "@prisma/client";
+import type { Request, Response } from "express";
+import { uploadImage } from "../config/cloudinary";
+
+interface UpdateDriverProfileBody {
+  name?: string;
+  email?: string;
+  state?: string;
+  city?: string;
+  aadharNumber?: string;
+  panNumber?: string;
+  dlNumber?: string;
+  vehicleNumber?: string;
+  vehicleName?: string;
+  vehicleCategory?: string;
+  hasCarrier?: string;
+}
+
+
 
 const prisma = new PrismaClient();
+
+interface FileWithBuffer extends Express.Multer.File {
+  buffer: Buffer;
+}
+
+interface MulterFiles {
+  [fieldname: string]: FileWithBuffer[];
+}
+
+interface UpdateDriverProfileBody {
+  name?: string;
+  email?: string;
+  state?: string;
+  city?: string;
+  aadharNumber?: string;
+  panNumber?: string;
+  dlNumber?: string;
+  vehicleNumber?: string;
+  vehicleName?: string;
+  vehicleCategory?: string;
+  hasCarrier?: string;
+}
 
 export const getDriverRideHistory = async (req: Request, res: Response) => {
   try {
@@ -190,6 +229,170 @@ export const getDriverRideHistory = async (req: Request, res: Response) => {
 };
 
 // Get driver's current ride/booking
+export const updateDriverProfile = async (req: Request, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const userId = req.user.userId;
+    const files = req.files as MulterFiles | undefined;
+
+    // Extract fields from request body
+    const body = req.body as UpdateDriverProfileBody;
+    const {
+      name,
+      email,
+      state,
+      city,
+      aadharNumber,
+      panNumber,
+      dlNumber,
+      vehicleNumber,
+      vehicleName,
+      vehicleCategory,
+      hasCarrier,
+    } = body;
+
+    // Start a transaction to ensure data consistency
+    const [updatedUser, driverDetails] = await prisma.$transaction(async (tx) => {
+      // Update user basic info
+      const user = await tx.user.update({
+        where: { id: userId },
+        data: {
+          name,
+          email,
+          state,
+          city,
+          ...(files?.selfiePath?.[0] && {
+            selfieUrl: await uploadImage(files.selfiePath[0].buffer)
+          })
+        },
+      });
+
+      // Handle document uploads
+      const uploadPromises: Array<Promise<[string, string]>> = [];
+
+      // Helper function to safely handle file uploads
+      const handleFileUpload = async (file: Express.Multer.File | undefined, field: string): Promise<[string, string] | null> => {
+        if (!file || !('buffer' in file) || !file.buffer) return null;
+
+        try {
+          const url = await uploadImage(file.buffer);
+          return [field, url];
+        } catch (error) {
+          console.error(`Error uploading ${field}:`, error);
+          return null;
+        }
+      };
+
+      // Process each file upload
+      const fileUploads = [
+        { files: files?.dlPath, field: 'dlUrl' },
+        { files: files?.carFront, field: 'carFrontUrl' },
+        { files: files?.carBack, field: 'carBackUrl' },
+        { files: files?.rcDocument, field: 'rcUrl' },
+        { files: files?.fitnessDocument, field: 'fitnessUrl' },
+        { files: files?.pollutionDocument, field: 'pollutionUrl' },
+        { files: files?.insuranceDocument, field: 'insuranceUrl' }
+      ];
+
+      // Process file uploads in parallel
+      const fileUploadResults = await Promise.all(
+        fileUploads.map(async ({ files: fileArray, field }) => {
+          if (!fileArray?.[0]) return null;
+          return handleFileUpload(fileArray[0], field);
+        })
+      );
+
+      // Add successful uploads to the promises array
+      for (const result of fileUploadResults) {
+        if (result) {
+          uploadPromises.push(Promise.resolve(result));
+        }
+      }
+
+      // Handle permit images (multiple)
+      const permitUrls: string[] = [];
+      if (files?.permitImages?.length) {
+        const validPermitFiles = files.permitImages.filter(
+          (file): file is Express.Multer.File & { buffer: Buffer } =>
+            Boolean(file && 'buffer' in file && file.buffer)
+        );
+
+        const permitUploads = validPermitFiles.map(async (file) => {
+          try {
+            return await uploadImage(file.buffer);
+          } catch (error) {
+            console.error('Error uploading permit image:', error);
+            return null;
+          }
+        });
+
+        const uploadedUrls = await Promise.all(permitUploads);
+        for (const url of uploadedUrls) {
+          if (url) permitUrls.push(url);
+        }
+      }
+
+      // Wait for all uploads to complete
+      const allUploadResults = await Promise.all(uploadPromises);
+      const uploadData = Object.fromEntries(
+        allUploadResults.filter((result): result is [string, string] => result !== null)
+      );
+
+      // Prepare driver details update data
+      const driverData: Record<string, any> = {
+        ...(aadharNumber && { aadharNumber }),
+        ...(panNumber && { panNumber }),
+        ...(dlNumber && { dlNumber }),
+        ...(vehicleNumber && { vehicleNumber }),
+        ...(vehicleName && { vehicleName }),
+        ...(vehicleCategory && { vehicleCategory }),
+        ...(hasCarrier !== undefined && { hasCarrier: hasCarrier === 'true' }),
+        ...uploadData
+      };
+
+      // Only add permitUrls if we have any
+      if (permitUrls.length > 0) {
+        driverData.permitUrls = permitUrls;
+      }
+
+      // Update or create driver details
+      const details = await tx.driverDetails.upsert({
+        where: { userId },
+        update: driverData,
+        create: {
+          userId,
+          ...driverData
+        }
+      });
+
+      return [user, details];
+    });
+
+    // Get updated user with details for response
+    const updatedUserWithDetails = await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        driverDetails: true
+      }
+    });
+
+    res.json({
+      message: "Profile updated successfully",
+      user: updatedUserWithDetails
+    });
+
+  } catch (error) {
+    console.error("Error updating driver profile:", error);
+    res.status(500).json({
+      error: "Failed to update profile",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+};
+
 export const getDriverCurrentRide = async (req: Request, res: Response) => {
   try {
     const { driverId } = req.params;
