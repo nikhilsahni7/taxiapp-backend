@@ -5,6 +5,7 @@ import multer from "multer";
 
 import { uploadImage } from "../config/cloudinary";
 import {
+  getAllDriverInfo,
   getDriverCurrentRide,
   getDriverRideHistory,
   updateDriverProfile,
@@ -345,6 +346,13 @@ router.get(
       res.status(500).json({ error: "Failed to fetch driver details" });
     }
   }
+);
+
+// Get driver's full profile including all document URLs
+router.get(
+  "/profile/all",
+  verifyToken,
+  getAllDriverInfo
 );
 
 // Update driver profile with all details and documents

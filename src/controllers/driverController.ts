@@ -393,6 +393,45 @@ export const updateDriverProfile = async (req: Request, res: Response) => {
   }
 };
 
+export const getAllDriverInfo = async (req: Request, res: Response) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const userId = req.user.userId;
+
+    // Get user details with driver details
+    const driverWithAllDetails = await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        driverDetails: true,
+        driverStatus: true
+      }
+    });
+
+    if (!driverWithAllDetails) {
+      return res.status(404).json({ error: 'Driver not found' });
+    }
+
+    // Check if user is a driver
+    if (driverWithAllDetails.userType !== 'DRIVER') {
+      return res.status(403).json({ error: 'User is not a driver' });
+    }
+
+    res.json({
+      success: true,
+      driver: driverWithAllDetails
+    });
+  } catch (error) {
+    console.error('Error fetching driver profile:', error);
+    res.status(500).json({
+      error: 'Failed to fetch driver profile',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+};
+
 export const getDriverCurrentRide = async (req: Request, res: Response) => {
   try {
     const { driverId } = req.params;
