@@ -231,11 +231,38 @@ export const getDriverRideHistory = async (req: Request, res: Response) => {
 // Get driver's current ride/booking
 export const updateDriverProfile = async (req: Request, res: Response) => {
   try {
+    // Debug information
+    console.log('Update driver profile request:', {
+      user: req.user,
+      body: req.body,
+      files: req.files ? 'Files present' : 'No files'
+    });
+    
     if (!req.user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
     const userId = req.user.userId;
+    console.log('Driver ID from token:', userId);
+    
+    // Add validation for userId
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is missing in the request' });
+    }
+    
+    // Check if user exists before proceeding
+    console.log('Looking for user with ID:', userId);
+    const userExists = await prisma.user.findUnique({
+      where: { id: userId }
+    });
+    
+    if (!userExists) {
+      console.log('User not found with ID:', userId);
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    console.log('User found:', userExists.id, userExists.phone);
+    
     const files = req.files as MulterFiles | undefined;
 
     // Extract fields from request body
@@ -254,20 +281,27 @@ export const updateDriverProfile = async (req: Request, res: Response) => {
       hasCarrier,
     } = body;
 
+    console.log('Starting transaction to update user and driver details');
+    
     // Start a transaction to ensure data consistency
     const [updatedUser, driverDetails] = await prisma.$transaction(async (tx) => {
-      // Update user basic info
+      // Update user basic info - only include fields that are provided
+      const updateData: Record<string, any> = {};
+      
+      if (name !== undefined) updateData.name = name;
+      if (email !== undefined) updateData.email = email;
+      if (state !== undefined) updateData.state = state;
+      if (city !== undefined) updateData.city = city;
+      
+      if (files?.selfiePath?.[0]) {
+        updateData.selfieUrl = await uploadImage(files.selfiePath[0].buffer);
+      }
+      
+      console.log('Updating user with data:', updateData);
+      
       const user = await tx.user.update({
         where: { id: userId },
-        data: {
-          name,
-          email,
-          state,
-          city,
-          ...(files?.selfiePath?.[0] && {
-            selfieUrl: await uploadImage(files.selfiePath[0].buffer)
-          })
-        },
+        data: updateData,
       });
 
       // Handle document uploads
