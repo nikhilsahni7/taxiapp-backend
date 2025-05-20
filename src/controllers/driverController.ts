@@ -40,7 +40,10 @@ interface UpdateDriverProfileBody {
   hasCarrier?: string;
 }
 
-export const getDriverRideHistory = async (req: Request, res: Response) => {
+export const getDriverRideHistory = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   try {
     const { driverId } = req.params;
     const { page = 1, limit = 10 } = req.query;
@@ -226,41 +229,78 @@ export const getDriverRideHistory = async (req: Request, res: Response) => {
   }
 };
 
-export const updateDriverProfile = async (req: Request, res: Response) => {
+export const updateDriverProfile = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   try {
-    // Debug information
-    console.log("Update driver profile request:", {
-      user: req.user,
-      body: req.body,
-      files: req.files ? "Files present" : "No files",
-    });
+    // Extended debugging
+    console.log("========================");
+    console.log("UPDATE DRIVER PROFILE - DEBUG INFO");
+    console.log("------------------------");
+    console.log("Request user info:", JSON.stringify(req.user, null, 2));
+    console.log("Request body:", JSON.stringify(req.body, null, 2));
+    console.log(
+      "Files present:",
+      req.files ? Object.keys(req.files).length : "No files"
+    );
+    console.log("------------------------");
 
     if (!req.user) {
-      return res.status(401).json({ error: "Unauthorized" });
+      console.log("ERROR: No user in request");
+      res.status(401).json({ error: "Unauthorized" });
+      return;
     }
 
     const userId = req.user.userId;
     console.log("Driver ID from token:", userId);
+    console.log("User ID type:", typeof userId);
 
     // Add validation for userId
     if (!userId) {
-      return res
-        .status(400)
-        .json({ error: "User ID is missing in the request" });
+      console.log("ERROR: No userId found in token");
+      res.status(400).json({ error: "User ID is missing in the request" });
+      return;
     }
 
     // Check if user exists before proceeding
     console.log("Looking for user with ID:", userId);
-    const userExists = await prisma.user.findUnique({
-      where: { id: userId },
-    });
 
-    if (!userExists) {
-      console.log("User not found with ID:", userId);
-      return res.status(404).json({ error: "User not found" });
+    try {
+      const userExists = await prisma.user.findUnique({
+        where: { id: userId },
+      });
+
+      if (!userExists) {
+        console.log("ERROR: User not found with ID:", userId);
+        console.log("Database check complete - no matching user found");
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
+
+      console.log(
+        "User found:",
+        userExists.id,
+        userExists.phone,
+        userExists.userType
+      );
+
+      // Additional check for driver type
+      if (userExists.userType !== "DRIVER") {
+        console.log(
+          "ERROR: User is not a driver. UserType:",
+          userExists.userType
+        );
+        res.status(403).json({ error: "User is not a driver" });
+        return;
+      }
+    } catch (dbError) {
+      console.error("Database error during user lookup:", dbError);
+      res.status(500).json({ error: "Database error during user lookup" });
+      return;
     }
 
-    console.log("User found:", userExists.id, userExists.phone);
+    console.log("Driver verification successful, proceeding with update");
 
     const files = req.files as MulterFiles | undefined;
 
@@ -432,10 +472,11 @@ export const updateDriverProfile = async (req: Request, res: Response) => {
       // Handle Prisma-specific errors
       if (error.code === "P2025") {
         console.error("User not found during update transaction:", error);
-        return res.status(404).json({
+        res.status(404).json({
           error: "User not found or was deleted during the update process",
           details: error.message,
         });
+        return;
       }
       // Re-throw other errors to be caught by outer catch
       throw error;
@@ -449,10 +490,14 @@ export const updateDriverProfile = async (req: Request, res: Response) => {
   }
 };
 
-export const getAllDriverInfo = async (req: Request, res: Response) => {
+export const getAllDriverInfo = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   try {
     if (!req.user) {
-      return res.status(401).json({ error: "Unauthorized" });
+      res.status(401).json({ error: "Unauthorized" });
+      return;
     }
 
     const userId = req.user.userId;
@@ -467,12 +512,14 @@ export const getAllDriverInfo = async (req: Request, res: Response) => {
     });
 
     if (!driverWithAllDetails) {
-      return res.status(404).json({ error: "Driver not found" });
+      res.status(404).json({ error: "Driver not found" });
+      return;
     }
 
     // Check if user is a driver
     if (driverWithAllDetails.userType !== "DRIVER") {
-      return res.status(403).json({ error: "User is not a driver" });
+      res.status(403).json({ error: "User is not a driver" });
+      return;
     }
 
     res.json({
@@ -488,7 +535,10 @@ export const getAllDriverInfo = async (req: Request, res: Response) => {
   }
 };
 
-export const getDriverCurrentRide = async (req: Request, res: Response) => {
+export const getDriverCurrentRide = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   try {
     const { driverId } = req.params;
 
@@ -501,7 +551,8 @@ export const getDriverCurrentRide = async (req: Request, res: Response) => {
     });
 
     if (!driverExists) {
-      return res.status(404).json({ error: "Driver not found" });
+      res.status(404).json({ error: "Driver not found" });
+      return;
     }
 
     // Check regular rides
