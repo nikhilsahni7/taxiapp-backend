@@ -82,33 +82,51 @@ export const searchAvailableDrivers = async (
         },
       },
     },
-    orderBy: [
-      { locationLat: "asc" },
-      { locationLng: "asc" },
-    ],
+    orderBy: [{ locationLat: "asc" }, { locationLng: "asc" }],
   });
 
   console.log(
     `[searchAvailableDrivers] Found ${drivers.length} drivers within ${radius}km before category filter.`
   );
 
-  // In-code filtering based on carCategory
+  // In-code filtering based on carCategory with hierarchical matching
   const categoryFilteredDrivers = filterOptions?.carCategory
     ? drivers.filter((driverStatus) => {
-        const driverCategory = driverStatus.driver?.driverDetails?.vehicleCategory?.toLowerCase();
+        const driverCategory =
+          driverStatus.driver?.driverDetails?.vehicleCategory?.toLowerCase();
         const requestedCategory = filterOptions.carCategory!.toLowerCase();
-        // Check if driver has details and their category matches the request
+
+        // Implement hierarchical category matching:
+        // - If requested category is "mini", accept drivers with "mini", "sedan", or "suv"
+        // - If requested category is "sedan", accept drivers with "sedan" or "suv"
+        // - If requested category is "suv", only accept drivers with "suv"
+
+        if (!driverCategory) return false; // Driver has no category
+
+        if (requestedCategory === "mini") {
+          // Mini requests can go to mini, sedan, or SUV drivers
+          return ["mini", "sedan", "suv"].includes(driverCategory);
+        } else if (requestedCategory === "sedan") {
+          // Sedan requests can go to sedan or SUV drivers
+          return ["sedan", "suv"].includes(driverCategory);
+        } else if (requestedCategory === "suv") {
+          // SUV requests can only go to SUV drivers
+          return driverCategory === "suv";
+        }
+
+        // For any other category, use exact matching
         return driverCategory === requestedCategory;
       })
     : drivers; // If no category filter, use all found drivers
 
   console.log(
-    `[searchAvailableDrivers] Found ${categoryFilteredDrivers.length} drivers after category filter (${filterOptions?.carCategory || "none"}).`
+    `[searchAvailableDrivers] Found ${categoryFilteredDrivers.length} drivers after hierarchical category filter (${filterOptions?.carCategory || "none"}).`
   );
 
   // Calculate exact distance for the filtered drivers
   const driversWithDistance = await Promise.all(
-    categoryFilteredDrivers.map(async (driver) => { // Use categoryFilteredDrivers here
+    categoryFilteredDrivers.map(async (driver) => {
+      // Use categoryFilteredDrivers here
       const distance = await calculateDistance(
         `${driver.locationLat},${driver.locationLng}`,
         pickupLocation
