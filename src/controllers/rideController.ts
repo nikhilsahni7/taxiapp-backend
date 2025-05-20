@@ -289,7 +289,8 @@ export const getFareEstimation = async (req: Request, res: Response) => {
 
     // Calculate fares for all categories with taxes and charges
     const categories: CarCategory[] = ["mini", "sedan", "suv"];
-    const estimates: Record<CarCategory, FareEstimate> = {} as Record< // <-- Removed outstanding fee from type
+    const estimates: Record<CarCategory, FareEstimate> = {} as Record<
+      // <-- Removed outstanding fee from type
       CarCategory,
       FareEstimate // <-- Removed outstanding fee from type
     >;
@@ -428,12 +429,14 @@ async function findAndRequestDrivers(ride: any) {
     if (ride.carCategory) {
       filterOptions.carCategory = ride.carCategory; // Pass the requested category
     } else {
-       console.warn(`[findAndRequestDrivers] Ride ${ride.id} is missing carCategory for filtering.`);
-
+      console.warn(
+        `[findAndRequestDrivers] Ride ${ride.id} is missing carCategory for filtering.`
+      );
     }
 
     console.log(
-      `[findAndRequestDrivers] Searching drivers for ride ${ride.id} in radius ${currentRadius}km with filters:`, filterOptions
+      `[findAndRequestDrivers] Searching drivers for ride ${ride.id} in radius ${currentRadius}km with filters:`,
+      filterOptions
     );
 
     // Call searchAvailableDrivers with the filter options
@@ -443,7 +446,9 @@ async function findAndRequestDrivers(ride: any) {
       filterOptions // Pass the options object
     );
 
-    console.log(`[findAndRequestDrivers] Found ${drivers.length} suitable drivers in radius ${currentRadius}km.`);
+    console.log(
+      `[findAndRequestDrivers] Found ${drivers.length} suitable drivers in radius ${currentRadius}km.`
+    );
 
     const newDrivers = drivers.filter((d) => !attemptedDrivers.has(d.driverId));
 
@@ -505,6 +510,7 @@ async function findAndRequestDrivers(ride: any) {
             duration: ride.duration,
             paymentMode: ride.paymentMode,
             carrierRequested: ride.carrierRequested,
+            carCategory: ride.carCategory,
             carrierCharge: ride.carrierCharge,
             ...pickupMetrics,
             userId: currentRide.userId,

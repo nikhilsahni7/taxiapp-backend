@@ -364,6 +364,9 @@ export const getAvailableRentals = async (req: Request, res: Response) => {
       where: {
         status: RideStatus.SEARCHING,
         isCarRental: true,
+        carCategory: {
+          in: ["mini", "sedan", "suv"],
+        },
         metadata: {
           path: ["availableDrivers"],
           array_contains: [{ driverId: req.user.userId }],
