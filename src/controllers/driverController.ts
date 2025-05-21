@@ -629,3 +629,39 @@ export const getDriverCurrentRide = async (
     res.status(500).json({ error: "Failed to fetch driver's current ride" });
   }
 };
+
+//get driver approved or not status
+
+export const getDriverApprovalStatus = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
+  try {
+    const { driverId } = req.params;
+
+    const driver = await prisma.user.findUnique({
+      where: { id: driverId, userType: "DRIVER" },
+      include: {
+        driverDetails: true,
+      },
+    });
+
+    if (!driver) {
+      res.status(404).json({ error: "Driver not found" });
+      return;
+    }
+
+    if (!driver.driverDetails) {
+      res.status(404).json({ error: "Driver details not found" });
+      return;
+    }
+
+    res.json({
+      approved: driver.driverDetails.approved,
+      approvedAt: driver.driverDetails.approvedAt,
+    });
+  } catch (error) {
+    console.error("Error fetching driver approval status:", error);
+    res.status(500).json({ error: "Failed to fetch driver approval status" });
+  }
+};

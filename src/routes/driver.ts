@@ -6,6 +6,7 @@ import multer from "multer";
 import { uploadImage } from "../config/cloudinary";
 import {
   getAllDriverInfo,
+  getDriverApprovalStatus,
   getDriverCurrentRide,
   getDriverRideHistory,
   updateDriverProfile,
@@ -445,6 +446,11 @@ router.put(
     { name: "insuranceDocument", maxCount: 1 },
   ]),
   updateDriverProfile as RouteHandler
+);
+
+router.get(
+  "/:driverId/approval-status",
+  getDriverApprovalStatus as RouteHandler
 );
 
 export { router as driverRouter };
