@@ -1,5 +1,5 @@
-import type { Request, Response } from "express";
 import { PrismaClient, TransactionStatus } from "@prisma/client";
+import type { Request, Response } from "express";
 
 const prisma = new PrismaClient();
 export const getAllRidesData = async (req: Request, res: Response) => {
@@ -816,6 +816,143 @@ export const getAllUsers = async (req: Request, res: Response) => {
   } catch (error) {
     res.status(500).json({
       error: "Failed to fetch users",
+      details: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+// Get all drivers with details for approval
+export const getAllDriversForApproval = async (req: Request, res: Response) => {
+  try {
+    const drivers = await prisma.user.findMany({
+      where: {
+        userType: "DRIVER",
+      },
+      include: {
+        driverDetails: true,
+        wallet: true,
+      },
+    });
+
+    res.json({
+      total: drivers.length,
+      pendingApproval: drivers.filter(
+        (d) => d.driverDetails && !d.driverDetails.approved
+      ).length,
+      drivers: drivers.map((driver) => ({
+        id: driver.id,
+        name: driver.name,
+        phone: driver.phone,
+        email: driver.email,
+        verified: driver.verified,
+        createdAt: driver.createdAt,
+        approved: driver.driverDetails?.approved || false,
+        approvedAt: driver.driverDetails?.approvedAt,
+        details: driver.driverDetails,
+        wallet: driver.wallet,
+      })),
+    });
+  } catch (error) {
+    console.error("Error fetching drivers for approval:", error);
+    res.status(500).json({
+      error: "Failed to fetch drivers",
+      details: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+// Get specific driver with all details for approval review
+export const getDriverForApproval = async (req: Request, res: Response) => {
+  try {
+    const { driverId } = req.params;
+
+    const driver = await prisma.user.findUnique({
+      where: {
+        id: driverId,
+        userType: "DRIVER",
+      },
+      include: {
+        driverDetails: true,
+        wallet: true,
+      },
+    });
+
+    if (!driver) {
+      return res.status(404).json({ error: "Driver not found" });
+    }
+
+    res.json({
+      id: driver.id,
+      name: driver.name,
+      phone: driver.phone,
+      email: driver.email,
+      verified: driver.verified,
+      createdAt: driver.createdAt,
+      approved: driver.driverDetails?.approved || false,
+      approvedAt: driver.driverDetails?.approvedAt,
+      details: driver.driverDetails,
+      wallet: driver.wallet,
+    });
+  } catch (error) {
+    console.error("Error fetching driver for approval:", error);
+    res.status(500).json({
+      error: "Failed to fetch driver details",
+      details: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+};
+
+// Approve or disapprove a driver
+export const updateDriverApproval = async (req: Request, res: Response) => {
+  try {
+    const { driverId } = req.params;
+    const { approved, notes } = req.body;
+
+    if (typeof approved !== "boolean") {
+      return res.status(400).json({
+        error: "Invalid input",
+        details: "The 'approved' field must be a boolean value",
+      });
+    }
+
+    const driver = await prisma.user.findUnique({
+      where: {
+        id: driverId,
+        userType: "DRIVER",
+      },
+      include: {
+        driverDetails: true,
+      },
+    });
+
+    if (!driver || !driver.driverDetails) {
+      return res.status(404).json({ error: "Driver not found" });
+    }
+
+    // Update the driver approval status
+    const updatedDriverDetails = await prisma.driverDetails.update({
+      where: {
+        userId: driverId,
+      },
+      data: {
+        approved,
+        approvedAt: approved ? new Date() : null,
+        // Store approval notes or rejection reason in metadata if needed
+        // Would need to add metadata field to the driverDetails model
+      },
+    });
+
+    res.json({
+      success: true,
+      message: approved
+        ? "Driver approved successfully"
+        : "Driver approval revoked",
+      driverDetails: updatedDriverDetails,
+    });
+  } catch (error) {
+    console.error("Error updating driver approval:", error);
+    res.status(500).json({
+      error: "Failed to update driver approval status",
       details: error instanceof Error ? error.message : "Unknown error",
     });
   }

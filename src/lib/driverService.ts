@@ -72,6 +72,12 @@ export const searchAvailableDrivers = async (
           },
         },
       }),
+      // Only show approved drivers
+      driver: {
+        driverDetails: {
+          approved: true,
+        },
+      },
       // We will filter by carCategory in the application code below
     },
     include: {
@@ -86,7 +92,7 @@ export const searchAvailableDrivers = async (
   });
 
   console.log(
-    `[searchAvailableDrivers] Found ${drivers.length} drivers within ${radius}km before category filter.`
+    `[searchAvailableDrivers] Found ${drivers.length} approved drivers within ${radius}km before category filter.`
   );
 
   // In-code filtering based on carCategory with hierarchical matching

@@ -298,6 +298,8 @@ model DriverDetails {
 
   carCategory     String?
   registrationFeePaid Boolean @default(false)
+  approved      Boolean @default(false)
+  approvedAt    DateTime?
 }
 model VendorDetails {
   id             String   @id @default(uuid())
