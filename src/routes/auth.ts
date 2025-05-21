@@ -1,5 +1,5 @@
-
 import { PrismaClient } from "@prisma/client";
+import bcryptjs from "bcryptjs";
 import type { Request, Response } from "express";
 import express from "express";
 import jwt from "jsonwebtoken";
@@ -86,7 +86,7 @@ router.post("/send-otp", async (req, res) => {
 // Verify OTP and Sign Up
 router.post("/verify-otp", async (req: Request, res: Response) => {
   try {
-    const { phone, otp } = req.body;
+    const { phone, otp, password } = req.body;
 
     // Validate input
     if (!phone || !otp) {
@@ -111,12 +111,19 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid or expired OTP" });
     }
 
+    // Hash password if provided
+    let hashedPassword = null;
+    if (password) {
+      hashedPassword = await bcryptjs.hash(password, 10);
+    }
+
     // Create user with verified status
     const user = await prisma.user.create({
       data: {
         phone,
         userType: "USER",
         verified: true,
+        password: hashedPassword,
       },
     });
 
@@ -179,7 +186,7 @@ router.post("/send-driver-otp", async (req: Request, res: Response) => {
 // Update the verify-driver-otp route
 router.post("/verify-driver-otp", async (req: Request, res: Response) => {
   try {
-    const { phone, otp } = req.body;
+    const { phone, otp, password } = req.body;
 
     // Validate input
     if (!phone || !otp) {
@@ -221,12 +228,19 @@ router.post("/verify-driver-otp", async (req: Request, res: Response) => {
       });
     }
 
+    // Hash password if provided
+    let hashedPassword = null;
+    if (password) {
+      hashedPassword = await bcryptjs.hash(password, 10);
+    }
+
     // Create driver with verified status
     const driver = await prisma.user.create({
       data: {
         phone: formattedPhone,
         userType: "DRIVER",
         verified: true,
+        password: hashedPassword,
       },
     });
 
@@ -253,7 +267,7 @@ router.post("/verify-driver-otp", async (req: Request, res: Response) => {
 // Verify OTP and create vendor
 router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
   try {
-    const { phone, otp } = req.body;
+    const { phone, otp, password } = req.body;
 
     // Validate input
     if (!phone || !otp) {
@@ -284,12 +298,19 @@ router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Invalid or expired OTP" });
     }
 
+    // Hash password if provided
+    let hashedPassword = null;
+    if (password) {
+      hashedPassword = await bcryptjs.hash(password, 10);
+    }
+
     // Create vendor with verified status
     const vendor = await prisma.user.create({
       data: {
         phone,
         userType: "VENDOR",
         verified: true,
+        password: hashedPassword,
       },
     });
 
@@ -437,7 +458,7 @@ router.post(
 // Vendor sign-in
 router.post("/vendor-sign-in", async (req: Request, res: Response) => {
   try {
-    const { phone } = req.body;
+    const { phone, password } = req.body;
 
     if (!phone) {
       return res.status(400).json({ error: "Phone number is required" });
@@ -459,6 +480,17 @@ router.post("/vendor-sign-in", async (req: Request, res: Response) => {
         vendor: vendor,
         vendorDetails: vendor?.vendorDetails,
       });
+    }
+
+    // Verify password if it exists in the system and was provided
+    if (vendor.password && password) {
+      const isPasswordValid = await bcryptjs.compare(password, vendor.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ error: "Invalid password" });
+      }
+    } else if (vendor.password && !password) {
+      // Password is set in the system but not provided
+      return res.status(400).json({ error: "Password is required" });
     }
 
     const token = jwt.sign(
@@ -487,13 +519,24 @@ router.post("/vendor-sign-in", async (req: Request, res: Response) => {
 // Sign In (simplified to use phone number only)
 router.post("/sign-in", async (req: Request, res: Response) => {
   try {
-    const { phone } = req.body;
+    const { phone, password } = req.body;
 
     const user = await prisma.user.findUnique({ where: { phone } });
     if (!user || !user.verified) {
       return res
         .status(400)
         .json({ error: "Invalid phone number or user not verified" });
+    }
+
+    // Verify password if it exists in the system and was provided
+    if (user.password && password) {
+      const isPasswordValid = await bcryptjs.compare(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ error: "Invalid password" });
+      }
+    } else if (user.password && !password) {
+      // Password is set in the system but not provided
+      return res.status(400).json({ error: "Password is required" });
     }
 
     const token = jwt.sign(
@@ -727,7 +770,7 @@ router.post("/admin-sign-in", async (req: Request, res: Response) => {
 // Driver sign-in (simplified)
 router.post("/driver-sign-in", async (req, res) => {
   try {
-    const { phone } = req.body;
+    const { phone, password } = req.body;
 
     if (!phone) {
       return res.status(400).json({ error: "Phone number is required" });
@@ -747,6 +790,17 @@ router.post("/driver-sign-in", async (req, res) => {
       return res
         .status(401)
         .json({ error: "Invalid phone number or driver not verified" });
+    }
+
+    // Verify password if it exists in the system and was provided
+    if (driver.password && password) {
+      const isPasswordValid = await bcryptjs.compare(password, driver.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ error: "Invalid password" });
+      }
+    } else if (driver.password && !password) {
+      // Password is set in the system but not provided
+      return res.status(400).json({ error: "Password is required" });
     }
 
     const token = jwt.sign(
@@ -791,6 +845,85 @@ router.get(
   "/driver/registration-fee/status",
   verifyToken,
   checkRegistrationStatus
+);
+
+// Forgot Password - Send OTP
+router.post(
+  "/forgot-password/send-otp",
+  async (req: Request, res: Response) => {
+    try {
+      const { phone } = req.body;
+
+      if (!phone) {
+        return res.status(400).json({ error: "Phone number is required" });
+      }
+
+      // Check if user exists
+      const user = await prisma.user.findUnique({ where: { phone } });
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // Send OTP via Twilio Verify Service
+      await twilioClient.verify.v2
+        .services(process.env.TWILIO_VERIFY_SID!)
+        .verifications.create({
+          to: phone,
+          channel: "sms",
+        });
+
+      res.json({ message: "OTP sent successfully" });
+    } catch (error) {
+      console.error("Forgot Password - Send OTP error:", error);
+      res.status(500).json({ error: "Failed to send OTP" });
+    }
+  }
+);
+
+// Forgot Password - Verify OTP and Reset Password
+router.post(
+  "/forgot-password/verify-otp",
+  async (req: Request, res: Response) => {
+    try {
+      const { phone, otp, newPassword } = req.body;
+
+      if (!phone || !otp || !newPassword) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      // Check if user exists
+      const user = await prisma.user.findUnique({ where: { phone } });
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // Verify OTP
+      const verification = await twilioClient.verify.v2
+        .services(process.env.TWILIO_VERIFY_SID!)
+        .verificationChecks.create({
+          to: phone,
+          code: otp,
+        });
+
+      if (!verification.valid) {
+        return res.status(400).json({ error: "Invalid or expired OTP" });
+      }
+
+      // Hash new password
+      const hashedPassword = await bcryptjs.hash(newPassword, 10);
+
+      // Update user password
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { password: hashedPassword },
+      });
+
+      res.json({ message: "Password reset successful" });
+    } catch (error) {
+      console.error("Forgot Password - Verify OTP error:", error);
+      res.status(500).json({ error: "Failed to reset password" });
+    }
+  }
 );
 
 export { router as authRouter };

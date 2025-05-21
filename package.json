@@ -11,7 +11,8 @@
     "test": "bun run vitest",
     "db:clear": "bun run src/scripts/clear-database.ts",
     "db:reset": "bun run src/scripts/reset-database.ts",
-    "db:full-reset": "bun run src/scripts/full-db-reset.ts"
+    "db:full-reset": "bun run src/scripts/full-db-reset.ts",
+    "delete-user": "bun run src/scripts/delete-user.ts"
   },
   "devDependencies": {
     "@types/bcrypt": "^5.0.2",
@@ -25,6 +26,7 @@
   "dependencies": {
     "@googlemaps/google-maps-services-js": "^3.4.0",
     "@prisma/client": "^6.0.1",
+    "@types/bcryptjs": "^3.0.0",
     "@types/cors": "^2.8.17",
     "@types/cron": "^2.4.3",
     "@types/google-maps": "^4.0.0",
@@ -35,6 +37,7 @@
     "aws-sdk": "^2.1692.0",
     "axios": "^1.7.9",
     "bcrypt": "^5.1.1",
+    "bcryptjs": "^3.0.2",
     "cloudinary": "^2.5.1",
     "cors": "^2.8.5",
     "cron": "^4.1.4",
