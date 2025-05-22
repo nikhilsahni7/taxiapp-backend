@@ -55,7 +55,7 @@ type StateTaxStructure = {
 // Constants for different charges with proper typing
 const CHARGES = {
   MCD_CHARGE: 100,
-  AIRPORT_PARKING: 250,
+  AIRPORT_PARKING: 290,
   STATE_TAX: {
     DELHI_TO_HARYANA: {
       mini: 100,

@@ -401,21 +401,45 @@ router.post(
         },
       });
 
-      // Create vendor details
-      const vendorDetails = await prisma.vendorDetails.create({
-        data: {
-          userId,
-          businessName,
-          address,
-          experience,
-          gstNumber,
-          aadharNumber,
-          panNumber,
-          aadharFrontUrl,
-          aadharBackUrl,
-          panUrl,
-        },
+      // Check if vendor details already exist
+      const existingVendorDetails = await prisma.vendorDetails.findUnique({
+        where: { userId },
       });
+
+      let vendorDetails;
+      if (existingVendorDetails) {
+        // Update existing vendor details
+        vendorDetails = await prisma.vendorDetails.update({
+          where: { userId },
+          data: {
+            businessName,
+            address,
+            experience,
+            gstNumber,
+            aadharNumber,
+            panNumber,
+            aadharFrontUrl,
+            aadharBackUrl,
+            panUrl,
+          },
+        });
+      } else {
+        // Create new vendor details
+        vendorDetails = await prisma.vendorDetails.create({
+          data: {
+            userId,
+            businessName,
+            address,
+            experience,
+            gstNumber,
+            aadharNumber,
+            panNumber,
+            aadharFrontUrl,
+            aadharBackUrl,
+            panUrl,
+          },
+        });
+      }
 
       // Get updated user data
       const updatedUser = await prisma.user.findUnique({
