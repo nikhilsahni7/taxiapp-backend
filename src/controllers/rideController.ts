@@ -400,212 +400,383 @@ async function initializeRide(
 }
 
 async function findAndRequestDrivers(ride: any) {
+  const RIDE_SEARCH_TOTAL_TIMEOUT_MS = 60000; // 60 seconds overall
+  const RADIUS_EXPANSION_INTERVAL_MS = 15000; // Expand radius every 15s
+  const DRIVER_INDIVIDUAL_RESPONSE_TIMEOUT_MS = 15000; // Driver has 15s to respond
+
+  const searchDeadline = Date.now() + RIDE_SEARCH_TOTAL_TIMEOUT_MS;
   let currentRadius = INITIAL_SEARCH_RADIUS;
-  const attemptedDrivers = new Set<string>();
-  const searchedDrivers: any[] = [];
+  const attemptedDrivers = new Set<string>(); // Tracks driverIds to whom request has been sent for this ride
+  let rideAccepted = false;
+  let winningRideDetails: any = null; // Store the successfully updated ride object
 
-  while (currentRadius <= MAX_SEARCH_RADIUS) {
-    // Add a check for ride status before continuing search
-    const currentRideStatus = await prisma.ride.findUnique({
-      where: { id: ride.id },
-      select: { status: true },
-    });
+  // Arrays to keep track of active listeners and timeouts for cleanup
+  const activeListeners: Array<{
+    eventName: string;
+    listener: (...args: any[]) => void;
+  }> = [];
+  const driverIndividualTimeouts: Array<ReturnType<typeof setTimeout>> = []; // Use ReturnType for correct timeout type
 
-    if (currentRideStatus?.status !== RideStatus.SEARCHING) {
-      return {
-        success: true,
-        message: "Ride already assigned",
-        searchedDrivers,
-        finalRadius: currentRadius,
-      };
-    }
-
-    // Prepare filter options including carrier and car category
-    const filterOptions: { hasCarrier?: boolean; carCategory?: string } = {};
-    if (ride.carrierRequested) {
-      filterOptions.hasCarrier = true;
-    }
-    // Ensure we pass the carCategory from the ride object
-    if (ride.carCategory) {
-      filterOptions.carCategory = ride.carCategory; // Pass the requested category
-    } else {
-      console.warn(
-        `[findAndRequestDrivers] Ride ${ride.id} is missing carCategory for filtering.`
-      );
-    }
-
+  const cleanupSystem = () => {
+    activeListeners.forEach(({ eventName, listener }) =>
+      io.off(eventName, listener)
+    );
+    driverIndividualTimeouts.forEach(clearTimeout);
+    activeListeners.length = 0;
+    driverIndividualTimeouts.length = 0;
     console.log(
-      `[findAndRequestDrivers] Searching drivers for ride ${ride.id} in radius ${currentRadius}km with filters:`,
-      filterOptions
+      `[findAndRequestDrivers] Cleanup for ride ${ride.id} completed.`
     );
+  };
 
-    // Call searchAvailableDrivers with the filter options
-    const drivers = await searchAvailableDrivers(
-      ride.pickupLocation,
-      currentRadius,
-      filterOptions // Pass the options object
-    );
+  try {
+    while (
+      Date.now() < searchDeadline &&
+      currentRadius <= MAX_SEARCH_RADIUS &&
+      !rideAccepted
+    ) {
+      const iterationStartTime = Date.now();
 
-    console.log(
-      `[findAndRequestDrivers] Found ${drivers.length} suitable drivers in radius ${currentRadius}km.`
-    );
+      const currentRideState = await prisma.ride.findUnique({
+        where: { id: ride.id },
+        select: { status: true },
+      });
 
-    const newDrivers = drivers.filter((d) => !attemptedDrivers.has(d.driverId));
+      if (rideAccepted || currentRideState?.status !== RideStatus.SEARCHING) {
+        if (rideAccepted)
+          console.log(
+            `[findAndRequestDrivers] Ride ${ride.id} already accepted, breaking loop.`
+          );
+        else
+          console.log(
+            `[findAndRequestDrivers] Ride ${ride.id} status changed to ${currentRideState?.status}, breaking loop.`
+          );
+        break;
+      }
 
-    if (newDrivers.length > 0) {
-      searchedDrivers.push(
-        ...newDrivers.map((d) => ({
-          driverId: d.driverId,
-          distance: d.distance,
-          status: "searched",
-          hasCarrier: d.driver?.driverDetails?.hasCarrier || false,
-        }))
+      const filterOptions: { hasCarrier?: boolean; carCategory?: string } = {};
+      if (ride.carrierRequested) filterOptions.hasCarrier = true;
+      if (ride.carCategory) filterOptions.carCategory = ride.carCategory;
+
+      console.log(
+        `[findAndRequestDrivers] Ride ${ride.id}: Searching drivers in radius ${currentRadius}km. Filters:`,
+        filterOptions
+      );
+      const availableDrivers = await searchAvailableDrivers(
+        ride.pickupLocation,
+        currentRadius,
+        filterOptions
       );
 
-      for (const driver of newDrivers) {
-        attemptedDrivers.add(driver.driverId);
+      const newDriversToRequest = availableDrivers.filter(
+        (d) => d.driverId && !attemptedDrivers.has(d.driverId) && d.socketId
+      );
 
-        if (!driver.socketId) continue;
+      if (newDriversToRequest.length > 0) {
+        console.log(
+          `[findAndRequestDrivers] Ride ${ride.id}: Found ${newDriversToRequest.length} new drivers. Sending requests concurrently.`
+        );
 
-        try {
-          // Check ride status before sending request
-          const currentRide = await prisma.ride.findUnique({
-            where: { id: ride.id },
-            select: {
-              status: true,
-              driverId: true,
-              userId: true,
-              carrierRequested: true,
-              carrierCharge: true,
-              user: {
-                select: {
-                  name: true,
-                  phone: true,
-                },
-              },
-            },
-          });
+        const acceptancePromises = newDriversToRequest.map((driver) => {
+          attemptedDrivers.add(driver.driverId);
 
-          if (currentRide?.status !== RideStatus.SEARCHING) {
-            return {
-              success: true,
-              message: "Ride already accepted",
-              searchedDrivers,
-              ride: currentRide,
-            };
-          }
+          return new Promise<any>(async (resolve, reject) => {
+            if (rideAccepted) {
+              return reject(
+                `[Driver: ${driver.driverId}] Ride ${ride.id} already accepted by another driver (pre-check).`
+              );
+            }
 
-          // Calculate metrics and emit request
-          const pickupMetrics = await calculatePickupMetrics(
-            driver,
-            ride.pickupLocation
-          );
+            const eventName = `driver_response_${ride.id}_${driver.driverId}`;
+            let individualTimeoutId: ReturnType<typeof setTimeout>; // Use ReturnType
 
-          io.to(driver.driverId).emit("ride_request", {
-            rideId: ride.id,
-            pickupLocation: ride.pickupLocation,
-            dropLocation: ride.dropLocation,
-            fare: ride.totalAmount,
-            distance: ride.distance,
-            duration: ride.duration,
-            paymentMode: ride.paymentMode,
-            carrierRequested: ride.carrierRequested,
-            carCategory: ride.carCategory,
+            const responseListener = async (response: {
+              accepted: boolean;
+            }) => {
+              clearTimeout(individualTimeoutId);
+              io.off(eventName, responseListener);
 
-            carrierCharge: ride.carrierCharge,
-            ...pickupMetrics,
-            userId: currentRide.userId,
-            userName: currentRide.user?.name,
-            userPhone: currentRide.user?.phone,
-          });
-
-          const response = await waitForDriverResponse(
-            ride.id,
-            driver.driverId
-          );
-
-          if (response.accepted) {
-            // Use transaction to ensure atomicity
-            const result = await prisma.$transaction(async (prisma) => {
-              // Final check before updating
-              const finalCheck = await prisma.ride.findFirst({
-                where: {
-                  id: ride.id,
-                  status: RideStatus.SEARCHING,
-                  driverId: null,
-                },
-                select: { status: true },
-              });
-
-              if (!finalCheck) {
-                return null;
+              if (rideAccepted) {
+                return reject(
+                  `[Driver: ${driver.driverId}] Ride ${ride.id} accepted by another after this one responded.`
+                );
               }
 
-              // Update ride with driver and metrics
-              return prisma.ride.update({
-                where: {
-                  id: ride.id,
-                },
-                data: {
-                  driverId: driver.driverId,
-                  status: RideStatus.ACCEPTED,
-                  pickupDistance: pickupMetrics.pickupDistance,
-                  pickupDuration: pickupMetrics.pickupDuration,
-                },
-                include: {
-                  driver: {
-                    select: {
-                      id: true,
-                      name: true,
-                      phone: true,
-                      driverDetails: true,
-                    },
-                  },
-                  user: true,
-                },
-              });
-            });
+              if (response.accepted) {
+                console.log(
+                  `[findAndRequestDrivers] Ride ${ride.id}: Driver ${driver.driverId} accepted. Attempting to secure ride.`
+                );
+                const pickupMetrics = await calculatePickupMetrics(
+                  driver,
+                  ride.pickupLocation
+                );
 
-            if (result) {
-              // Notify user about accepted ride
-              io.to(result.userId).emit("ride_status_update", {
+                try {
+                  const updatedRide = await prisma.$transaction(async (tx) => {
+                    const finalCheck = await tx.ride.findFirst({
+                      where: {
+                        id: ride.id,
+                        status: RideStatus.SEARCHING,
+                        driverId: null,
+                      },
+                    });
+                    if (!finalCheck) {
+                      console.log(
+                        `[findAndRequestDrivers] Ride ${ride.id}: Transaction check failed (already taken/cancelled).`
+                      );
+                      return null;
+                    }
+                    return tx.ride.update({
+                      where: { id: ride.id },
+                      data: {
+                        driverId: driver.driverId,
+                        status: RideStatus.ACCEPTED,
+                        pickupDistance: pickupMetrics.pickupDistance,
+                        pickupDuration: pickupMetrics.pickupDuration,
+                      },
+                      include: {
+                        driver: {
+                          select: {
+                            id: true,
+                            name: true,
+                            phone: true,
+                            selfieUrl: true,
+
+                            driverDetails: {
+                              select: {
+                                vehicleName: true,
+                                vehicleNumber: true,
+                                hasCarrier: true,
+                              }, // Added rating here
+                            },
+                          },
+                        },
+                        user: { select: { id: true, name: true, phone: true } },
+                      },
+                    });
+                  });
+
+                  if (updatedRide) {
+                    if (!rideAccepted) {
+                      rideAccepted = true;
+                      winningRideDetails = { ...updatedRide, pickupMetrics };
+                      console.log(
+                        `[findAndRequestDrivers] Ride ${ride.id}: Successfully secured by driver ${driver.driverId}.`
+                      );
+                      resolve(winningRideDetails);
+                    } else {
+                      reject(
+                        `[Driver: ${driver.driverId}] Race condition: Ride ${ride.id} was accepted by another driver during transaction.`
+                      );
+                    }
+                  } else {
+                    reject(
+                      `[Driver: ${driver.driverId}] Failed to secure ride ${ride.id} in transaction (already taken/cancelled).`
+                    );
+                  }
+                } catch (txError) {
+                  console.error(
+                    `[findAndRequestDrivers] Ride ${ride.id}: Transaction error for driver ${driver.driverId}:`,
+                    txError
+                  );
+                  reject(
+                    `[Driver: ${driver.driverId}] Transaction error for ride ${ride.id}: ${txError}`
+                  );
+                }
+              } else {
+                reject(
+                  `[Driver: ${driver.driverId}] Rejected or did not respond affirmatively for ride ${ride.id}.`
+                );
+              }
+            };
+
+            individualTimeoutId = setTimeout(() => {
+              io.off(eventName, responseListener);
+              reject(
+                `[Driver: ${driver.driverId}] Response timed out for ride ${ride.id}.`
+              );
+            }, DRIVER_INDIVIDUAL_RESPONSE_TIMEOUT_MS);
+
+            driverIndividualTimeouts.push(individualTimeoutId);
+            activeListeners.push({ eventName, listener: responseListener });
+            io.once(eventName, responseListener);
+
+            const rideStateBeforeEmit = await prisma.ride.findUnique({
+              where: { id: ride.id },
+              select: { status: true },
+            });
+            if (
+              rideAccepted ||
+              rideStateBeforeEmit?.status !== RideStatus.SEARCHING
+            ) {
+              clearTimeout(individualTimeoutId);
+              io.off(eventName, responseListener);
+              reject(
+                `[Driver: ${driver.driverId}] Ride ${ride.id} status changed or accepted before emitting request.`
+              );
+              return;
+            }
+
+            const pickupMetrics = await calculatePickupMetrics(
+              driver,
+              ride.pickupLocation
+            );
+            console.log(
+              `[findAndRequestDrivers] Ride ${ride.id}: Emitting ride_request to driver ${driver.driverId} (socket ${driver.socketId})`
+            );
+            io.to(driver.socketId!).emit("ride_request", {
+              rideId: ride.id,
+              pickupLocation: ride.pickupLocation,
+              dropLocation: ride.dropLocation,
+              pickupAddress: ride.pickupLocation,
+              dropAddress: ride.dropLocation,
+              fare: ride.fare,
+              distance: ride.distance,
+              duration: ride.duration,
+              paymentMode: ride.paymentMode,
+              carrierRequested: ride.carrierRequested,
+              carCategory: ride.carCategory,
+              carrierCharge: ride.carrierCharge,
+              pickupDistance: pickupMetrics.pickupDistance,
+              pickupDuration: pickupMetrics.pickupDuration,
+              userId: ride.userId,
+              userName: ride.user?.name,
+              userPhone: ride.user?.phone,
+            });
+          });
+        });
+
+        Promise.race(acceptancePromises)
+          .then((acceptedRideDetails) => {
+            if (
+              acceptedRideDetails &&
+              rideAccepted &&
+              winningRideDetails &&
+              winningRideDetails.id === acceptedRideDetails.id
+            ) {
+              console.log(
+                `[findAndRequestDrivers] Ride ${ride.id} definitively accepted by ${winningRideDetails.driverId}. Proceeding with notifications.`
+              );
+
+              io.to(winningRideDetails.userId).emit("ride_status_update", {
                 rideId: ride.id,
                 status: RideStatus.ACCEPTED,
-                driverId: driver.driverId,
-                pickupDistance: pickupMetrics.pickupDistance,
-                pickupDuration: pickupMetrics.pickupDuration,
-                carrierRequested: ride.carrierRequested,
+                driverId: winningRideDetails.driverId,
+                driver: {
+                  id: winningRideDetails.driver.id,
+                  name: winningRideDetails.driver.name,
+                  phoneNumber: winningRideDetails.driver.phone,
+                  rating:
+                    winningRideDetails.driver.driverDetails?.rating ?? 4.5, // Access rating from driverDetails
+                  vehicleNumber:
+                    winningRideDetails.driver.driverDetails?.vehicleNumber ??
+                    "",
+                  vehicleModel:
+                    winningRideDetails.driver.driverDetails?.vehicleName ?? "",
+                  image: winningRideDetails.driver.selfieUrl,
+                  location: {
+                    latitude: winningRideDetails.driver.locationLat ?? 0,
+                    longitude: winningRideDetails.driver.locationLng ?? 0,
+                  },
+                  hasCarrier:
+                    winningRideDetails.driver.driverDetails?.hasCarrier ??
+                    false,
+                },
+                pickupDistance: winningRideDetails.pickupMetrics.pickupDistance,
+                pickupDuration: winningRideDetails.pickupMetrics.pickupDuration,
+                otp: winningRideDetails.otp,
               });
 
-              // Broadcast ride unavailability
-              io.emit("ride_unavailable", { rideId: ride.id });
+              io.to(winningRideDetails.driverId).emit(
+                "ride_assignment_confirmed",
+                {
+                  rideId: ride.id,
+                  message: "You have been assigned this ride.",
+                  rideDetails: winningRideDetails,
+                }
+              );
 
-              return {
-                success: true,
-                message: "Driver found successfully",
-                searchedDrivers,
-                finalRadius: currentRadius,
-                ride: result,
-              };
+              io.emit("ride_unavailable", {
+                rideId: ride.id,
+                acceptedByDriverId: winningRideDetails.driverId,
+              });
             }
-          }
-        } catch (error) {
-          console.error(`Error requesting driver ${driver.driverId}:`, error);
-          continue;
+          })
+          .catch((error) => {
+            console.log(
+              `[findAndRequestDrivers] Ride ${ride.id}: Batch for radius ${currentRadius}km: No acceptance or all rejected. Error (if any):`,
+              error instanceof Error ? error.message : error
+            );
+          });
+      }
+
+      if (rideAccepted) break;
+
+      const timeElapsedInIteration = Date.now() - iterationStartTime;
+      let timeToWait = RADIUS_EXPANSION_INTERVAL_MS - timeElapsedInIteration;
+
+      const remainingTimeOverall = searchDeadline - Date.now();
+      timeToWait = Math.min(timeToWait, remainingTimeOverall);
+
+      if (timeToWait > 0) {
+        await new Promise((resolve) => setTimeout(resolve, timeToWait));
+      }
+
+      if (Date.now() >= searchDeadline || rideAccepted) {
+        break;
+      }
+
+      currentRadius = Math.min(currentRadius + 2, MAX_SEARCH_RADIUS);
+
+      if (
+        currentRadius >= MAX_SEARCH_RADIUS &&
+        Date.now() < searchDeadline &&
+        !rideAccepted
+      ) {
+        const finalWaitTime = searchDeadline - Date.now();
+        if (finalWaitTime > 0) {
+          console.log(
+            `[findAndRequestDrivers] Ride ${ride.id}: Max radius reached, waiting final ${finalWaitTime}ms`
+          );
+          await new Promise((resolve) => setTimeout(resolve, finalWaitTime));
         }
+        break;
       }
     }
-    currentRadius += 2;
-  }
 
-  return {
-    success: false,
-    message: ride.carrierRequested
-      ? "No drivers with carrier available"
-      : "No available drivers found",
-    searchedDrivers,
-    finalRadius: currentRadius - 2,
-  };
+    cleanupSystem();
+
+    if (rideAccepted && winningRideDetails) {
+      console.log(
+        `[findAndRequestDrivers] Ride ${ride.id} search successful. Driver: ${winningRideDetails.driverId}`
+      );
+      return {
+        success: true,
+        message: "Driver found and ride accepted.",
+        ride: winningRideDetails,
+      };
+    } else {
+      console.log(
+        `[findAndRequestDrivers] Ride ${ride.id} search ended. No driver accepted within time limit or ride cancelled.`
+      );
+      return {
+        success: false,
+        message: ride.carrierRequested
+          ? "No drivers with carrier available within the time limit."
+          : "No available drivers found within the time limit.",
+      };
+    }
+  } catch (error) {
+    console.error(
+      `[findAndRequestDrivers] CRITICAL ERROR during search for ride ${ride.id}:`,
+      error
+    );
+    cleanupSystem();
+    return {
+      success: false,
+      message: "A critical error occurred during driver search.",
+    };
+  }
 }
 
 // Define types for the package structure
