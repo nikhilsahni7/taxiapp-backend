@@ -541,17 +541,24 @@ async function findAndRequestDrivers(ride: any) {
                             name: true,
                             phone: true,
                             selfieUrl: true,
-
+                        
                             driverDetails: {
                               select: {
                                 vehicleName: true,
                                 vehicleNumber: true,
                                 hasCarrier: true,
-                              }, // Added rating here
+
+                              },
                             },
                           },
                         },
-                        user: { select: { id: true, name: true, phone: true } },
+                        user: {
+                          select: {
+                            id: true,
+                            name: true,
+                            phone: true,
+                          },
+                        },
                       },
                     });
                   });
@@ -563,13 +570,33 @@ async function findAndRequestDrivers(ride: any) {
                       console.log(
                         `[findAndRequestDrivers] Ride ${ride.id}: Successfully secured by driver ${driver.driverId}.`
                       );
-                      resolve(winningRideDetails);
+                      resolve(winningRideDetails); // This driver's promise resolves with success
                     } else {
+                      // This driver accepted, but another one was processed faster.
+                      console.log(
+                        `[findAndRequestDrivers] Ride ${ride.id}: Driver ${driver.driverId} accepted, but ride already secured by another.`
+                      );
+                      io.to(driver.socketId!).emit("ride_acceptance_failed", {
+                        rideId: ride.id,
+                        reason: "already_accepted",
+                        message:
+                          "This ride was accepted by another driver just moments ago.",
+                      });
                       reject(
                         `[Driver: ${driver.driverId}] Race condition: Ride ${ride.id} was accepted by another driver during transaction.`
                       );
                     }
                   } else {
+                    // Transaction failed, meaning ride was likely taken or cancelled during the attempt.
+                    console.log(
+                      `[findAndRequestDrivers] Ride ${ride.id}: Driver ${driver.driverId} accepted, but transaction failed (ride likely taken/cancelled).`
+                    );
+                    io.to(driver.socketId!).emit("ride_acceptance_failed", {
+                      rideId: ride.id,
+                      reason: "ride_unavailable",
+                      message:
+                        "This ride is no longer available or was cancelled.",
+                    });
                     reject(
                       `[Driver: ${driver.driverId}] Failed to secure ride ${ride.id} in transaction (already taken/cancelled).`
                     );
@@ -667,7 +694,7 @@ async function findAndRequestDrivers(ride: any) {
                   name: winningRideDetails.driver.name,
                   phoneNumber: winningRideDetails.driver.phone,
                   rating:
-                    winningRideDetails.driver.driverDetails?.rating ?? 4.5, // Access rating from driverDetails
+                    winningRideDetails.driver.driverDetails?.rating ?? 4.5,
                   vehicleNumber:
                     winningRideDetails.driver.driverDetails?.vehicleNumber ??
                     "",
@@ -1571,6 +1598,8 @@ const handleRideCancellation = async (
         .json({ error: "Ride cannot be cancelled in its current state" });
     }
 
+    const initialRideStatus = ride.status; // Capture status before any updates
+
     console.log(
       `[handleRideCancellation] Processing cancellation for ride ${ride.id} by ${cancellingUserType} (${cancellingUserId}). Reason: ${cancellationReason}`
     );
@@ -1791,6 +1820,22 @@ const handleRideCancellation = async (
       console.log(
         `[handleRideCancellation] Emitting cancellation updates for ride ${ride.id}.`
       );
+
+      // If a user cancelled a ride that was actively being searched for
+      if (
+        cancellingUserType === UserType.USER &&
+        initialRideStatus === RideStatus.SEARCHING
+      ) {
+        console.log(
+          `[handleRideCancellation] User cancelled ride ${ride.id} while it was SEARCHING. Notifying drivers.`
+        );
+        io.emit("ride_unavailable", {
+          rideId: ride.id,
+          reason: "cancelled_by_user",
+          message: "The ride request has been cancelled by the user.",
+        });
+      }
+
       // Notify the other party (if they exist)
       const targetUserId =
         cancellingUserType === UserType.USER
