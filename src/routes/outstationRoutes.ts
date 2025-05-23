@@ -1,21 +1,22 @@
 import express from "express";
-import { verifyToken } from "../middlewares/auth";
+
 import {
-  getOutstationFareEstimate,
-  searchOutstationDrivers,
   acceptOutstationBooking,
-  verifyAdvancePayment,
-  startDriverPickup,
-  driverArrived,
-  startRide,
   cancelBooking,
-  getAvailableBookings,
-  getBookingStatus,
-  initiateRideCompletion,
   confirmRideCompletion,
   createFinalPaymentOrder,
+  driverArrived,
   getAcceptedBookings,
+  getAvailableBookings,
+  getBookingStatus,
+  getOutstationFareEstimate,
+  initiateRideCompletion,
+  searchOutstationDrivers,
+  startDriverPickup,
+  startRide,
+  verifyAdvancePayment,
 } from "../controllers/outstationController";
+import { verifyToken } from "../middlewares/auth";
 
 const router = express.Router();
 

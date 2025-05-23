@@ -511,6 +511,7 @@ async function findAndRequestDrivers(ride: any) {
             paymentMode: ride.paymentMode,
             carrierRequested: ride.carrierRequested,
             carCategory: ride.carCategory,
+
             carrierCharge: ride.carrierCharge,
             ...pickupMetrics,
             userId: currentRide.userId,
@@ -988,7 +989,7 @@ export const updateRideStatus = async (req: Request, res: Response) => {
   const rideId = req.params.id;
   const { status, otp, cancellationReason } = req.body;
   const userId = req.user?.userId;
-  const userType = req.user?.userType;
+  const userType = req.user?.userType as UserType;
 
   try {
     const ride = await prisma.ride.findUnique({
@@ -999,7 +1000,7 @@ export const updateRideStatus = async (req: Request, res: Response) => {
     if (!ride) return res.status(404).json({ error: "Ride not found" });
 
     // Permission validation
-    if (!validatePermissions(userType as UserType, userId, ride, status)) {
+    if (!validatePermissions(userType, userId, ride, status)) {
       return res.status(403).json({ error: "Forbidden" });
     }
 
@@ -1389,7 +1390,7 @@ const handleRideCancellation = async (
         RideStatus.RIDE_ENDED,
         RideStatus.PAYMENT_COMPLETED,
         RideStatus.CANCELLED,
-      ].includes(ride.status)
+      ].some((s) => s === ride.status) // Use .some() for type safety
     ) {
       console.log(
         `[handleRideCancellation] Ride ${rideId} already finished or cancelled. Status: ${ride.status}`

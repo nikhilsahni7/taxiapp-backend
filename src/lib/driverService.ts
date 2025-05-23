@@ -111,13 +111,15 @@ export const searchAvailableDrivers = async (
 
         if (requestedCategory === "mini") {
           // Mini requests can go to mini, sedan, or SUV drivers
-          return ["mini", "sedan", "suv"].includes(driverCategory);
+          return ["mini", "sedan", "suv", "ertiga", "innova"].includes(
+            driverCategory
+          );
         } else if (requestedCategory === "sedan") {
           // Sedan requests can go to sedan or SUV drivers
-          return ["sedan", "suv"].includes(driverCategory);
+          return ["sedan", "suv", "ertiga", "innova"].includes(driverCategory);
         } else if (requestedCategory === "suv") {
-          // SUV requests can only go to SUV drivers
-          return driverCategory === "suv";
+          // SUV requests can only go to SUV, Ertiga, or Innova drivers
+          return ["suv", "ertiga", "innova"].includes(driverCategory);
         }
 
         // For any other category, use exact matching

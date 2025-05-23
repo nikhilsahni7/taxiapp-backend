@@ -1,4 +1,4 @@
-import { PrismaClient, RideStatus } from "@prisma/client";
+import { RideStatus } from "@prisma/client";
 import cors from "cors";
 import express from "express";
 import http from "http";
@@ -9,6 +9,7 @@ import {
   calculateDuration,
   validateRideChatAccess,
 } from "./controllers/rideController";
+import { prisma } from "./lib/prisma";
 import { adminRouter } from "./routes/admin";
 import { allIndiaRoutes } from "./routes/allIndiaRoutes";
 import { authRouter } from "./routes/auth";
@@ -24,6 +25,7 @@ import { userWalletRouter } from "./routes/userWallet";
 import { vendorRouter } from "./routes/vendorRoutes";
 import { vendorWalletRouter } from "./routes/vendorWallet";
 import { walletRouter } from "./routes/wallet";
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -34,10 +36,6 @@ const io = new Server(server, {
     allowedHeaders: ["Content-Type", "Authorization"],
   },
 });
-
-
-
-const prisma = new PrismaClient();
 
 console.log(process.env.DATABASE_URL);
 

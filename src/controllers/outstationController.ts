@@ -2,14 +2,14 @@ import {
   LongDistanceServiceType,
   OutstationTripType,
   PaymentMode,
-  PrismaClient,
 } from "@prisma/client";
 import crypto from "crypto";
 import type { Request, Response } from "express";
 import Razorpay from "razorpay";
+import { prisma } from "../lib/prisma";
 import { io } from "../server";
 import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
-const prisma = new PrismaClient();
+
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID!,
   key_secret: process.env.RAZORPAY_SECRET!,
@@ -65,7 +65,7 @@ const HILL_STATION_RATES: Record<string, CarRate | TempoRate> = {
 export const getOutstationFareEstimate = async (
   req: Request,
   res: Response
-) => {
+): Promise<void> => {
   const {
     pickupLocation,
     dropLocation,
@@ -88,9 +88,10 @@ export const getOutstationFareEstimate = async (
 
     // Validate minimum distance for hill station (e.g., 10km)
     if (serviceType === "HILL_STATION" && distance < 5) {
-      return res.status(400).json({
+      res.status(400).json({
         error: "Hill station bookings require minimum 50km distance",
       });
+      return;
     }
 
     let fare = calculateOutstationFare(
@@ -163,7 +164,10 @@ function calculateOutstationFare(
   return Math.round(fare);
 }
 
-export const searchOutstationDrivers = async (req: Request, res: Response) => {
+export const searchOutstationDrivers = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   const {
     pickupLocation,
     dropLocation,
@@ -186,7 +190,8 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
   } = req.body;
 
   if (!req.user?.userId) {
-    return res.status(401).json({ error: "User not authenticated" });
+    res.status(401).json({ error: "User not authenticated" });
+    return;
   }
 
   try {
@@ -300,13 +305,17 @@ export const searchOutstationDrivers = async (req: Request, res: Response) => {
 };
 
 // Verify advance payment and make booking available to drivers
-export const verifyAdvancePayment = async (req: Request, res: Response) => {
+export const verifyAdvancePayment = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   const { bookingId } = req.params;
   const { razorpay_payment_id, razorpay_order_id, razorpay_signature } =
     req.body;
 
   if (!req.user?.userId) {
-    return res.status(401).json({ error: "User not authenticated" });
+    res.status(401).json({ error: "User not authenticated" });
+    return;
   }
 
   try {
@@ -318,7 +327,8 @@ export const verifyAdvancePayment = async (req: Request, res: Response) => {
       .digest("hex");
 
     if (expectedSignature !== razorpay_signature) {
-      return res.status(400).json({ error: "Invalid payment signature" });
+      res.status(400).json({ error: "Invalid payment signature" });
+      return;
     }
 
     const updatedBooking = await prisma.$transaction(async (prisma) => {
@@ -362,10 +372,14 @@ export const verifyAdvancePayment = async (req: Request, res: Response) => {
 };
 
 // Driver accepts booking
-export const acceptOutstationBooking = async (req: Request, res: Response) => {
+export const acceptOutstationBooking = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   const { bookingId } = req.params;
   if (!req.user?.userId || req.user.userType !== "DRIVER") {
-    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+    res.status(403).json({ error: "Unauthorized. Driver access only." });
+    return;
   }
 
   try {
@@ -386,10 +400,14 @@ export const acceptOutstationBooking = async (req: Request, res: Response) => {
 };
 
 // Driver starts journey to pickup location
-export const startDriverPickup = async (req: Request, res: Response) => {
+export const startDriverPickup = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   const { bookingId } = req.params;
   if (!req.user?.userId || req.user.userType !== "DRIVER") {
-    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+    res.status(403).json({ error: "Unauthorized. Driver access only." });
+    return;
   }
 
   try {
@@ -412,10 +430,14 @@ export const startDriverPickup = async (req: Request, res: Response) => {
 };
 
 // Driver arrived at pickup location
-export const driverArrived = async (req: Request, res: Response) => {
+export const driverArrived = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   const { bookingId } = req.params;
   if (!req.user?.userId || req.user.userType !== "DRIVER") {
-    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+    res.status(403).json({ error: "Unauthorized. Driver access only." });
+    return;
   }
 
   try {
@@ -440,11 +462,12 @@ export const driverArrived = async (req: Request, res: Response) => {
 };
 
 // Start ride with OTP verification
-export const startRide = async (req: Request, res: Response) => {
+export const startRide = async (req: Request, res: Response): Promise<void> => {
   const { bookingId } = req.params;
   const { otp } = req.body;
   if (!req.user?.userId || req.user.userType !== "DRIVER") {
-    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+    res.status(403).json({ error: "Unauthorized. Driver access only." });
+    return;
   }
 
   try {
@@ -457,11 +480,13 @@ export const startRide = async (req: Request, res: Response) => {
     });
 
     if (!booking) {
-      return res.status(404).json({ error: "Booking not found" });
+      res.status(404).json({ error: "Booking not found" });
+      return;
     }
 
     if (booking.otp !== otp) {
-      return res.status(400).json({ error: "Invalid OTP" });
+      res.status(400).json({ error: "Invalid OTP" });
+      return;
     }
 
     const updatedBooking = await prisma.longDistanceBooking.update({
@@ -480,12 +505,16 @@ export const startRide = async (req: Request, res: Response) => {
 };
 
 // Cancel booking
-export const cancelBooking = async (req: Request, res: Response) => {
+export const cancelBooking = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   const { bookingId } = req.params;
   const { reason } = req.body;
 
   if (!req.user?.userId || !req.user?.userType) {
-    return res.status(401).json({ error: "User not authenticated" });
+    res.status(401).json({ error: "User not authenticated" });
+    return;
   }
 
   try {
@@ -494,7 +523,8 @@ export const cancelBooking = async (req: Request, res: Response) => {
     });
 
     if (!booking) {
-      return res.status(404).json({ error: "Booking not found" });
+      res.status(404).json({ error: "Booking not found" });
+      return;
     }
 
     // Check if user is authorized to cancel
@@ -502,9 +532,8 @@ export const cancelBooking = async (req: Request, res: Response) => {
       booking.userId !== req.user.userId &&
       booking.driverId !== req.user.userId
     ) {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized to cancel this booking" });
+      res.status(403).json({ error: "Unauthorized to cancel this booking" });
+      return;
     }
 
     const DRIVER_CANCELLATION_FEE = 500; // Fixed fee when driver cancels
@@ -656,9 +685,13 @@ export const cancelBooking = async (req: Request, res: Response) => {
 };
 
 // Get available bookings for driver (only show ADVANCE_PAID bookings)
-export const getAvailableBookings = async (req: Request, res: Response) => {
+export const getAvailableBookings = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   if (!req.user?.userId || req.user.userType !== "DRIVER") {
-    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+    res.status(403).json({ error: "Unauthorized. Driver access only." });
+    return;
   }
 
   try {
@@ -667,7 +700,8 @@ export const getAvailableBookings = async (req: Request, res: Response) => {
     });
 
     if (!driverDetails) {
-      return res.status(404).json({ error: "Driver details not found" });
+      res.status(404).json({ error: "Driver details not found" });
+      return;
     }
 
     // Find bookings that are paid and match driver's vehicle category
@@ -738,10 +772,14 @@ export const getAvailableBookings = async (req: Request, res: Response) => {
   }
 };
 
-export const getBookingStatus = async (req: Request, res: Response) => {
+export const getBookingStatus = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   const { bookingId } = req.params;
   if (!req.user?.userId) {
-    return res.status(401).json({ error: "User not authenticated" });
+    res.status(401).json({ error: "User not authenticated" });
+    return;
   }
 
   try {
@@ -782,7 +820,8 @@ export const getBookingStatus = async (req: Request, res: Response) => {
     });
 
     if (!booking) {
-      return res.status(404).json({ error: "Booking not found" });
+      res.status(404).json({ error: "Booking not found" });
+      return;
     }
 
     // Calculate driver's earnings after commission
@@ -878,10 +917,14 @@ export const getBookingStatus = async (req: Request, res: Response) => {
 };
 
 // Driver initiates ride completion
-export const initiateRideCompletion = async (req: Request, res: Response) => {
+export const initiateRideCompletion = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   const { bookingId } = req.params;
   if (!req.user?.userId || req.user.userType !== "DRIVER") {
-    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+    res.status(403).json({ error: "Unauthorized. Driver access only." });
+    return;
   }
 
   try {
@@ -911,9 +954,8 @@ export const initiateRideCompletion = async (req: Request, res: Response) => {
     });
 
     if (!booking) {
-      return res
-        .status(404)
-        .json({ error: "Booking not found or invalid status" });
+      res.status(404).json({ error: "Booking not found or invalid status" });
+      return;
     }
 
     // Notify user through socket
@@ -939,7 +981,10 @@ export const initiateRideCompletion = async (req: Request, res: Response) => {
 };
 
 // User confirms ride completion
-export const confirmRideCompletion = async (req: Request, res: Response) => {
+export const confirmRideCompletion = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   const { bookingId } = req.params;
   const {
     paymentMode,
@@ -949,7 +994,8 @@ export const confirmRideCompletion = async (req: Request, res: Response) => {
   } = req.body;
 
   if (!req.user?.userId) {
-    return res.status(401).json({ error: "User not authenticated" });
+    res.status(401).json({ error: "User not authenticated" });
+    return;
   }
 
   try {
@@ -976,16 +1022,16 @@ export const confirmRideCompletion = async (req: Request, res: Response) => {
     });
 
     if (!booking) {
-      return res
-        .status(404)
-        .json({ error: "Booking not found or invalid status" });
+      res.status(404).json({ error: "Booking not found or invalid status" });
+      return;
     }
 
     // Handle Razorpay payment
     if (paymentMode === "RAZORPAY") {
       // Verify the payment signature
       if (!razorpay_payment_id || !razorpay_order_id || !razorpay_signature) {
-        return res.status(400).json({ error: "Missing payment details" });
+        res.status(400).json({ error: "Missing payment details" });
+        return;
       }
 
       const body = razorpay_order_id + "|" + razorpay_payment_id;
@@ -995,13 +1041,15 @@ export const confirmRideCompletion = async (req: Request, res: Response) => {
         .digest("hex");
 
       if (expectedSignature !== razorpay_signature) {
-        return res.status(400).json({ error: "Invalid payment signature" });
+        res.status(400).json({ error: "Invalid payment signature" });
+        return;
       }
 
       // Verify payment amount with Razorpay
       const payment = await razorpay.payments.fetch(razorpay_payment_id);
       if (payment.amount !== Math.round(booking.remainingAmount * 100)) {
-        return res.status(400).json({ error: "Payment amount mismatch" });
+        res.status(400).json({ error: "Payment amount mismatch" });
+        return;
       }
     }
 
@@ -1119,11 +1167,15 @@ export const confirmRideCompletion = async (req: Request, res: Response) => {
 };
 
 // Create Razorpay order for final payment
-export const createFinalPaymentOrder = async (req: Request, res: Response) => {
+export const createFinalPaymentOrder = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   const { bookingId } = req.params;
 
   if (!req.user?.userId) {
-    return res.status(401).json({ error: "User not authenticated" });
+    res.status(401).json({ error: "User not authenticated" });
+    return;
   }
 
   try {
@@ -1136,9 +1188,8 @@ export const createFinalPaymentOrder = async (req: Request, res: Response) => {
     });
 
     if (!booking) {
-      return res
-        .status(404)
-        .json({ error: "Booking not found or invalid status" });
+      res.status(404).json({ error: "Booking not found or invalid status" });
+      return;
     }
 
     // Create a shorter receipt ID (using last 8 characters of bookingId)
@@ -1172,9 +1223,13 @@ export const createFinalPaymentOrder = async (req: Request, res: Response) => {
 };
 
 // Get accepted bookings for driver
-export const getAcceptedBookings = async (req: Request, res: Response) => {
+export const getAcceptedBookings = async (
+  req: Request,
+  res: Response
+): Promise<void> => {
   if (!req.user?.userId || req.user.userType !== "DRIVER") {
-    return res.status(403).json({ error: "Unauthorized. Driver access only." });
+    res.status(403).json({ error: "Unauthorized. Driver access only." });
+    return;
   }
 
   try {
