@@ -1,9 +1,9 @@
-import type { Request, Response } from "express";
-import { PrismaClient, PaymentMode } from "@prisma/client";
-import Razorpay from "razorpay";
+import { PaymentMode, PrismaClient } from "@prisma/client";
 import crypto from "crypto";
-import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
+import type { Request, Response } from "express";
+import Razorpay from "razorpay";
 import { io } from "../server";
+import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
 
 const prisma = new PrismaClient();
 const razorpay = new Razorpay({
@@ -228,6 +228,18 @@ export const acceptHillStationBooking = async (req: Request, res: Response) => {
   }
 
   try {
+    // Check if driver has paid registration fee
+    const driverDetails = await prisma.driverDetails.findUnique({
+      where: { userId: req.user.userId },
+    });
+
+    if (!driverDetails || !driverDetails.registrationFeePaid) {
+      return res.status(403).json({
+        error:
+          "Registration fee not paid. Please pay the registration fee to accept bookings.",
+      });
+    }
+
     const booking = await prisma.longDistanceBooking.update({
       where: { id: bookingId },
       data: {

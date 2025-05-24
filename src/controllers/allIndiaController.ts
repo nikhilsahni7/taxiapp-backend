@@ -374,6 +374,18 @@ export const acceptAllIndiaBooking = async (req: Request, res: Response) => {
   }
 
   try {
+    // Check if driver has paid registration fee
+    const driverDetails = await prisma.driverDetails.findUnique({
+      where: { userId: req.user.userId },
+    });
+
+    if (!driverDetails || !driverDetails.registrationFeePaid) {
+      return res.status(403).json({
+        error:
+          "Registration fee not paid. Please pay the registration fee to accept bookings.",
+      });
+    }
+
     const result = await prisma.longDistanceBooking.updateMany({
       where: {
         id: bookingId,
