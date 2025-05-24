@@ -717,12 +717,12 @@ export const getAvailableBookings = async (
       return;
     }
 
-    // Find bookings that are paid and match driver's vehicle category
-    const availableBookings = await prisma.longDistanceBooking.findMany({
+    // Fetch all advance paid bookings not yet accepted by a driver
+    const allAdvancePaidBookings = await prisma.longDistanceBooking.findMany({
       where: {
         status: "ADVANCE_PAID", // Only show paid bookings
-        vehicleCategory: driverDetails.vehicleCategory ?? "",
         driverId: null, // Not yet accepted by any driver
+        // Vehicle category filter will be applied in code
       },
       include: {
         user: {
@@ -737,8 +737,39 @@ export const getAvailableBookings = async (
       },
     });
 
+    const driverVehicleCategory = driverDetails.vehicleCategory?.toLowerCase();
+    let filteredBookings = allAdvancePaidBookings;
+
+    if (driverVehicleCategory) {
+      const categoryHierarchy: Record<string, string[]> = {
+        // Cars: Driver category can accept bookings for these categories
+        mini: ["mini"],
+        sedan: ["mini", "sedan"],
+        ertiga: ["mini", "sedan", "ertiga"],
+        innova: ["mini", "sedan", "ertiga", "innova"],
+        // Tempos: Driver category can accept bookings for these categories
+        tempo_12: ["tempo_12"],
+        tempo_16: ["tempo_12", "tempo_16"],
+        tempo_20: ["tempo_12", "tempo_16", "tempo_20"],
+        tempo_26: ["tempo_12", "tempo_16", "tempo_20", "tempo_26"],
+      };
+
+      const allowedBookingCategories =
+        categoryHierarchy[driverVehicleCategory] || [];
+
+      filteredBookings = allAdvancePaidBookings.filter((booking) => {
+        const bookingCategory = booking.vehicleCategory?.toLowerCase();
+        return (
+          bookingCategory && allowedBookingCategories.includes(bookingCategory)
+        );
+      });
+    } else {
+      // If driver has no vehicle category, they see no category-specific bookings
+      filteredBookings = [];
+    }
+
     // Format response
-    const formattedBookings = availableBookings.map((booking) => ({
+    const formattedBookings = filteredBookings.map((booking) => ({
       id: booking.id,
       serviceType: booking.serviceType,
       tripType: booking.tripType,
