@@ -541,7 +541,7 @@ async function findAndRequestDrivers(ride: any) {
                             name: true,
                             phone: true,
                             selfieUrl: true,
-                        
+
                             driverDetails: {
                               select: {
                                 vehicleName: true,
@@ -1034,7 +1034,11 @@ export const createRide = async (req: Request, res: Response) => {
         dropLocation: dropLocation, // Add drop location back
       };
       console.log(`[createRide] Local ride data prepared:`, rideData);
+
+
     }
+
+
 
     // 5. Create the Ride record (Removed fee reset logic)
     console.log(`[createRide] Creating ride record in database...`); // Simplified log

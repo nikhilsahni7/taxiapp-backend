@@ -13,6 +13,11 @@ import {
 } from "../controllers/driverController";
 import { verifyToken } from "../middlewares/auth";
 import { io } from "../server";
+import {
+  checkInsufficientBalance,
+  checkWalletBalanceStatus,
+  updateInsufficientBalanceStatus,
+} from "../services/driver-wallet.service";
 
 const router = express.Router();
 const prisma = new PrismaClient();
@@ -451,6 +456,74 @@ router.put(
 router.get(
   "/:driverId/approval-status",
   getDriverApprovalStatus as RouteHandler
+);
+
+// Wallet-related routes
+router.get(
+  "/:driverId/wallet/status",
+  verifyToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { driverId } = req.params;
+
+      const walletStatus = await checkWalletBalanceStatus(driverId);
+
+      res.json(walletStatus);
+    } catch (error) {
+      console.error("Error checking wallet status:", error);
+      res.status(500).json({
+        error: "Failed to check wallet status",
+        details: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
+);
+
+// Legacy route - kept for backward compatibility
+router.get(
+  "/:driverId/wallet/balance-status",
+  verifyToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { driverId } = req.params;
+
+      const hasInsufficientBalance = await checkInsufficientBalance(driverId);
+
+      res.json({ hasInsufficientBalance });
+    } catch (error) {
+      console.error("Error checking wallet balance status:", error);
+      res.status(500).json({
+        error: "Failed to check wallet balance status",
+        details: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
+);
+
+router.post(
+  "/:driverId/wallet/update-balance-status",
+  verifyToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { driverId } = req.params;
+
+      await updateInsufficientBalanceStatus(driverId);
+
+      // After updating, get the latest status
+      const walletStatus = await checkWalletBalanceStatus(driverId);
+
+      res.json({
+        message: "Wallet balance status updated successfully",
+        status: walletStatus,
+      });
+    } catch (error) {
+      console.error("Error updating wallet balance status:", error);
+      res.status(500).json({
+        error: "Failed to update wallet balance status",
+        details: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
 );
 
 export { router as driverRouter };
