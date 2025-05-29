@@ -11,6 +11,7 @@ import multer from "multer";
 import { uploadImage } from "../config/cloudinary";
 import { getUserOutstandingFee } from "../controllers/userController";
 import { verifyToken } from "../middlewares/auth";
+import { deleteUserWithPrisma } from "../scripts/delete-user";
 
 const router = express.Router();
 
@@ -18,6 +19,60 @@ const prisma = new PrismaClient();
 
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
+
+// Route to delete users by phone numbers
+router.post(
+  "/delete-by-phones",
+  verifyToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      if (!req.user || req.user.userType !== "ADMIN") {
+        res.status(403).json({ error: "Forbidden: Admin access required" });
+        return;
+      }
+
+      const { phoneNumbers } = req.body;
+
+      if (!Array.isArray(phoneNumbers) || phoneNumbers.length === 0) {
+        res.status(400).json({
+          error: "Invalid input: phoneNumbers must be a non-empty array.",
+        });
+        return;
+      }
+
+      const results = [];
+      for (const phone of phoneNumbers) {
+        if (typeof phone !== "string") {
+          results.push({
+            phone,
+            success: false,
+            message: "Invalid phone number format.",
+          });
+          continue;
+        }
+
+        const user = await prisma.user.findUnique({
+          where: { phone },
+        });
+
+        if (!user) {
+          results.push({ phone, success: false, message: "User not found." });
+          continue;
+        }
+
+        const deletionResult = await deleteUserWithPrisma(prisma, user.id);
+        results.push({ phone, ...deletionResult });
+      }
+
+      res.status(200).json({ results });
+    } catch (error) {
+      console.error("Error deleting users by phone numbers:", error);
+      res
+        .status(500)
+        .json({ error: "Failed to delete users by phone numbers" });
+    }
+  }
+);
 
 //get  all user details
 

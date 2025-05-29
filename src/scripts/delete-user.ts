@@ -1,15 +1,15 @@
 import { PrismaClient } from "@prisma/client";
-import readline from "readline";
-
-const prisma = new PrismaClient();
 
 // Create readline interface for command line input
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
+// const rl = readline.createInterface({
+// input: process.stdin,
+// output: process.stdout,
+// });
 
-async function deleteUser(userId: string): Promise<void> {
+export async function deleteUserWithPrisma(
+  prisma: PrismaClient,
+  userId: string
+): Promise<{ success: boolean; message: string; error?: any }> {
   console.log(`Starting deletion process for user ${userId}...`);
 
   try {
@@ -25,7 +25,7 @@ async function deleteUser(userId: string): Promise<void> {
 
     if (!user) {
       console.error(`User with ID ${userId} not found.`);
-      return;
+      return { success: false, message: `User with ID ${userId} not found.` };
     }
 
     console.log(
@@ -158,21 +158,21 @@ async function deleteUser(userId: string): Promise<void> {
 
         // 11. Delete type-specific details
         if (user.userType === "DRIVER" && user.driverDetails) {
-          const driverDetailsDeleted = await tx.driverDetails.delete({
+          await tx.driverDetails.delete({
             where: { id: user.driverDetails.id },
           });
           console.log(`Deleted driver details`);
         }
 
         if (user.userType === "VENDOR" && user.vendorDetails) {
-          const vendorDetailsDeleted = await tx.vendorDetails.delete({
+          await tx.vendorDetails.delete({
             where: { id: user.vendorDetails.id },
           });
           console.log(`Deleted vendor details`);
         }
 
         if (user.userType === "USER" && user.userDetails) {
-          const userDetailsDeleted = await tx.userDetails.delete({
+          await tx.userDetails.delete({
             where: { id: user.userDetails.id },
           });
           console.log(`Deleted user details`);
@@ -191,17 +191,21 @@ async function deleteUser(userId: string): Promise<void> {
         timeout: 30000, // Increase timeout to 30 seconds
       }
     );
+    return { success: true, message: `Successfully deleted user ${userId}` };
   } catch (error) {
     console.error("Error deleting user:", error);
 
     // If transaction fails, try alternative approach with non-transactional operations
     console.log("Attempting alternative deletion approach...");
-    await deleteUserNonTransactional(userId);
+    return await deleteUserNonTransactionalWithPrisma(prisma, userId);
   }
 }
 
 // Non-transactional fallback function that deletes records in the correct order
-async function deleteUserNonTransactional(userId: string): Promise<void> {
+export async function deleteUserNonTransactionalWithPrisma(
+  prisma: PrismaClient,
+  userId: string
+): Promise<{ success: boolean; message: string; error?: any }> {
   try {
     // Get user details first
     const user = await prisma.user.findUnique({
@@ -215,7 +219,7 @@ async function deleteUserNonTransactional(userId: string): Promise<void> {
 
     if (!user) {
       console.error(`User with ID ${userId} not found.`);
-      return;
+      return { success: false, message: `User with ID ${userId} not found.` };
     }
 
     console.log("Starting non-transactional deletion process...");
@@ -349,42 +353,52 @@ async function deleteUserNonTransactional(userId: string): Promise<void> {
     console.log(
       `Successfully deleted user: ${deletedUser.name || "Unnamed"} (${deletedUser.phone})`
     );
+    return {
+      success: true,
+      message: `Successfully deleted user ${userId} (non-transactional)`,
+    };
   } catch (error) {
     console.error("Error in non-transactional deletion:", error);
+    return {
+      success: false,
+      message: `Error deleting user ${userId} (non-transactional)`,
+      error,
+    };
   }
 }
 
-function promptForUserId(): Promise<string> {
-  return new Promise((resolve) => {
-    rl.question("Enter the user ID to delete: ", (userId) => {
-      resolve(userId.trim());
-    });
-  });
-}
+// function promptForUserId(): Promise<string> {
+//   return new Promise((resolve) => {
+//     rl.question("Enter the user ID to delete: ", (userId) => {
+//       resolve(userId.trim());
+//     });
+//   });
+// }
 
-async function main() {
-  console.log("===== User Deletion Tool =====");
-  console.log("WARNING: This will delete the user and ALL associated records!");
-  console.log("This action cannot be undone.");
+// async function main() {
+//   const prisma = new PrismaClient();
+//   console.log("===== User Deletion Tool ======");
+//   console.log("WARNING: This will delete the user and ALL associated records!");
+//   console.log("This action cannot be undone.");
 
-  const userId = await promptForUserId();
+//   const userId = await promptForUserId();
 
-  rl.question(
-    `Are you sure you want to delete user ${userId}? (yes/no): `,
-    async (answer) => {
-      if (answer.toLowerCase() === "yes") {
-        await deleteUser(userId);
-      } else {
-        console.log("Deletion cancelled.");
-      }
+//   rl.question(
+//     `Are you sure you want to delete user ${userId}? (yes/no): `,
+//     async (answer) => {
+//       if (answer.toLowerCase() === "yes") {
+//         await deleteUserWithPrisma(prisma, userId);
+//       } else {
+//         console.log("Deletion cancelled.");
+//       }
 
-      rl.close();
-      await prisma.$disconnect();
-    }
-  );
-}
+//       rl.close();
+//       await prisma.$disconnect();
+//     }
+//   );
+// }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// main().catch((e) => {
+//   console.error(e);
+//   process.exit(1);
+// });
