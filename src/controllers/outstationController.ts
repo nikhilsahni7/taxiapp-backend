@@ -39,27 +39,27 @@ type OutstationCarRate = {
 
 // Define the rate objects with proper typing
 const VEHICLE_RATES: Record<string, OutstationCarRate | TempoRate> = {
-  mini: { base: 11, short: 14 },
-  sedan: { base: 14, short: 19 },
-  ertiga: { base: 18, short: 24 },
-  innova: { base: 24, short: 27 },
-  tempo_12: { fixed: 14000, extra: 23 },
-  tempo_16: { fixed: 16000, extra: 26 },
-  tempo_20: { fixed: 18000, extra: 30 },
-  tempo_26: { fixed: 20000, extra: 35 },
+  mini: { base: 10, short: 14 },
+  sedan: { base: 12, short: 19 },
+  ertiga: { base: 15, short: 24 },
+  innova: { base: 18, short: 27 },
+  tempo_12: { fixed: 16000, extra: 23 },
+  tempo_16: { fixed: 18000, extra: 26 },
+  tempo_20: { fixed: 20000, extra: 30 },
+  tempo_26: { fixed: 22000, extra: 35 },
 };
 
 const HILL_STATION_RATES: Record<string, CarRate | TempoRate> = {
   // Tempo rates
-  tempo_12: { fixed: 14000, extra: 23 },
-  tempo_16: { fixed: 16000, extra: 26 },
-  tempo_20: { fixed: 18000, extra: 30 },
-  tempo_26: { fixed: 20000, extra: 35 },
+  tempo_12: { fixed: 16000, extra: 23 },
+  tempo_16: { fixed: 18000, extra: 26 },
+  tempo_20: { fixed: 20000, extra: 30 },
+  tempo_26: { fixed: 22000, extra: 35 },
   // Car rates
-  mini: { base: 20 },
-  sedan: { base: 27 },
-  ertiga: { base: 30 },
-  innova: { base: 35 },
+  mini: { base: 15 },
+  sedan: { base: 17 },
+  ertiga: { base: 22 },
+  innova: { base: 28 },
 };
 
 export const getOutstationFareEstimate = async (

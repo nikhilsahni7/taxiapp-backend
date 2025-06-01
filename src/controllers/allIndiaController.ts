@@ -20,15 +20,15 @@ interface Location {
 
 // Updated base rates including tempo travellers
 const ALL_INDIA_RATES = {
-  mini: { baseFare: 2750, extraKm: 14 },
+  mini: { baseFare: 2800, extraKm: 14 },
   sedan: { baseFare: 3500, extraKm: 16 },
-  ertiga: { baseFare: 4500, extraKm: 16 },
+  ertiga: { baseFare: 5200, extraKm: 16 },
   innova: { baseFare: 6000, extraKm: 18 },
   // Adding tempo traveller categories
-  tempo_12: { baseFare: 7000, extraKm: 20 },
-  tempo_16: { baseFare: 8000, extraKm: 22 },
-  tempo_20: { baseFare: 9000, extraKm: 24 },
-  tempo_26: { baseFare: 10000, extraKm: 26 },
+  tempo_12: { baseFare: 8000, extraKm: 20 },
+  tempo_16: { baseFare: 9000, extraKm: 22 },
+  tempo_20: { baseFare: 10000, extraKm: 24 },
+  tempo_26: { baseFare: 11000, extraKm: 26 },
 };
 
 // Helper function to get vehicle capacity

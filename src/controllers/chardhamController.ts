@@ -19,14 +19,14 @@ interface Location {
 
 // Chardham Yatra rates based on vehicle type
 const CHARDHAM_RATES = {
-  mini: { perDayRate: 3200, perKmRate: 11 },
+  mini: { perDayRate: 2800, perKmRate: 11 },
   sedan: { perDayRate: 3500, perKmRate: 14 },
-  ertiga: { perDayRate: 4000, perKmRate: 18 },
-  innova: { perDayRate: 5600, perKmRate: 24 },
-  tempo_12: { perDayRate: 7500, perKmRate: 23 },
-  tempo_16: { perDayRate: 8000, perKmRate: 26 },
-  tempo_20: { perDayRate: 9000, perKmRate: 30 },
-  tempo_26: { perDayRate: 10000, perKmRate: 35 },
+  ertiga: { perDayRate: 5200, perKmRate: 18 },
+  innova: { perDayRate: 6000, perKmRate: 24 },
+  tempo_12: { perDayRate: 8000, perKmRate: 23 },
+  tempo_16: { perDayRate: 9000, perKmRate: 26 },
+  tempo_20: { perDayRate: 10000, perKmRate: 30 },
+  tempo_26: { perDayRate: 11000, perKmRate: 35 },
 };
 
 // Days required based on number of dhams and starting point
