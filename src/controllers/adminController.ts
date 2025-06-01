@@ -380,7 +380,11 @@ export const getPendingWithdrawals = async (
         status: "PENDING",
       },
       include: {
-        sender: true,
+        sender: {
+          include: {
+            wallet: true,
+          },
+        },
       },
     });
 
@@ -410,10 +414,21 @@ export const handleWithdrawal = async (
       }
 
       if (action === "APPROVE") {
-        return await prisma.transaction.update({
+        // First update the transaction status
+        const updatedTransaction = await prisma.transaction.update({
           where: { id: transactionId },
           data: { status: TransactionStatus.COMPLETED },
         });
+
+        // Then reduce the wallet balance
+        await prisma.wallet.update({
+          where: { userId: withdrawal.senderId! },
+          data: {
+            balance: { decrement: withdrawal.amount },
+          },
+        });
+
+        return updatedTransaction;
       } else {
         // Reject: Refund the amount
         const updated = await prisma.transaction.update({
