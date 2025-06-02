@@ -232,8 +232,8 @@ export const createAllIndiaBooking = async (req: Request, res: Response) => {
     const extraDistance = Math.max(0, roundTripDistance - allowedDistance);
     const extraDistanceFare = extraDistance * rates.extraKm;
     const totalFare = baseFare + extraDistanceFare;
-    const advanceAmount = totalFare * 0.25;
-    const remainingAmount = totalFare * 0.75;
+    const advanceAmount = totalFare * 0.12;
+    const remainingAmount = totalFare * 0.88;
 
     // Create booking with PENDING status
     const booking = await prisma.longDistanceBooking.create({
