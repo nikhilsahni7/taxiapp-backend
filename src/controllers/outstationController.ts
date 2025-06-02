@@ -1149,7 +1149,7 @@ export const confirmRideCompletion = async (
           },
         });
 
-        // 3. Update driver's wallet with remaining amount (88%)
+        // 3. Update driver's wallet with remaining amount (88%) only for online payments
         await prisma.wallet.upsert({
           where: {
             userId: booking.driverId!,
