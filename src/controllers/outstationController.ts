@@ -176,7 +176,7 @@ export const searchOutstationDrivers = async (
     startDate,
     endDate,
     pickupTime,
-    serviceType = "OUTSTATION", // Default to outstation if not specified
+    serviceType = "OUTSTATION",
   }: {
     pickupLocation: Location;
     dropLocation: Location;
@@ -207,7 +207,7 @@ export const searchOutstationDrivers = async (
       serviceType
     );
 
-    // Calculate app commission (12% of total fare)
+    // Calculate platform commission (12% of total fare)
     const commission = Math.round(fare * 0.12);
     const driverEarnings = fare - commission;
 
@@ -216,8 +216,6 @@ export const searchOutstationDrivers = async (
     const startDateTime = new Date(startDate);
     startDateTime.setHours(pickupHours, pickupMinutes, 0, 0);
 
-    // For one-way trips, end date is same as start date
-    // For round trips, use the provided end date
     const endDateTime =
       tripType === "ROUND_TRIP" && endDate
         ? new Date(endDate)
@@ -227,7 +225,6 @@ export const searchOutstationDrivers = async (
       endDateTime.setHours(pickupHours, pickupMinutes, 0, 0);
     }
 
-    // Calculate total days for the trip
     const totalDays =
       tripType === "ROUND_TRIP" && endDate
         ? Math.ceil(
@@ -240,7 +237,7 @@ export const searchOutstationDrivers = async (
     const booking = await prisma.longDistanceBooking.create({
       data: {
         userId: req.user.userId,
-        serviceType, // Use the provided service type
+        serviceType,
         pickupLocation: pickupLocation.address,
         pickupLat: pickupLocation.lat,
         pickupLng: pickupLocation.lng,
@@ -259,14 +256,14 @@ export const searchOutstationDrivers = async (
         baseAmount: fare,
         taxAmount: 0,
         totalAmount: fare,
-        advanceAmount: fare * 0.25,
-        remainingAmount: fare * 0.75,
+        advanceAmount: commission, // 12% as advance
+        remainingAmount: fare - commission, // 88% remaining
         commission: commission, // Store the commission amount
         status: "PENDING",
       },
     });
 
-    // Create Razorpay order for advance payment
+    // Create Razorpay order for advance payment (12%)
     const order = await razorpay.orders.create({
       amount: Math.round(booking.advanceAmount * 100),
       currency: "INR",
@@ -566,121 +563,127 @@ export const cancelBooking = async (
       });
 
       const isUserCancelling = req.user!.userType === "USER";
+      const isDriverArrived =
+        booking.status === "DRIVER_ARRIVED" ||
+        booking.status === "STARTED" ||
+        booking.status === "PAYMENT_PENDING";
 
       if (isUserCancelling) {
-        // USER CANCELLATION LOGIC
-        const totalFare = booking.totalAmount;
-        const advanceAmount = booking.advanceAmount; // 25% of total fare
-        const cancellationFee = totalFare * USER_CANCELLATION_PERCENTAGE; // 10% of total fare
-        const refundAmount = advanceAmount - cancellationFee; // 15% of total fare to be refunded
+        if (isDriverArrived) {
+          // USER CANCELLATION AFTER DRIVER ARRIVED
+          const totalFare = booking.totalAmount;
+          const advanceAmount = booking.advanceAmount; // 12% of total fare
+          const cancellationFee = totalFare * USER_CANCELLATION_PERCENTAGE; // 10% of total fare
+          const refundAmount = advanceAmount - cancellationFee; // 2% refund
 
-        // Update user's wallet with refund
-        await tx.wallet.upsert({
-          where: { userId: booking.userId },
-          create: { userId: booking.userId, balance: refundAmount },
-          update: { balance: { increment: refundAmount } },
-        });
-
-        // Create transaction record for user refund
-        await tx.longDistanceTransaction.create({
-          data: {
-            bookingId,
-            amount: refundAmount,
-            type: "REFUND",
-            status: "COMPLETED",
-            senderId: null,
-            receiverId: booking.userId,
-            description: `Refund for booking cancellation (15% of advance payment)`,
-            metadata: {
-              transactionType: "CREDIT",
-              totalFare,
-              advanceAmount,
-              cancellationFee,
-              refundAmount,
-              cancelledBy: "USER",
-            },
-          },
-        });
-
-        // If driver is assigned, compensate them
-        if (booking.driverId) {
+          // Update user's wallet with refund (2%)
           await tx.wallet.upsert({
-            where: { userId: booking.driverId },
-            create: {
-              userId: booking.driverId,
-              balance: DRIVER_CANCELLATION_FEE,
-            },
-            update: { balance: { increment: DRIVER_CANCELLATION_FEE } },
+            where: { userId: booking.userId },
+            create: { userId: booking.userId, balance: refundAmount },
+            update: { balance: { increment: refundAmount } },
           });
 
-          // Create transaction record for driver compensation
+          // Create transaction record for user refund
           await tx.longDistanceTransaction.create({
             data: {
               bookingId,
-              amount: DRIVER_CANCELLATION_FEE,
-              type: "COMPENSATION",
+              amount: refundAmount,
+              type: "REFUND",
               status: "COMPLETED",
               senderId: null,
-              receiverId: booking.driverId,
-              description: `Compensation for booking cancellation by user`,
+              receiverId: booking.userId,
+              description: `Refund for booking cancellation (2% of advance payment)`,
               metadata: {
                 transactionType: "CREDIT",
-                compensationAmount: DRIVER_CANCELLATION_FEE,
+                totalFare,
+                advanceAmount,
+                cancellationFee,
+                refundAmount,
+                cancelledBy: "USER",
+              },
+            },
+          });
+        } else {
+          // USER CANCELLATION BEFORE DRIVER ARRIVED - FULL REFUND
+          // Update user's wallet with full refund
+          await tx.wallet.upsert({
+            where: { userId: booking.userId },
+            create: { userId: booking.userId, balance: booking.advanceAmount },
+            update: { balance: { increment: booking.advanceAmount } },
+          });
+
+          // Create transaction record for full refund
+          await tx.longDistanceTransaction.create({
+            data: {
+              bookingId,
+              amount: booking.advanceAmount,
+              type: "REFUND",
+              status: "COMPLETED",
+              senderId: null,
+              receiverId: booking.userId,
+              description: `Full refund for booking cancellation before driver arrival`,
+              metadata: {
+                transactionType: "CREDIT",
+                totalFare: booking.totalAmount,
+                refundAmount: booking.advanceAmount,
                 cancelledBy: "USER",
               },
             },
           });
         }
       } else {
-        // DRIVER CANCELLATION LOGIC
-        // Deduct cancellation fee from driver's wallet
-        await tx.wallet.upsert({
-          where: { userId: booking.driverId! },
-          create: {
-            userId: booking.driverId!,
-            balance: -DRIVER_CANCELLATION_FEE,
-          },
-          update: { balance: { decrement: DRIVER_CANCELLATION_FEE } },
-        });
-
-        // Create transaction record for driver penalty
-        await tx.longDistanceTransaction.create({
-          data: {
-            bookingId,
-            amount: DRIVER_CANCELLATION_FEE,
-            type: "PENALTY",
-            status: "COMPLETED",
-            senderId: booking.driverId!,
-            receiverId: null,
-            description: `Penalty for booking cancellation by driver`,
-            metadata: {
-              transactionType: "DEBIT",
-              penaltyAmount: DRIVER_CANCELLATION_FEE,
-              cancelledBy: "DRIVER",
+        // DRIVER CANCELLATION
+        if (isDriverArrived) {
+          // DRIVER CANCELLATION AFTER ARRIVAL
+          // Deduct cancellation fee from driver's wallet
+          await tx.wallet.upsert({
+            where: { userId: booking.driverId! },
+            create: {
+              userId: booking.driverId!,
+              balance: -DRIVER_CANCELLATION_FEE,
             },
-          },
-        });
+            update: { balance: { decrement: DRIVER_CANCELLATION_FEE } },
+          });
 
-        // Credit cancellation fee to user's wallet
+          // Create transaction record for driver penalty
+          await tx.longDistanceTransaction.create({
+            data: {
+              bookingId,
+              amount: DRIVER_CANCELLATION_FEE,
+              type: "PENALTY",
+              status: "COMPLETED",
+              senderId: booking.driverId!,
+              receiverId: null,
+              description: `Penalty for booking cancellation by driver after arrival`,
+              metadata: {
+                transactionType: "DEBIT",
+                penaltyAmount: DRIVER_CANCELLATION_FEE,
+                cancelledBy: "DRIVER",
+              },
+            },
+          });
+        }
+
+        // Refund full advance to user for driver cancellation
         await tx.wallet.upsert({
           where: { userId: booking.userId },
-          create: { userId: booking.userId, balance: DRIVER_CANCELLATION_FEE },
-          update: { balance: { increment: DRIVER_CANCELLATION_FEE } },
+          create: { userId: booking.userId, balance: booking.advanceAmount },
+          update: { balance: { increment: booking.advanceAmount } },
         });
 
-        // Create transaction record for user compensation
+        // Create transaction record for user refund
         await tx.longDistanceTransaction.create({
           data: {
             bookingId,
-            amount: DRIVER_CANCELLATION_FEE,
-            type: "COMPENSATION",
+            amount: booking.advanceAmount,
+            type: "REFUND",
             status: "COMPLETED",
             senderId: null,
             receiverId: booking.userId,
-            description: `Compensation for booking cancellation by driver`,
+            description: `Full refund for booking cancellation by driver`,
             metadata: {
               transactionType: "CREDIT",
-              compensationAmount: DRIVER_CANCELLATION_FEE,
+              refundAmount: booking.advanceAmount,
               cancelledBy: "DRIVER",
             },
           },
@@ -1125,52 +1128,65 @@ export const confirmRideCompletion = async (
         },
       });
 
-      // 2. Create transaction record with dynamic service type
-      await prisma.longDistanceTransaction.create({
-        data: {
-          bookingId,
-          amount: booking.remainingAmount,
-          type: "BOOKING_FINAL",
-          status: "COMPLETED",
-          senderId: booking.userId,
-          receiverId: booking.driverId!,
-          razorpayOrderId: razorpay_order_id || null,
-          razorpayPaymentId: razorpay_payment_id || null,
-          description: `Final payment for ${booking.serviceType.toLowerCase()} ride ${bookingId}`,
-          metadata:
-            paymentMode === "CASH"
-              ? { paymentType: "CASH", collectedBy: "DRIVER" }
-              : {
-                  paymentType: "RAZORPAY",
-                  orderId: razorpay_order_id,
-                  paymentId: razorpay_payment_id,
-                },
-        },
-      });
-
-      // 3. Update driver's wallet
-      await prisma.wallet.upsert({
-        where: {
-          userId: booking.driverId!,
-        },
-        create: {
-          userId: booking.driverId!,
-          balance: booking.remainingAmount,
-        },
-        update: {
-          balance: {
-            increment: booking.remainingAmount,
+      if (paymentMode === "RAZORPAY") {
+        // 2. Create transaction record for online payment
+        await prisma.longDistanceTransaction.create({
+          data: {
+            bookingId,
+            amount: booking.remainingAmount,
+            type: "BOOKING_FINAL",
+            status: "COMPLETED",
+            senderId: booking.userId,
+            receiverId: booking.driverId!,
+            razorpayOrderId: razorpay_order_id,
+            razorpayPaymentId: razorpay_payment_id,
+            description: `Final payment for ${booking.serviceType.toLowerCase()} ride ${bookingId}`,
+            metadata: {
+              paymentType: "RAZORPAY",
+              orderId: razorpay_order_id,
+              paymentId: razorpay_payment_id,
+            },
           },
-        },
-      });
+        });
+
+        // 3. Update driver's wallet with remaining amount (88%)
+        await prisma.wallet.upsert({
+          where: {
+            userId: booking.driverId!,
+          },
+          create: {
+            userId: booking.driverId!,
+            balance: booking.remainingAmount,
+          },
+          update: {
+            balance: {
+              increment: booking.remainingAmount,
+            },
+          },
+        });
+      } else {
+        // For cash payments, just create a transaction record
+        await prisma.longDistanceTransaction.create({
+          data: {
+            bookingId,
+            amount: booking.remainingAmount,
+            type: "BOOKING_FINAL",
+            status: "COMPLETED",
+            senderId: booking.userId,
+            receiverId: booking.driverId!,
+            description: `Final cash payment for ${booking.serviceType.toLowerCase()} ride ${bookingId}`,
+            metadata: {
+              paymentType: "CASH",
+              collectedBy: "DRIVER",
+            },
+          },
+        });
+      }
 
       return completed;
     });
 
     // Notify both parties through socket
-
-    // Notify driver
-
     io.to(booking.driverId!).emit("ride_completed", {
       bookingId,
       paymentMode,
@@ -1182,7 +1198,6 @@ export const confirmRideCompletion = async (
       },
     });
 
-    // Notify user
     io.to(booking.userId).emit("ride_completed", {
       bookingId,
       paymentMode,
