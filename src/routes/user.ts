@@ -962,7 +962,7 @@ router.delete("/public/delete/:userId", async (req: Request, res: Response) => {
 
 // Update FCM token for current user
 router.put(
-  "/fcm-token",
+  "/fcm-token/update",
   verifyToken,
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -1125,7 +1125,7 @@ router.get(
 
 // Remove FCM token (for logout)
 router.delete(
-  "/fcm-token",
+  "/fcm-token/remove",
   verifyToken,
   async (req: Request, res: Response): Promise<void> => {
     try {
