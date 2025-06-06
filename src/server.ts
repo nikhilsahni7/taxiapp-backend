@@ -20,6 +20,7 @@ import { hillStationRouter } from "./routes/hillStationRoutes";
 import { outstationRouter } from "./routes/outstationRoutes";
 import { paymentRouter } from "./routes/payment";
 import { rideRouter } from "./routes/ride";
+import testRoutes from "./routes/testRoutes";
 import { userRouter } from "./routes/user";
 import { userWalletRouter } from "./routes/userWallet";
 import { vendorRouter } from "./routes/vendorRoutes";
@@ -70,6 +71,7 @@ app.use("/api/vendor", vendorRouter);
 app.use("/api/vendor-wallet", vendorWalletRouter);
 app.use("/api/all-india", allIndiaRoutes);
 app.use("/api/chardham", chardhamRoutes);
+app.use("/api/test", testRoutes);
 app.use("/", (req, res) => {
   res.send("Welcome to the taxiSure API");
 });

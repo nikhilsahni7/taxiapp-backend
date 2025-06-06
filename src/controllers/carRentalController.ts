@@ -13,6 +13,11 @@ import type { Request, Response } from "express";
 import Razorpay from "razorpay";
 import { searchAvailableDrivers } from "../lib/driverService";
 import { getCoordinatesAndAddress } from "../lib/locationService";
+import {
+  sendTaxiSureBookingNotification,
+  sendTaxiSureRegularNotification,
+  validateFcmToken,
+} from "../utils/sendFcmNotification";
 import { calculateDistance, calculateDuration } from "./rideController";
 
 const prisma = new PrismaClient();
@@ -81,6 +86,150 @@ const EXTRA_MINUTE_RATE = 2;
 // Constants for waiting time calculation
 const FREE_WAITING_MINUTES = 3;
 const WAITING_CHARGE_PER_MINUTE = 3;
+
+/**
+ * Helper function to send booking notifications to multiple drivers
+ */
+async function sendBookingNotificationsToDrivers(
+  driverIds: string[],
+  rentalData: {
+    bookingId: string;
+    amount: string;
+    pickupLocation: string;
+    rideType: string;
+    distance?: string;
+    duration?: string;
+    carrierRequested?: boolean;
+  }
+): Promise<void> {
+  try {
+    console.log(`🔍 Looking for FCM tokens for driver IDs:`, driverIds);
+
+    // Fetch drivers' FCM tokens
+    const drivers = await prisma.user.findMany({
+      where: {
+        id: { in: driverIds },
+        fcmToken: { not: null },
+      },
+      select: { id: true, fcmToken: true, name: true },
+    });
+
+    console.log(
+      `📋 Found ${drivers.length} drivers with FCM tokens out of ${driverIds.length} total drivers`
+    );
+    console.log(
+      `📱 Drivers with tokens:`,
+      drivers.map((d) => ({ id: d.id, name: d.name, hasToken: !!d.fcmToken }))
+    );
+
+    if (drivers.length === 0) {
+      console.warn(
+        `⚠️ No drivers found with valid FCM tokens for rental ${rentalData.bookingId}`
+      );
+      return;
+    }
+
+    console.log(
+      `📤 Sending booking notifications to ${drivers.length} drivers for rental ${rentalData.bookingId}`
+    );
+
+    // Send notifications to all drivers with valid FCM tokens
+    const notificationPromises = drivers.map(async (driver) => {
+      if (!driver.fcmToken || !validateFcmToken(driver.fcmToken)) {
+        console.warn(`❌ Invalid FCM token for driver ${driver.id}`);
+        return;
+      }
+
+      try {
+        const notificationData = {
+          bookingId: rentalData.bookingId,
+          amount: rentalData.amount,
+          pickupLocation: rentalData.pickupLocation,
+          dropLocation: "Car Rental", // For rental, drop is not fixed
+          distance: rentalData.distance || "Package based",
+          duration: rentalData.duration || "Package based",
+          rideType: rentalData.rideType,
+          carrierRequested: rentalData.carrierRequested,
+        };
+
+        await sendTaxiSureBookingNotification(
+          driver.fcmToken,
+          notificationData
+        );
+
+        console.log(
+          `✅ Booking notification sent to driver ${driver.name || driver.id}`
+        );
+      } catch (error) {
+        console.error(
+          `❌ Failed to send notification to driver ${driver.id}:`,
+          error
+        );
+      }
+    });
+
+    await Promise.allSettled(notificationPromises);
+  } catch (error) {
+    console.error("❌ Error sending booking notifications to drivers:", error);
+  }
+}
+
+/**
+ * Helper function to send notification to a specific user
+ */
+async function sendNotificationToUser(
+  userId: string,
+  title: string,
+  body: string,
+  notificationType:
+    | "general"
+    | "booking_confirmed"
+    | "driver_arrived"
+    | "ride_started"
+    | "payment_success"
+    | "promotion"
+    | "rating_request",
+  additionalData?: Record<string, string>
+): Promise<void> {
+  try {
+    console.log(
+      `📤 Attempting to send notification to user ${userId}: ${title}`
+    );
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { fcmToken: true, name: true },
+    });
+
+    console.log(
+      `🔍 User found: ${user?.name || "Unknown"}, Has FCM token: ${!!user?.fcmToken}`
+    );
+
+    if (!user?.fcmToken) {
+      console.warn(`❌ No FCM token found for user ${userId}`);
+      return;
+    }
+
+    if (!validateFcmToken(user.fcmToken)) {
+      console.warn(`❌ Invalid FCM token for user ${userId}`);
+      return;
+    }
+
+    await sendTaxiSureRegularNotification(
+      user.fcmToken,
+      title,
+      body,
+      notificationType,
+      additionalData
+    );
+
+    console.log(
+      `✅ Notification sent to user ${user.name || userId}: ${title}`
+    );
+  } catch (error) {
+    console.error(`❌ Failed to send notification to user ${userId}:`, error);
+  }
+}
 
 // Create a new car rental booking
 export const createCarRental = async (req: Request, res: Response) => {
@@ -285,13 +434,29 @@ async function findDriversForRental(rental: any, carCategory: string) {
       carCategory: carCategory, // Add carCategory to filter options
     };
 
+    console.log(`🔍 Searching for drivers within ${currentRadius}km radius...`);
+    console.log(`📍 Location: ${rental.pickupLat},${rental.pickupLng}`);
+    console.log(`🚗 Filter options:`, filterOptions);
+
     const drivers = await searchAvailableDrivers(
       `${rental.pickupLat},${rental.pickupLng}`,
       currentRadius,
       filterOptions // Pass the updated filter options
     );
 
+    console.log(
+      `👥 Found ${drivers.length} total drivers in radius ${currentRadius}km`
+    );
+
     const newDrivers = drivers.filter((d) => !attemptedDrivers.has(d.driverId));
+
+    console.log(
+      `✨ Found ${newDrivers.length} new drivers (${drivers.length - newDrivers.length} already attempted)`
+    );
+    console.log(
+      `🆔 New driver IDs:`,
+      newDrivers.map((d) => d.driverId)
+    );
 
     if (newDrivers.length > 0) {
       // Prepare the new metadata related to driver search
@@ -316,6 +481,32 @@ async function findDriversForRental(rental: any, carCategory: string) {
         where: { id: rental.id },
         data: { metadata: mergedMetadata }, // Use the merged object
       });
+
+      // Send booking notifications to all new drivers
+      const driverIds = newDrivers.map((d) => d.driverId);
+      console.log(
+        `🔔 About to send booking notifications to ${driverIds.length} drivers for rental ${rental.id}`
+      );
+
+      try {
+        await sendBookingNotificationsToDrivers(driverIds, {
+          bookingId: rental.id,
+          amount: `₹${rental.rentalBasePrice}`,
+          pickupLocation: rental.pickupLocation,
+          rideType: `${rental.carCategory?.toUpperCase()} - ${rental.rentalPackageHours}hrs`,
+          distance: `${rental.rentalPackageKms}km`,
+          duration: `${rental.rentalPackageHours}hrs`,
+          carrierRequested: rental.carrierRequested,
+        });
+        console.log(
+          `✅ Booking notifications sent successfully for rental ${rental.id}`
+        );
+      } catch (notificationError) {
+        console.error(
+          `❌ Failed to send booking notifications for rental ${rental.id}:`,
+          notificationError
+        );
+      }
 
       // Schedule automatic cancellation after 60 seconds
       setTimeout(async () => {
@@ -407,8 +598,28 @@ export const acceptRental = async (req: Request, res: Response) => {
       data: {
         driverId: req.user.userId,
         status: RideStatus.ACCEPTED,
+        driverAcceptedAt: new Date(),
+      },
+      include: {
+        driver: {
+          select: { name: true, phone: true },
+        },
       },
     });
+
+    // Send notification to user that driver has accepted
+    await sendNotificationToUser(
+      rental.userId,
+      "Driver Found! 🚗",
+      `${updatedRental.driver?.name || "Your driver"} has accepted your car rental request and is on the way to pickup location.`,
+      "booking_confirmed",
+      {
+        rideId: updatedRental.id,
+        driverName: updatedRental.driver?.name || "Driver",
+        driverPhone: updatedRental.driver?.phone || "",
+        status: "accepted",
+      }
+    );
 
     return res.json(updatedRental);
   } catch (error) {
@@ -442,7 +653,27 @@ export const markDriverArrived = async (req: Request, res: Response) => {
         driverArrivedAt: new Date(),
         waitingStartTime: new Date(), // Start the waiting time tracking
       },
+      include: {
+        driver: {
+          select: { name: true, phone: true },
+        },
+      },
     });
+
+    // Send notification to user that driver has arrived
+    await sendNotificationToUser(
+      rental.userId,
+      "Driver Arrived! 📍",
+      `${updatedRental.driver?.name || "Your driver"} has arrived at the pickup location. Please provide OTP: ${rental.otp}`,
+      "driver_arrived",
+      {
+        rideId: updatedRental.id,
+        driverName: updatedRental.driver?.name || "Driver",
+        driverPhone: updatedRental.driver?.phone || "",
+        otp: rental.otp || "",
+        status: "driver_arrived",
+      }
+    );
 
     return res.json(updatedRental);
   } catch (error) {
@@ -527,8 +758,26 @@ export const startRide = async (req: Request, res: Response) => {
           orderBy: { timestamp: "desc" },
           take: 1,
         },
+        driver: {
+          select: { name: true, phone: true },
+        },
       },
     });
+
+    // Send notification to user that ride has started
+    await sendNotificationToUser(
+      rental.userId,
+      "Car Rental Started! 🚗",
+      `Your car rental has started with ${updatedRental.driver?.name || "your driver"}. Enjoy your ${rental.rentalPackageHours}hr package!`,
+      "ride_started",
+      {
+        rideId: updatedRental.id,
+        driverName: updatedRental.driver?.name || "Driver",
+        packageHours: rental.rentalPackageHours?.toString() || "",
+        packageKms: rental.rentalPackageKms?.toString() || "",
+        status: "ride_started",
+      }
+    );
 
     return res.json({
       success: true,
@@ -658,11 +907,47 @@ export const cancelRental = async (req: Request, res: Response) => {
       return updatedRental;
     });
 
-    // If transaction succeeds
-    // TODO: Emit socket event to notify involved parties about cancellation
-    // io.to(result.userId).emit('rental_cancelled', { rideId: result.id, reason, cancelledBy: req.user.userType });
-    // if (result.driverId) io.to(result.driverId).emit('rental_cancelled', { rideId: result.id, reason, cancelledBy: req.user.userType });
-    // You might want to emit the updated user.outstandingCancellationFee to the user if they cancelled
+    // Send cancellation notifications to affected parties
+    const cancelledByUser = req.user.userType === UserType.USER;
+    const cancelledByDriver = req.user.userType === UserType.DRIVER;
+
+    try {
+      if (cancelledByUser && result.driverId) {
+        // User cancelled - notify driver
+        await sendNotificationToUser(
+          result.driverId,
+          "Booking Cancelled 😞",
+          `The car rental booking has been cancelled by the customer.${reason ? ` Reason: ${reason}` : ""}`,
+          "general",
+          {
+            rideId: result.id,
+            cancelledBy: "user",
+            reason: reason || "",
+            status: "cancelled",
+          }
+        );
+      } else if (cancelledByDriver) {
+        // Driver cancelled - notify user
+        await sendNotificationToUser(
+          result.userId,
+          "Booking Cancelled 😞",
+          `Your car rental booking has been cancelled by the driver.${reason ? ` Reason: ${reason}` : ""}`,
+          "general",
+          {
+            rideId: result.id,
+            cancelledBy: "driver",
+            reason: reason || "",
+            status: "cancelled",
+          }
+        );
+      }
+    } catch (notificationError) {
+      console.error(
+        "Failed to send cancellation notification:",
+        notificationError
+      );
+      // Don't fail the cancellation due to notification error
+    }
 
     return res.json(result);
   } catch (error: any) {
@@ -967,6 +1252,27 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
     }
     // --- Separate Step: Reset User Fee if Applicable --- END
 
+    // Send payment success notifications
+    try {
+      await sendNotificationToUser(
+        rental.userId,
+        "Payment Completed! ✅",
+        `Your car rental payment of ₹${rental.totalAmount} has been completed successfully. Thank you for using our service!`,
+        "payment_success",
+        {
+          rideId: rental.id,
+          amount: rental.totalAmount!.toString(),
+          paymentMethod: "cash",
+          status: "completed",
+        }
+      );
+    } catch (notificationError) {
+      console.error(
+        "Failed to send payment completion notification:",
+        notificationError
+      );
+    }
+
     return res.json({
       success: true,
       message:
@@ -1100,6 +1406,28 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
           userUpdateError
         );
       }
+    }
+
+    // Send payment success notifications
+    try {
+      await sendNotificationToUser(
+        rental.userId,
+        "Payment Completed! ✅",
+        `Your car rental payment of ₹${rental.totalAmount} has been completed successfully. Thank you for using our service!`,
+        "payment_success",
+        {
+          rideId: rental.id,
+          amount: rental.totalAmount!.toString(),
+          paymentMethod: "online",
+          razorpayPaymentId: razorpay_payment_id,
+          status: "completed",
+        }
+      );
+    } catch (notificationError) {
+      console.error(
+        "Failed to send payment completion notification:",
+        notificationError
+      );
     }
 
     return res.json({
