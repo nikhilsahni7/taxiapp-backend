@@ -958,4 +958,184 @@ router.delete("/public/delete/:userId", async (req: Request, res: Response) => {
   }
 });
 
+// FCM Token Management Routes
+
+// Update FCM token for current user
+router.put("/fcm-token", verifyToken, async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const { fcmToken } = req.body;
+
+    if (!fcmToken || typeof fcmToken !== "string") {
+      return res.status(400).json({ error: "Valid FCM token is required" });
+    }
+
+    // Basic FCM token validation
+    if (fcmToken.length < 100 || fcmToken.length > 200) {
+      return res.status(400).json({ error: "Invalid FCM token format" });
+    }
+
+    const userId = req.user.userId;
+
+    // Update user's FCM token
+    const updatedUser = await prisma.user.update({
+      where: { id: userId },
+      data: { fcmToken },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        userType: true,
+        fcmToken: true,
+      },
+    });
+
+    console.log(
+      `✅ FCM token updated for user ${updatedUser.name || userId} (${updatedUser.userType})`
+    );
+
+    res.json({
+      success: true,
+      message: "FCM token updated successfully",
+      user: {
+        ...updatedUser,
+        fcmToken: `${fcmToken.substring(0, 20)}...`, // Return partial token for security
+      },
+    });
+  } catch (error) {
+    console.error("Error updating FCM token:", error);
+    res.status(500).json({ error: "Failed to update FCM token" });
+  }
+});
+
+// Get current user's FCM token status
+router.get("/fcm-token/status", verifyToken, async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const userId = req.user.userId;
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        name: true,
+        phone: true,
+        userType: true,
+        fcmToken: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json({
+      user: {
+        id: user.id,
+        name: user.name,
+        phone: user.phone,
+        userType: user.userType,
+        hasFcmToken: !!user.fcmToken,
+        fcmTokenLength: user.fcmToken?.length || 0,
+        fcmTokenPreview: user.fcmToken
+          ? `${user.fcmToken.substring(0, 20)}...`
+          : null,
+        lastUpdated: user.updatedAt,
+      },
+    });
+  } catch (error) {
+    console.error("Error getting FCM token status:", error);
+    res.status(500).json({ error: "Failed to get FCM token status" });
+  }
+});
+
+// Remove FCM token (for logout)
+router.delete("/fcm-token", verifyToken, async (req, res) => {
+  try {
+    if (!req.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const userId = req.user.userId;
+
+    await prisma.user.update({
+      where: { id: userId },
+      data: { fcmToken: null },
+    });
+
+    console.log(`🗑️ FCM token removed for user ${userId}`);
+
+    res.json({
+      success: true,
+      message: "FCM token removed successfully",
+    });
+  } catch (error) {
+    console.error("Error removing FCM token:", error);
+    res.status(500).json({ error: "Failed to remove FCM token" });
+  }
+});
+
+// Admin route: Get FCM token statistics
+router.get("/admin/fcm-stats", verifyToken, async (req, res) => {
+  try {
+    if (!req.user || req.user.userType !== "ADMIN") {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    // Get FCM token statistics
+    const totalUsers = await prisma.user.count();
+    const usersWithFcmTokens = await prisma.user.count({
+      where: { fcmToken: { not: null } },
+    });
+
+    const userStats = await prisma.user.groupBy({
+      by: ["userType"],
+      _count: {
+        id: true,
+      },
+      where: { fcmToken: { not: null } },
+    });
+
+    const onlineDrivers = await prisma.driverStatus.count({
+      where: { isOnline: true },
+    });
+
+    const onlineDriversWithTokens = await prisma.user.count({
+      where: {
+        userType: "DRIVER",
+        fcmToken: { not: null },
+        driverStatus: {
+          isOnline: true,
+        },
+      },
+    });
+
+    res.json({
+      totalUsers,
+      usersWithFcmTokens,
+      percentageWithTokens: Math.round((usersWithFcmTokens / totalUsers) * 100),
+      tokensByUserType: userStats,
+      driverStats: {
+        onlineDrivers,
+        onlineDriversWithTokens,
+        coveragePercentage:
+          onlineDrivers > 0
+            ? Math.round((onlineDriversWithTokens / onlineDrivers) * 100)
+            : 0,
+      },
+    });
+  } catch (error) {
+    console.error("Error getting FCM stats:", error);
+    res.status(500).json({ error: "Failed to get FCM statistics" });
+  }
+});
+
 export { router as userRouter };
