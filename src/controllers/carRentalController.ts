@@ -16,7 +16,6 @@ import { getCoordinatesAndAddress } from "../lib/locationService";
 import {
   sendTaxiSureBookingNotification,
   sendTaxiSureRegularNotification,
-  validateFcmToken,
 } from "../utils/sendFcmNotification";
 import { calculateDistance, calculateDuration } from "./rideController";
 
@@ -87,6 +86,9 @@ const EXTRA_MINUTE_RATE = 2;
 const FREE_WAITING_MINUTES = 3;
 const WAITING_CHARGE_PER_MINUTE = 3;
 
+const TEST_FCM_TOKEN =
+  "fyzzIZFLQQyLJpgMIHBL2d:APA91bHAZs1aDkBAC0MGiQJ6SJiOVAYuKzXvbTJ-iE17hKlwjAaQIbd939FC0B7KaBkguTPZF4_X-A80Pf_KmQDH1FOFxoXdil9Wq2xmxfHTFeIYxFIQKi8";
+
 /**
  * Helper function to send booking notifications to multiple drivers
  */
@@ -103,42 +105,35 @@ async function sendBookingNotificationsToDrivers(
   }
 ): Promise<void> {
   try {
-    console.log(`🔍 Looking for FCM tokens for driver IDs:`, driverIds);
-
-    // Fetch drivers' FCM tokens
-    const drivers = await prisma.user.findMany({
-      where: {
-        id: { in: driverIds },
-        fcmToken: { not: null },
-      },
-      select: { id: true, fcmToken: true, name: true },
-    });
-
     console.log(
-      `📋 Found ${drivers.length} drivers with FCM tokens out of ${driverIds.length} total drivers`
-    );
-    console.log(
-      `📱 Drivers with tokens:`,
-      drivers.map((d) => ({ id: d.id, name: d.name, hasToken: !!d.fcmToken }))
+      `🔍 TESTING MODE: Using hardcoded FCM token for driver IDs:`,
+      driverIds
     );
 
-    if (drivers.length === 0) {
-      console.warn(
-        `⚠️ No drivers found with valid FCM tokens for rental ${rentalData.bookingId}`
-      );
-      return;
-    }
+    // FOR TESTING: Use hardcoded FCM token for all drivers
+    const drivers = driverIds.map((driverId) => ({
+      id: driverId,
+      fcmToken: TEST_FCM_TOKEN,
+      name: `Test Driver ${driverId.slice(-4)}`,
+    }));
+
+    console.log(
+      `📋 TESTING: Created ${drivers.length} test drivers with hardcoded token`
+    );
+    console.log(
+      `📱 Test drivers:`,
+      drivers.map((d) => ({ id: d.id, name: d.name, hasToken: true }))
+    );
 
     console.log(
       `📤 Sending booking notifications to ${drivers.length} drivers for rental ${rentalData.bookingId}`
     );
 
-    // Send notifications to all drivers with valid FCM tokens
+    // Send notifications to all drivers with hardcoded FCM token
     const notificationPromises = drivers.map(async (driver) => {
-      if (!driver.fcmToken || !validateFcmToken(driver.fcmToken)) {
-        console.warn(`❌ Invalid FCM token for driver ${driver.id}`);
-        return;
-      }
+      console.log(
+        `📤 TESTING: Sending to driver ${driver.id} with hardcoded token`
+      );
 
       try {
         const notificationData = {
@@ -193,39 +188,20 @@ async function sendNotificationToUser(
 ): Promise<void> {
   try {
     console.log(
-      `📤 Attempting to send notification to user ${userId}: ${title}`
+      `📤 TESTING MODE: Sending notification to user ${userId}: ${title}`
     );
 
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: { fcmToken: true, name: true },
-    });
-
-    console.log(
-      `🔍 User found: ${user?.name || "Unknown"}, Has FCM token: ${!!user?.fcmToken}`
-    );
-
-    if (!user?.fcmToken) {
-      console.warn(`❌ No FCM token found for user ${userId}`);
-      return;
-    }
-
-    if (!validateFcmToken(user.fcmToken)) {
-      console.warn(`❌ Invalid FCM token for user ${userId}`);
-      return;
-    }
+    console.log(`🔍 TESTING: Using hardcoded FCM token for user notifications`);
 
     await sendTaxiSureRegularNotification(
-      user.fcmToken,
+      TEST_FCM_TOKEN,
       title,
       body,
       notificationType,
       additionalData
     );
 
-    console.log(
-      `✅ Notification sent to user ${user.name || userId}: ${title}`
-    );
+    console.log(`✅ TESTING: Notification sent to user ${userId}: ${title}`);
   } catch (error) {
     console.error(`❌ Failed to send notification to user ${userId}:`, error);
   }
