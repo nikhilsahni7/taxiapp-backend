@@ -60,25 +60,31 @@ export async function sendFcmNotification(
       // CRITICAL: Send all data in data field for Flutter to receive
       data: notificationData,
 
+      // CRITICAL: Always include notification field for background/closed app notifications
+      notification: {
+        title: title,
+        body: body,
+      },
+
       // Android specific configuration
       android: {
         priority: shouldShowAsCard ? "high" : "normal",
         ttl: shouldShowAsCard ? 30000 : 3600000, // 30 seconds for cards, 1 hour for regular
 
-        // For regular notifications, also add notification field
-        notification: shouldShowAsCard
-          ? undefined
-          : {
-              title: title,
-              body: body,
-              channelId: "basic_channel",
-              priority: "default",
-              defaultSound: true,
-              defaultVibrateTimings: true,
-              icon: "ic_notification",
-              color: "#2196F3",
-              clickAction: "FLUTTER_NOTIFICATION_CLICK",
-            },
+        // CRITICAL: Always include notification field for system tray display
+        notification: {
+          title: title,
+          body: body,
+          channelId: shouldShowAsCard ? "booking_channel" : "basic_channel",
+          priority: shouldShowAsCard ? "high" : "default",
+          defaultSound: true,
+          defaultVibrateTimings: true,
+          icon: "ic_notification",
+          color: "#2196F3",
+          clickAction: "FLUTTER_NOTIFICATION_CLICK",
+          // Add category to help Flutter identify notification type
+          tag: shouldShowAsCard ? "booking_request" : "general",
+        },
 
         // Always include data for both types
         data: notificationData,
@@ -92,13 +98,11 @@ export async function sendFcmNotification(
         },
         payload: {
           aps: {
-            // For regular notifications, include alert
-            alert: shouldShowAsCard
-              ? undefined
-              : {
-                  title: title,
-                  body: body,
-                },
+            // CRITICAL: Always include alert for background notifications
+            alert: {
+              title: title,
+              body: body,
+            },
             sound: "default",
             badge: 1,
             "content-available": 1,
@@ -112,14 +116,6 @@ export async function sendFcmNotification(
         },
       },
     };
-
-    // For regular notifications, add the notification field
-    if (!shouldShowAsCard) {
-      message.notification = {
-        title: title,
-        body: body,
-      };
-    }
 
     console.log(`📬 Final FCM message:`, JSON.stringify(message, null, 2));
 
