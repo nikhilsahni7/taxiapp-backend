@@ -111,8 +111,8 @@ router.get("/auto-cancellation-status", async (req: Request, res: Response) => {
     const istOffset = 5.5 * 60 * 60 * 1000;
     const istNow = new Date(now.getTime() + istOffset);
 
-    // Count pending bookings
-    const pendingBookings = await prisma.longDistanceBooking.count({
+    // Count pending long distance bookings
+    const pendingLongDistanceBookings = await prisma.longDistanceBooking.count({
       where: {
         status: {
           in: ["PENDING", "ADVANCE_PAID"],
@@ -120,9 +120,27 @@ router.get("/auto-cancellation-status", async (req: Request, res: Response) => {
       },
     });
 
-    // Count auto-cancelled bookings (in the last 24 hours)
+    // Count pending vendor bookings
+    const pendingVendorBookings = await prisma.vendorBooking.count({
+      where: {
+        status: "PENDING",
+      },
+    });
+
+    // Count auto-cancelled long distance bookings (in the last 24 hours)
     const yesterday = new Date(istNow.getTime() - 24 * 60 * 60 * 1000);
-    const autoCancelledBookings = await prisma.longDistanceBooking.count({
+    const autoCancelledLongDistanceBookings =
+      await prisma.longDistanceBooking.count({
+        where: {
+          cancelledBy: "SYSTEM",
+          cancelledAt: {
+            gte: yesterday,
+          },
+        },
+      });
+
+    // Count auto-cancelled vendor bookings (in the last 24 hours)
+    const autoCancelledVendorBookings = await prisma.vendorBooking.count({
       where: {
         cancelledBy: "SYSTEM",
         cancelledAt: {
@@ -136,8 +154,19 @@ router.get("/auto-cancellation-status", async (req: Request, res: Response) => {
       status: "Auto-cancellation service is active",
       currentISTTime: istNow.toISOString(),
       stats: {
-        pendingBookings,
-        autoCancelledLast24h: autoCancelledBookings,
+        longDistanceBookings: {
+          pending: pendingLongDistanceBookings,
+          autoCancelledLast24h: autoCancelledLongDistanceBookings,
+        },
+        vendorBookings: {
+          pending: pendingVendorBookings,
+          autoCancelledLast24h: autoCancelledVendorBookings,
+        },
+        total: {
+          pending: pendingLongDistanceBookings + pendingVendorBookings,
+          autoCancelledLast24h:
+            autoCancelledLongDistanceBookings + autoCancelledVendorBookings,
+        },
       },
       cronSchedule: "Every minute (* * * * *)",
       timezone: "Asia/Kolkata",
