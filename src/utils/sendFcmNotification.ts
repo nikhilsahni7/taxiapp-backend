@@ -69,7 +69,7 @@ export async function sendFcmNotification(
       // Android specific configuration
       android: {
         priority: shouldShowAsCard ? "high" : "normal",
-        ttl: shouldShowAsCard ? 30000 : 3600000, // 30 seconds for cards, 1 hour for regular
+        ttl: shouldShowAsCard ? 60000 : 3600000, // 60 seconds for cards, 1 hour for regular
 
         // CRITICAL: Always include notification field for system tray display
         notification: {
