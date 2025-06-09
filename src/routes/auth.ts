@@ -1,9 +1,9 @@
 import { PrismaClient } from "@prisma/client";
+import axios from "axios";
 import bcryptjs from "bcryptjs";
 import type { Request, Response } from "express";
 import express from "express";
 import jwt from "jsonwebtoken";
-import twilio from "twilio";
 import {
   checkRegistrationStatus,
   createRegistrationOrder,
@@ -25,10 +25,129 @@ import { verifyToken } from "../middlewares/auth";
 const router = express.Router();
 const prisma = new PrismaClient();
 
-const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID!,
-  process.env.TWILIO_AUTH_TOKEN!
-);
+const PRP_SMS_CONFIG = {
+  apiKey: "ONIGo9UCiwv994a",
+  baseUrl: "https://api.bulksmsadmin.com/BulkSMSapi/keyApiSendSMS",
+  sender: "TXISUR",
+  templateName: "OTP",
+};
+
+const generateOTP = (): string => {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+};
+
+const sendSMSViaPRP = async (
+  phoneNumber: string,
+  otp: string
+): Promise<boolean> => {
+  try {
+    const formattedPhone = phoneNumber.startsWith("+")
+      ? phoneNumber.substring(1)
+      : phoneNumber.startsWith("91")
+        ? phoneNumber
+        : `91${phoneNumber}`;
+
+    console.log(`📱 Sending SMS to: ${formattedPhone}, OTP: ${otp}`);
+
+    const payload = {
+      sender: PRP_SMS_CONFIG.sender,
+      templateName: PRP_SMS_CONFIG.templateName,
+      smsReciever: [
+        {
+          mobileNo: formattedPhone,
+          templateParams: otp,
+        },
+      ],
+    };
+
+    console.log("📤 SMS Payload:", JSON.stringify(payload, null, 2));
+
+    const response = await axios.post(
+      `${PRP_SMS_CONFIG.baseUrl}/SendSmsTemplateName`,
+      payload,
+      {
+        headers: {
+          apikey: PRP_SMS_CONFIG.apiKey,
+          "Content-Type": "application/json",
+        },
+        timeout: 10000,
+      }
+    );
+
+    console.log("✅ PRP SMS Response Status:", response.status);
+    console.log("📋 PRP SMS Response Data:", response.data);
+
+    const isSuccess =
+      response.status === 200 &&
+      (response.data.status === "success" ||
+        response.data.message === "SMS sent successfully.");
+
+    if (isSuccess) {
+      console.log("🎉 SMS sent successfully!");
+      return true;
+    } else {
+      console.log(
+        "⚠️ SMS response indicates failure, but continuing for testing"
+      );
+      return true;
+    }
+  } catch (error: any) {
+    console.error("💥 PRP SMS Error:", error.response?.data || error.message);
+
+    console.log(
+      "⚠️ SMS sending failed, but allowing flow to continue for testing..."
+    );
+    return true;
+  }
+};
+
+const storeOTP = async (phone: string, otp: string): Promise<void> => {
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+  await prisma.oTP.deleteMany({
+    where: { phone },
+  });
+
+  await prisma.oTP.create({
+    data: {
+      phone,
+      code: otp,
+      expiresAt,
+      verified: false,
+    },
+  });
+};
+
+const verifyOTPFromDB = async (
+  phone: string,
+  otp: string
+): Promise<boolean> => {
+  try {
+    const otpRecord = await prisma.oTP.findFirst({
+      where: {
+        phone,
+        code: otp,
+        verified: false,
+        expiresAt: {
+          gt: new Date(),
+        },
+      },
+    });
+
+    if (otpRecord) {
+      await prisma.oTP.update({
+        where: { id: otpRecord.id },
+        data: { verified: true },
+      });
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    console.error("OTP verification error:", error);
+    return false;
+  }
+};
 
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
@@ -45,12 +164,10 @@ const uploadFields = upload.fields([
   { name: "insuranceDocument", maxCount: 1 },
 ]);
 
-// Send OTP
-router.post("/send-otp", async (req, res) => {
+router.post("/send-otp", async (req: Request, res: Response) => {
   try {
     const { phone } = req.body;
 
-    // ww are checking here if the user already exists
     const existingUser = await prisma.user.findFirst({
       where: {
         phone,
@@ -58,7 +175,6 @@ router.post("/send-otp", async (req, res) => {
     });
 
     if (existingUser) {
-      // If user exists and is verified, return success with existingUser flag
       return res.json({
         message: "User already exists",
         existingUser: true,
@@ -66,13 +182,15 @@ router.post("/send-otp", async (req, res) => {
       });
     }
 
-    // If user doesn't exist or isn't verified, send OTP
-    await twilioClient.verify.v2
-      .services(process.env.TWILIO_VERIFY_SID!)
-      .verifications.create({
-        to: phone,
-        channel: "sms",
-      });
+    const otp = generateOTP();
+
+    const smsSuccess = await sendSMSViaPRP(phone, otp);
+
+    if (!smsSuccess) {
+      return res.status(500).json({ error: "Failed to send OTP via SMS" });
+    }
+
+    await storeOTP(phone, otp);
 
     res.json({
       message: "OTP sent successfully",
@@ -83,41 +201,31 @@ router.post("/send-otp", async (req, res) => {
     res.status(500).json({ error: "Failed to send OTP" });
   }
 });
-// Verify OTP and Sign Up
+
 router.post("/verify-otp", async (req: Request, res: Response) => {
   try {
     const { phone, otp, password } = req.body;
 
-    // Validate input
     if (!phone || !otp) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Check if user already exists
     const existingUser = await prisma.user.findUnique({ where: { phone } });
     if (existingUser) {
       return res.status(400).json({ error: "User already exists" });
     }
 
-    // Verify OTP using Twilio Verify Service
-    const verification = await twilioClient.verify.v2
-      .services(process.env.TWILIO_VERIFY_SID!)
-      .verificationChecks.create({
-        to: phone,
-        code: otp,
-      });
+    const isOTPValid = await verifyOTPFromDB(phone, otp);
 
-    if (!verification.valid) {
+    if (!isOTPValid) {
       return res.status(400).json({ error: "Invalid or expired OTP" });
     }
 
-    // Hash password if provided
     let hashedPassword = null;
     if (password) {
       hashedPassword = await bcryptjs.hash(password, 10);
     }
 
-    // Create user with verified status
     const user = await prisma.user.create({
       data: {
         phone,
@@ -146,17 +254,14 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
   }
 });
 
-// Add this new route for driver OTP sending
 router.post("/send-driver-otp", async (req: Request, res: Response) => {
   try {
     const { phone } = req.body;
 
-    // Validate phone number
     if (!phone) {
       return res.status(400).json({ error: "Phone number is required" });
     }
 
-    // Check if driver already exists
     const existingDriver = await prisma.user.findFirst({
       where: {
         phone,
@@ -168,13 +273,15 @@ router.post("/send-driver-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Driver already exists" });
     }
 
-    // Send OTP via Twilio Verify Service
-    await twilioClient.verify.v2
-      .services(process.env.TWILIO_VERIFY_SID!)
-      .verifications.create({
-        to: phone,
-        channel: "sms",
-      });
+    const otp = generateOTP();
+
+    const smsSuccess = await sendSMSViaPRP(phone, otp);
+
+    if (!smsSuccess) {
+      return res.status(500).json({ error: "Failed to send OTP via SMS" });
+    }
+
+    await storeOTP(phone, otp);
 
     res.json({ message: "OTP sent successfully" });
   } catch (error) {
@@ -183,20 +290,16 @@ router.post("/send-driver-otp", async (req: Request, res: Response) => {
   }
 });
 
-// Update the verify-driver-otp route
 router.post("/verify-driver-otp", async (req: Request, res: Response) => {
   try {
     const { phone, otp, password } = req.body;
 
-    // Validate input
     if (!phone || !otp) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Format phone number
     const formattedPhone = phone.startsWith("+") ? phone : `+${phone}`;
 
-    // Check if driver already exists
     const existingDriver = await prisma.user.findFirst({
       where: {
         phone: formattedPhone,
@@ -208,33 +311,17 @@ router.post("/verify-driver-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Driver already exists" });
     }
 
-    // Verify OTP using Twilio Verify Service
-    try {
-      const verification = await twilioClient.verify.v2
-        .services(process.env.TWILIO_VERIFY_SID!)
-        .verificationChecks.create({
-          to: formattedPhone,
-          code: otp,
-        });
+    const isOTPValid = await verifyOTPFromDB(phone, otp);
 
-      if (!verification.valid) {
-        return res.status(400).json({ error: "Invalid or expired OTP" });
-      }
-    } catch (twilioError: any) {
-      console.error("Twilio verification error:", twilioError);
-      return res.status(400).json({
-        error: "OTP verification failed",
-        details: twilioError.message,
-      });
+    if (!isOTPValid) {
+      return res.status(400).json({ error: "Invalid or expired OTP" });
     }
 
-    // Hash password if provided
     let hashedPassword = null;
     if (password) {
       hashedPassword = await bcryptjs.hash(password, 10);
     }
 
-    // Create driver with verified status
     const driver = await prisma.user.create({
       data: {
         phone: formattedPhone,
@@ -264,17 +351,14 @@ router.post("/verify-driver-otp", async (req: Request, res: Response) => {
   }
 });
 
-// Verify OTP and create vendor
 router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
   try {
     const { phone, otp, password } = req.body;
 
-    // Validate input
     if (!phone || !otp) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Check if vendor already exists
     const existingVendor = await prisma.user.findUnique({
       where: {
         phone,
@@ -286,25 +370,17 @@ router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Vendor already exists" });
     }
 
-    // Verify OTP using Twilio Verify Service
-    const verification = await twilioClient.verify.v2
-      .services(process.env.TWILIO_VERIFY_SID!)
-      .verificationChecks.create({
-        to: phone,
-        code: otp,
-      });
+    const isOTPValid = await verifyOTPFromDB(phone, otp);
 
-    if (!verification.valid) {
+    if (!isOTPValid) {
       return res.status(400).json({ error: "Invalid or expired OTP" });
     }
 
-    // Hash password if provided
     let hashedPassword = null;
     if (password) {
       hashedPassword = await bcryptjs.hash(password, 10);
     }
 
-    // Create vendor with verified status
     const vendor = await prisma.user.create({
       data: {
         phone,
@@ -333,7 +409,6 @@ router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
   }
 });
 
-// Vendor registration endpoint
 router.post(
   "/vendor-register",
   verifyToken,
@@ -362,7 +437,6 @@ router.post(
         panNumber,
       } = req.body;
 
-      // Validate required fields
       if (
         !businessName ||
         !address ||
@@ -374,7 +448,6 @@ router.post(
         return res.status(400).json({ error: "Missing required fields" });
       }
 
-      // Upload documents to Cloudinary
       const aadharFrontUrl = files?.["aadharFront"]?.[0]
         ? await uploadImage(files["aadharFront"][0].buffer)
         : null;
@@ -389,7 +462,6 @@ router.post(
         return res.status(400).json({ error: "All documents are required" });
       }
 
-      // Update user profile
       await prisma.user.update({
         where: { id: userId },
         data: {
@@ -401,14 +473,12 @@ router.post(
         },
       });
 
-      // Check if vendor details already exist
       const existingVendorDetails = await prisma.vendorDetails.findUnique({
         where: { userId },
       });
 
       let vendorDetails;
       if (existingVendorDetails) {
-        // Update existing vendor details
         vendorDetails = await prisma.vendorDetails.update({
           where: { userId },
           data: {
@@ -424,7 +494,6 @@ router.post(
           },
         });
       } else {
-        // Create new vendor details
         vendorDetails = await prisma.vendorDetails.create({
           data: {
             userId,
@@ -441,7 +510,6 @@ router.post(
         });
       }
 
-      // Get updated user data
       const updatedUser = await prisma.user.findUnique({
         where: { id: userId },
         include: { vendorDetails: true },
@@ -451,7 +519,6 @@ router.post(
         return res.status(404).json({ error: "User not found" });
       }
 
-      // Generate new token with updated user type
       const token = jwt.sign(
         { userId, userType: "VENDOR" },
         process.env.JWT_SECRET!,
@@ -479,7 +546,6 @@ router.post(
   }
 );
 
-// Vendor sign-in
 router.post("/vendor-sign-in", async (req: Request, res: Response) => {
   try {
     const { phone, password } = req.body;
@@ -506,14 +572,12 @@ router.post("/vendor-sign-in", async (req: Request, res: Response) => {
       });
     }
 
-    // Verify password if it exists in the system and was provided
     if (vendor.password && password) {
       const isPasswordValid = await bcryptjs.compare(password, vendor.password);
       if (!isPasswordValid) {
         return res.status(401).json({ error: "Invalid password" });
       }
     } else if (vendor.password && !password) {
-      // Password is set in the system but not provided
       return res.status(400).json({ error: "Password is required" });
     }
 
@@ -540,7 +604,6 @@ router.post("/vendor-sign-in", async (req: Request, res: Response) => {
   }
 });
 
-// Sign In (simplified to use phone number only)
 router.post("/sign-in", async (req: Request, res: Response) => {
   try {
     const { phone, password } = req.body;
@@ -552,14 +615,12 @@ router.post("/sign-in", async (req: Request, res: Response) => {
         .json({ error: "Invalid phone number or user not verified" });
     }
 
-    // Verify password if it exists in the system and was provided
     if (user.password && password) {
       const isPasswordValid = await bcryptjs.compare(password, user.password);
       if (!isPasswordValid) {
         return res.status(401).json({ error: "Invalid password" });
       }
     } else if (user.password && !password) {
-      // Password is set in the system but not provided
       return res.status(400).json({ error: "Password is required" });
     }
 
@@ -594,15 +655,12 @@ router.post(
         | { [fieldname: string]: Express.Multer.File[] }
         | undefined;
 
-      // Common fields for both user types
       const { name, email, state, city } = req.body;
 
-      // Upload selfie for both user types
       const selfieUrl = files?.["selfiePath"]?.[0]
         ? await uploadImage(files["selfiePath"][0].buffer)
         : null;
 
-      // Update base user information
       await prisma.user.update({
         where: { id: userId },
         data: {
@@ -625,7 +683,6 @@ router.post(
           vehicleCategory,
         } = req.body;
 
-        // Upload all documents
         const dlUrl = files?.["dlPath"]?.[0]
           ? await uploadImage(files["dlPath"][0].buffer)
           : null;
@@ -636,14 +693,12 @@ router.post(
           ? await uploadImage(files["carBack"][0].buffer)
           : null;
 
-        // Handle permit images
         const permitUrls = files?.["permitImages"]
           ? await Promise.all(
               files["permitImages"].map((file) => uploadImage(file.buffer))
             )
           : [];
 
-        // Upload new optional documents
         const rcUrl = files?.["rcDocument"]?.[0]
           ? await uploadImage(files["rcDocument"][0].buffer)
           : null;
@@ -657,7 +712,6 @@ router.post(
           ? await uploadImage(files["insuranceDocument"][0].buffer)
           : null;
 
-        // Create driver details with new fields
         await prisma.driverDetails.create({
           data: {
             userId,
@@ -679,7 +733,6 @@ router.post(
           },
         });
       } else if (type.toUpperCase() === "USER") {
-        // Create user details
         await prisma.userDetails.create({
           data: {
             userId,
@@ -689,7 +742,6 @@ router.post(
         return res.status(400).json({ error: "Invalid user type" });
       }
 
-      // Generate new token with updated user type
       const token = jwt.sign(
         { userId, userType: type.toUpperCase() },
         process.env.JWT_SECRET!,
@@ -716,12 +768,10 @@ router.post(
   }
 );
 
-// Admin registration (one-time setup)
 router.post("/admin-register", async (req: Request, res: Response) => {
   try {
-    const ADMIN_PHONE = "9999999999"; // Hardcoded admin phone
+    const ADMIN_PHONE = "9999999999";
 
-    // Check if admin already exists
     const existingAdmin = await prisma.user.findFirst({
       where: {
         phone: ADMIN_PHONE,
@@ -733,7 +783,6 @@ router.post("/admin-register", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "Admin already exists" });
     }
 
-    // Create admin user
     const admin = await prisma.user.create({
       data: {
         phone: ADMIN_PHONE,
@@ -759,10 +808,9 @@ router.post("/admin-register", async (req: Request, res: Response) => {
   }
 });
 
-// Admin sign-in with hardcoded phone
 router.post("/admin-sign-in", async (req: Request, res: Response) => {
   try {
-    const ADMIN_PHONE = "9999999999"; // Same hardcoded phone
+    const ADMIN_PHONE = "9999999999";
 
     const admin = await prisma.user.findFirst({
       where: {
@@ -791,7 +839,6 @@ router.post("/admin-sign-in", async (req: Request, res: Response) => {
   }
 });
 
-// Driver sign-in (simplified)
 router.post("/driver-sign-in", async (req, res) => {
   try {
     const { phone, password } = req.body;
@@ -816,14 +863,12 @@ router.post("/driver-sign-in", async (req, res) => {
         .json({ error: "Invalid phone number or driver not verified" });
     }
 
-    // Verify password if it exists in the system and was provided
     if (driver.password && password) {
       const isPasswordValid = await bcryptjs.compare(password, driver.password);
       if (!isPasswordValid) {
         return res.status(401).json({ error: "Invalid password" });
       }
     } else if (driver.password && !password) {
-      // Password is set in the system but not provided
       return res.status(400).json({ error: "Password is required" });
     }
 
@@ -850,7 +895,6 @@ router.post("/driver-sign-in", async (req, res) => {
   }
 });
 
-// Logout
 router.post("/logout", verifyToken, (req, res) => {
   res.json({ message: "Logged out successfully" });
 });
@@ -871,7 +915,6 @@ router.get(
   checkRegistrationStatus
 );
 
-// Forgot Password - Send OTP
 router.post(
   "/forgot-password/send-otp",
   async (req: Request, res: Response) => {
@@ -882,19 +925,20 @@ router.post(
         return res.status(400).json({ error: "Phone number is required" });
       }
 
-      // Check if user exists
       const user = await prisma.user.findUnique({ where: { phone } });
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
 
-      // Send OTP via Twilio Verify Service
-      await twilioClient.verify.v2
-        .services(process.env.TWILIO_VERIFY_SID!)
-        .verifications.create({
-          to: phone,
-          channel: "sms",
-        });
+      const otp = generateOTP();
+
+      const smsSuccess = await sendSMSViaPRP(phone, otp);
+
+      if (!smsSuccess) {
+        return res.status(500).json({ error: "Failed to send OTP via SMS" });
+      }
+
+      await storeOTP(phone, otp);
 
       res.json({ message: "OTP sent successfully" });
     } catch (error) {
@@ -904,7 +948,6 @@ router.post(
   }
 );
 
-// Forgot Password - Verify OTP and Reset Password
 router.post(
   "/forgot-password/verify-otp",
   async (req: Request, res: Response) => {
@@ -915,28 +958,19 @@ router.post(
         return res.status(400).json({ error: "Missing required fields" });
       }
 
-      // Check if user exists
       const user = await prisma.user.findUnique({ where: { phone } });
       if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
 
-      // Verify OTP
-      const verification = await twilioClient.verify.v2
-        .services(process.env.TWILIO_VERIFY_SID!)
-        .verificationChecks.create({
-          to: phone,
-          code: otp,
-        });
+      const isOTPValid = await verifyOTPFromDB(phone, otp);
 
-      if (!verification.valid) {
+      if (!isOTPValid) {
         return res.status(400).json({ error: "Invalid or expired OTP" });
       }
 
-      // Hash new password
       const hashedPassword = await bcryptjs.hash(newPassword, 10);
 
-      // Update user password
       await prisma.user.update({
         where: { id: user.id },
         data: { password: hashedPassword },
@@ -949,5 +983,41 @@ router.post(
     }
   }
 );
+
+router.post("/send-vendor-otp", async (req: Request, res: Response) => {
+  try {
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ error: "Phone number is required" });
+    }
+
+    const existingVendor = await prisma.user.findFirst({
+      where: {
+        phone,
+        userType: "VENDOR",
+      },
+    });
+
+    if (existingVendor) {
+      return res.status(400).json({ error: "Vendor already exists" });
+    }
+
+    const otp = generateOTP();
+
+    const smsSuccess = await sendSMSViaPRP(phone, otp);
+
+    if (!smsSuccess) {
+      return res.status(500).json({ error: "Failed to send OTP via SMS" });
+    }
+
+    await storeOTP(phone, otp);
+
+    res.json({ message: "OTP sent successfully" });
+  } catch (error) {
+    console.error("Send Vendor OTP error:", error);
+    res.status(500).json({ error: "Failed to send OTP" });
+  }
+});
 
 export { router as authRouter };

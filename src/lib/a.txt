@@ -1,1970 +1,953 @@
-// ride-controller.ts
-import {
-  CancelledBy,
-  PaymentMode,
-  PrismaClient,
-  RideStatus,
-  RideType,
-  TransactionStatus,
-  TransactionType,
-  UserType,
-} from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
+import bcryptjs from "bcryptjs";
 import type { Request, Response } from "express";
-import { searchAvailableDrivers } from "../lib/driverService";
-
+import express from "express";
+import jwt from "jsonwebtoken";
+import twilio from "twilio";
 import {
-  calculateFinalAmount,
-  initiateRazorpayPayment,
-} from "./paymentController";
+  checkRegistrationStatus,
+  createRegistrationOrder,
+  verifyRegistrationPayment,
+} from "../controllers/driverRegistrationController";
 
-import axios from "axios";
-import { io } from "../server";
+interface AuthRequest extends Request {
+  user: {
+    userId: string;
+    userType: string;
+    selfieUrl: string;
+  };
+}
 
-const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY!;
+import multer from "multer";
+import { uploadImage } from "../config/cloudinary";
+import { verifyToken } from "../middlewares/auth";
 
+const router = express.Router();
 const prisma = new PrismaClient();
 
-// Wait time constants
-const FREE_WAITING_MINUTES = 3; // Free waiting period in minutes
-const WAITING_CHARGE_PER_MINUTE = 3; // Rs 3 per minute after free period
-const DRIVER_REQUEST_TIMEOUT = 15000;
-const MAX_SEARCH_RADIUS = 15; // kilometers
-const INITIAL_SEARCH_RADIUS = 3; // kilometers
-const CARRIER_CHARGE = 30; // Fixed carrier charge in INR
+const twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID!,
+  process.env.TWILIO_AUTH_TOKEN!
+);
 
-interface Location {
-  lat: number;
-  lng: number;
-}
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
 
-interface TaxAndCharges {
-  stateTax: number;
-  tollCharges: number;
-  airportCharges: number;
-  mcdCharges: number;
-}
+const uploadFields = upload.fields([
+  { name: "selfiePath", maxCount: 1 },
+  { name: "dlPath", maxCount: 1 },
+  { name: "permitImages", maxCount: 4 },
+  { name: "carFront", maxCount: 1 },
+  { name: "carBack", maxCount: 1 },
+  { name: "rcDocument", maxCount: 1 },
+  { name: "fitnessDocument", maxCount: 1 },
+  { name: "pollutionDocument", maxCount: 1 },
+  { name: "insuranceDocument", maxCount: 1 },
+]);
 
-// Define valid car categories in lowercase
-type CarCategory = "mini" | "sedan" | "suv";
-
-// Type for state tax structure
-type StateTaxStructure = {
-  [K in CarCategory]: number;
-};
-
-// Constants for different charges with proper typing
-const CHARGES = {
-  MCD_CHARGE: 100,
-  AIRPORT_PARKING: 290,
-  STATE_TAX: {
-    DELHI_TO_HARYANA: {
-      mini: 100,
-      sedan: 100,
-      suv: 100,
-    } as StateTaxStructure,
-    DELHI_TO_UP: {
-      mini: 120,
-      sedan: 120,
-      suv: 200,
-    } as StateTaxStructure,
-    HARYANA_TO_UP: {
-      mini: 220, // 100 (Delhi to Haryana) + 120 (Delhi to UP)
-      sedan: 220, // 100 (Delhi to Haryana) + 120 (Delhi to UP)
-      suv: 300, // 100 (Delhi to Haryana) + 200 (Delhi to UP)
-    } as StateTaxStructure,
-    UP_TO_HARYANA: {
-      mini: 220, // 120 (UP to Delhi) + 100 (Delhi to Haryana)
-      sedan: 220, // 120 (UP to Delhi) + 100 (Delhi to Haryana)
-      suv: 300, // 200 (UP to Delhi) + 100 (Delhi to Haryana)
-    } as StateTaxStructure,
-  },
-  // Add reference for major airports
-  MAJOR_AIRPORTS: [
-    "Indira Gandhi International Airport",
-    "IGI Airport",
-    "Noida International Airport",
-    "Hindon Airport",
-  ],
-} as const;
-
-// Function to validate car category
-function isValidCategory(category: string): category is CarCategory {
-  return ["mini", "sedan", "suv"].includes(category.toLowerCase());
-}
-
-// Rest of the coordinate and location functions remain the same
-async function getCoordinates(address: string): Promise<Location> {
+// Send OTP
+router.post("/send-otp", async (req, res) => {
   try {
-    const response = await axios.get(
-      `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(
-        address
-      )}&key=${process.env.GOOGLE_MAPS_API_KEY}`
-    );
-    const location = response.data.results[0].geometry.location;
-    return { lat: location.lat, lng: location.lng };
-  } catch (error) {
-    console.error("Error getting coordinates:", error);
-    throw new Error("Failed to get coordinates");
-  }
-}
+    const { phone } = req.body;
 
-async function getStateFromCoordinates(location: Location): Promise<string> {
-  try {
-    const response = await axios.get(
-      `https://maps.googleapis.com/maps/api/geocode/json?latlng=${location.lat},${location.lng}&key=${process.env.GOOGLE_MAPS_API_KEY}`
-    );
+    // ww are checking here if the user already exists
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        phone,
+      },
+    });
 
-    const addressComponents = response.data.results[0].address_components;
-    const state = addressComponents.find((component: any) =>
-      component.types.includes("administrative_area_level_1")
-    );
-
-    return state ? state.long_name : "";
-  } catch (error) {
-    console.error("Error getting state:", error);
-    return "";
-  }
-}
-
-// Calculate all applicable taxes and charges
-async function calculateTaxAndCharges(
-  pickupLocation: string,
-  dropLocation: string,
-  category: string
-): Promise<TaxAndCharges> {
-  const pickup = await getCoordinates(pickupLocation);
-  const drop = await getCoordinates(dropLocation);
-
-  const pickupState = await getStateFromCoordinates(pickup);
-  const dropState = await getStateFromCoordinates(drop);
-
-  let stateTax = 0;
-  let mcdCharges = 0;
-  let airportCharges = 0;
-
-  // Convert and validate category
-  const lowerCategory = category.toLowerCase();
-  if (!isValidCategory(lowerCategory)) {
-    console.warn(`Invalid category: ${category}, defaulting to no state tax`);
-    return {
-      stateTax: 0,
-      tollCharges: 0,
-      airportCharges: 0,
-      mcdCharges: 0,
-    };
-  }
-
-  // Calculate state tax and MCD charges based on route
-  if (pickupState === "Haryana" && dropState === "Uttar Pradesh") {
-    // Haryana to UP route (includes both taxes since it goes via Delhi)
-    stateTax = CHARGES.STATE_TAX.HARYANA_TO_UP[lowerCategory];
-  } else if (pickupState === "Uttar Pradesh" && dropState === "Haryana") {
-    // UP to Haryana route (includes both taxes since it goes via Delhi)
-    stateTax = CHARGES.STATE_TAX.UP_TO_HARYANA[lowerCategory];
-  } else if (pickupState === "Delhi" && dropState === "Haryana") {
-    stateTax = CHARGES.STATE_TAX.DELHI_TO_HARYANA[lowerCategory];
-  } else if (pickupState === "Delhi" && dropState === "Uttar Pradesh") {
-    stateTax = CHARGES.STATE_TAX.DELHI_TO_UP[lowerCategory];
-  } else if (pickupState !== "Delhi" && dropState === "Delhi") {
-    // Any state to Delhi route
-    mcdCharges = CHARGES.MCD_CHARGE;
-  }
-
-  // Apply airport charges if applicable
-  if (
-    pickupLocation.toLowerCase().includes("terminal 1") ||
-    pickupLocation.toLowerCase().includes("terminal 2") ||
-    pickupLocation.toLowerCase().includes("terminal 3") ||
-    pickupLocation.toLowerCase().includes("t1") ||
-    pickupLocation.toLowerCase().includes("t2") ||
-    pickupLocation.toLowerCase().includes("t3")
-  ) {
-    airportCharges = CHARGES.AIRPORT_PARKING;
-  }
-
-  return {
-    stateTax,
-    tollCharges: 0, // Toll charges are not currently implemented
-    airportCharges,
-    mcdCharges,
-  };
-}
-
-interface FareEstimate {
-  baseFare: number;
-  totalFare: number;
-  charges: TaxAndCharges;
-  distance: number;
-  duration: number;
-  currency: string;
-  carrierCharge?: number;
-}
-
-// Enhanced fare calculation function
-export const calculateFare = async (
-  pickupLocation: string,
-  dropLocation: string,
-  distance: number,
-  category: string,
-  carrierRequested: boolean = false
-): Promise<{
-  baseFare: number;
-  totalFare: number;
-  charges: TaxAndCharges;
-  carrierCharge?: number;
-}> => {
-  const baseFare = 50;
-  let perKmRate = 0;
-
-  // Calculate per km rate based on distance and category
-  if (distance > 8) {
-    switch (category.toLowerCase()) {
-      case "mini":
-        perKmRate = 14;
-        break;
-      case "sedan":
-        perKmRate = 17;
-        break;
-      case "suv":
-        perKmRate = 27;
-        break;
-      default:
-        perKmRate = 15;
+    if (existingUser) {
+      // If user exists and is verified, return success with existingUser flag
+      return res.json({
+        message: "User already exists",
+        existingUser: true,
+        userType: existingUser.userType,
+      });
     }
-  } else {
-    switch (category.toLowerCase()) {
-      case "mini":
-        perKmRate = 17;
-        break;
-      case "sedan":
-        perKmRate = 23;
-        break;
-      case "suv":
-        perKmRate = 35;
-        break;
-      default:
-        perKmRate = 20;
-    }
-  }
 
-  const charges = await calculateTaxAndCharges(
-    pickupLocation,
-    dropLocation,
-    category
-  );
-
-  const distanceFare = distance * perKmRate;
-  const baseTotalFare =
-    baseFare +
-    distanceFare +
-    charges.stateTax +
-    charges.tollCharges +
-    charges.airportCharges +
-    charges.mcdCharges;
-
-  // Add carrier charge if requested
-  const carrierCharge = carrierRequested ? CARRIER_CHARGE : 0;
-  const totalFare = baseTotalFare + carrierCharge;
-
-  return {
-    baseFare: baseFare + distanceFare,
-    totalFare,
-    charges,
-    carrierCharge: carrierRequested ? CARRIER_CHARGE : undefined,
-  };
-};
-
-// Update the getFareEstimation endpoint
-export const getFareEstimation = async (req: Request, res: Response) => {
-  const { pickupLocation, dropLocation, carrierRequested } = req.body;
-  const userId = req.user?.userId; // Get user ID from authentication middleware
-
-  if (!userId) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  try {
-    const distance = await calculateDistance(pickupLocation, dropLocation);
-    const duration = await calculateDuration(pickupLocation, dropLocation);
-
-    // Calculate fares for all categories with taxes and charges
-    const categories: CarCategory[] = ["mini", "sedan", "suv"];
-    const estimates: Record<CarCategory, FareEstimate> = {} as Record<
-      // <-- Removed outstanding fee from type
-      CarCategory,
-      FareEstimate // <-- Removed outstanding fee from type
-    >;
-
-    for (const category of categories) {
-      const fareDetails = await calculateFare(
-        pickupLocation,
-        dropLocation,
-        distance,
-        category,
-        carrierRequested
-      );
-
-      estimates[category] = {
-        ...fareDetails,
-        distance,
-        duration,
-        currency: "INR",
-        totalFare: fareDetails.totalFare, // <-- Use the original totalFare without the fee
-        carrierCharge: fareDetails.carrierCharge,
-      };
-    }
+    // If user doesn't exist or isn't verified, send OTP
+    await twilioClient.verify.v2
+      .services(process.env.TWILIO_VERIFY_SID!)
+      .verifications.create({
+        to: phone,
+        channel: "sms",
+      });
 
     res.json({
-      estimates,
-      carrierRequested: carrierRequested || false,
+      message: "OTP sent successfully",
+      existingUser: false,
     });
   } catch (error) {
-    console.error("Error in fare estimation:", error);
-    res.status(500).json({ error: "Failed to calculate fare estimation" });
+    console.error("Send OTP error:", error);
+    res.status(500).json({ error: "Failed to send OTP" });
   }
-};
-
-async function calculatePickupMetrics(driver: any, pickupLocation: string) {
-  const pickupDistance = await calculateDistance(
-    `${driver.locationLat},${driver.locationLng}`,
-    pickupLocation
-  );
-  const pickupDuration = await calculateDuration(
-    `${driver.locationLat},${driver.locationLng}`,
-    pickupLocation
-  );
-  return { pickupDistance, pickupDuration };
-}
-
-// Helper function to wait for driver response
-function waitForDriverResponse(
-  rideId: string,
-  driverId: string
-): Promise<{ accepted: boolean }> {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      resolve({ accepted: false });
-    }, DRIVER_REQUEST_TIMEOUT);
-
-    io.once(`driver_response_${rideId}_${driverId}`, (response) => {
-      clearTimeout(timeout);
-      resolve(response);
-    });
-  });
-}
-
-// Helper function to initialize ride record
-async function initializeRide(
-  userId: string,
-  pickupLocation: string,
-  dropLocation: string,
-  carCategory: string,
-  paymentMode: PaymentMode | undefined,
-  carrierRequested: boolean = false
-) {
-  const distance = await calculateDistance(pickupLocation, dropLocation);
-  const duration = await calculateDuration(pickupLocation, dropLocation);
-  const fareDetails = await calculateFare(
-    pickupLocation,
-    dropLocation,
-    distance,
-    carCategory,
-    carrierRequested
-  );
-
-  return prisma.ride.create({
-    data: {
-      userId,
-      pickupLocation,
-      dropLocation,
-      carCategory,
-      fare: fareDetails.totalFare,
-      distance,
-      duration,
-      status: RideStatus.SEARCHING,
-      paymentMode: paymentMode || PaymentMode.CASH,
-      otp: generateOTP().toString(),
-      waitingStartTime: null,
-      waitingMinutes: 0,
-      waitingCharges: 0,
-      extraCharges: 0,
-      carrierRequested: carrierRequested,
-      carrierCharge: carrierRequested ? CARRIER_CHARGE : 0,
-    },
-    include: {
-      user: {
-        select: { name: true, phone: true },
-      },
-    },
-  });
-}
-
-async function findAndRequestDrivers(ride: any) {
-  let currentRadius = INITIAL_SEARCH_RADIUS;
-  const attemptedDrivers = new Set<string>();
-  const searchedDrivers: any[] = [];
-
-  while (currentRadius <= MAX_SEARCH_RADIUS) {
-    // Add a check for ride status before continuing search
-    const currentRideStatus = await prisma.ride.findUnique({
-      where: { id: ride.id },
-      select: { status: true },
-    });
-
-    if (currentRideStatus?.status !== RideStatus.SEARCHING) {
-      return {
-        success: true,
-        message: "Ride already assigned",
-        searchedDrivers,
-        finalRadius: currentRadius,
-      };
-    }
-
-    // Prepare filter options including carrier and car category
-    const filterOptions: { hasCarrier?: boolean; carCategory?: string } = {};
-    if (ride.carrierRequested) {
-      filterOptions.hasCarrier = true;
-    }
-    // Ensure we pass the carCategory from the ride object
-    if (ride.carCategory) {
-      filterOptions.carCategory = ride.carCategory; // Pass the requested category
-    } else {
-      console.warn(
-        `[findAndRequestDrivers] Ride ${ride.id} is missing carCategory for filtering.`
-      );
-    }
-
-    console.log(
-      `[findAndRequestDrivers] Searching drivers for ride ${ride.id} in radius ${currentRadius}km with filters:`,
-      filterOptions
-    );
-
-    // Call searchAvailableDrivers with the filter options
-    const drivers = await searchAvailableDrivers(
-      ride.pickupLocation,
-      currentRadius,
-      filterOptions // Pass the options object
-    );
-
-    console.log(
-      `[findAndRequestDrivers] Found ${drivers.length} suitable drivers in radius ${currentRadius}km.`
-    );
-
-    const newDrivers = drivers.filter((d) => !attemptedDrivers.has(d.driverId));
-
-    if (newDrivers.length > 0) {
-      searchedDrivers.push(
-        ...newDrivers.map((d) => ({
-          driverId: d.driverId,
-          distance: d.distance,
-          status: "searched",
-          hasCarrier: d.driver?.driverDetails?.hasCarrier || false,
-        }))
-      );
-
-      for (const driver of newDrivers) {
-        attemptedDrivers.add(driver.driverId);
-
-        if (!driver.socketId) continue;
-
-        try {
-          // Check ride status before sending request
-          const currentRide = await prisma.ride.findUnique({
-            where: { id: ride.id },
-            select: {
-              status: true,
-              driverId: true,
-              userId: true,
-              carrierRequested: true,
-              carrierCharge: true,
-              user: {
-                select: {
-                  name: true,
-                  phone: true,
-                },
-              },
-            },
-          });
-
-          if (currentRide?.status !== RideStatus.SEARCHING) {
-            return {
-              success: true,
-              message: "Ride already accepted",
-              searchedDrivers,
-              ride: currentRide,
-            };
-          }
-
-          // Calculate metrics and emit request
-          const pickupMetrics = await calculatePickupMetrics(
-            driver,
-            ride.pickupLocation
-          );
-
-          io.to(driver.driverId).emit("ride_request", {
-            rideId: ride.id,
-            pickupLocation: ride.pickupLocation,
-            dropLocation: ride.dropLocation,
-            fare: ride.totalAmount,
-            distance: ride.distance,
-            duration: ride.duration,
-            paymentMode: ride.paymentMode,
-            carrierRequested: ride.carrierRequested,
-            carCategory: ride.carCategory,
-
-            carrierCharge: ride.carrierCharge,
-            ...pickupMetrics,
-            userId: currentRide.userId,
-            userName: currentRide.user?.name,
-            userPhone: currentRide.user?.phone,
-          });
-
-          const response = await waitForDriverResponse(
-            ride.id,
-            driver.driverId
-          );
-
-          if (response.accepted) {
-            // Use transaction to ensure atomicity
-            const result = await prisma.$transaction(async (prisma) => {
-              // Final check before updating
-              const finalCheck = await prisma.ride.findFirst({
-                where: {
-                  id: ride.id,
-                  status: RideStatus.SEARCHING,
-                  driverId: null,
-                },
-                select: { status: true },
-              });
-
-              if (!finalCheck) {
-                return null;
-              }
-
-              // Update ride with driver and metrics
-              return prisma.ride.update({
-                where: {
-                  id: ride.id,
-                },
-                data: {
-                  driverId: driver.driverId,
-                  status: RideStatus.ACCEPTED,
-                  pickupDistance: pickupMetrics.pickupDistance,
-                  pickupDuration: pickupMetrics.pickupDuration,
-                },
-                include: {
-                  driver: {
-                    select: {
-                      id: true,
-                      name: true,
-                      phone: true,
-                      driverDetails: true,
-                    },
-                  },
-                  user: true,
-                },
-              });
-            });
-
-            if (result) {
-              // Notify user about accepted ride
-              io.to(result.userId).emit("ride_status_update", {
-                rideId: ride.id,
-                status: RideStatus.ACCEPTED,
-                driverId: driver.driverId,
-                pickupDistance: pickupMetrics.pickupDistance,
-                pickupDuration: pickupMetrics.pickupDuration,
-                carrierRequested: ride.carrierRequested,
-              });
-
-              // Broadcast ride unavailability
-              io.emit("ride_unavailable", { rideId: ride.id });
-
-              return {
-                success: true,
-                message: "Driver found successfully",
-                searchedDrivers,
-                finalRadius: currentRadius,
-                ride: result,
-              };
-            }
-          }
-        } catch (error) {
-          console.error(`Error requesting driver ${driver.driverId}:`, error);
-          continue;
-        }
-      }
-    }
-    currentRadius += 2;
-  }
-
-  return {
-    success: false,
-    message: ride.carrierRequested
-      ? "No drivers with carrier available"
-      : "No available drivers found",
-    searchedDrivers,
-    finalRadius: currentRadius - 2,
-  };
-}
-
-// Define types for the package structure
-type PackageDetails = {
-  km: number;
-  price: number;
-};
-
-type PackageHours = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
-
-type RentalPackages = {
-  [K in CarCategory]: {
-    [H in PackageHours]: PackageDetails;
-  };
-};
-
-// Define the rental packages with proper typing
-const RENTAL_PACKAGES: RentalPackages = {
-  mini: {
-    1: { km: 15, price: 380 },
-    2: { km: 25, price: 550 },
-    3: { km: 35, price: 700 },
-    4: { km: 45, price: 950 },
-    5: { km: 60, price: 1250 },
-    6: { km: 70, price: 1550 },
-    7: { km: 80, price: 1850 },
-    8: { km: 90, price: 2100 },
-  },
-  sedan: {
-    1: { km: 15, price: 450 },
-    2: { km: 25, price: 600 },
-    3: { km: 40, price: 850 },
-    4: { km: 50, price: 1100 },
-    5: { km: 65, price: 1400 },
-    6: { km: 75, price: 1650 },
-    7: { km: 85, price: 2000 },
-    8: { km: 90, price: 2300 },
-  },
-  suv: {
-    1: { km: 15, price: 580 },
-    2: { km: 25, price: 750 },
-    3: { km: 40, price: 950 },
-    4: { km: 50, price: 1200 },
-    5: { km: 65, price: 1500 },
-    6: { km: 75, price: 1850 },
-    7: { km: 85, price: 2100 },
-    8: { km: 90, price: 2450 },
-  },
-};
-
-const EXTRA_KM_RATES = {
-  mini: 14,
-  sedan: 16,
-  suv: 18,
-};
-
-const EXTRA_MINUTE_RATE = 2;
-
-// Add this new function to calculate rental fare
-export const calculateRentalFare = (
-  carCategory: string,
-  packageHours: number,
-  actualKms: number,
-  actualMinutes: number
-) => {
-  const category = carCategory.toLowerCase() as keyof typeof RENTAL_PACKAGES;
-  const packageDetails =
-    RENTAL_PACKAGES[category][
-      packageHours as keyof (typeof RENTAL_PACKAGES)[typeof category]
-    ];
-
-  if (!packageDetails) {
-    throw new Error("Invalid package selected");
-  }
-
-  const basePrice = packageDetails.price;
-  const packageKms = packageDetails.km;
-
-  // Calculate extra km charges
-  const extraKms = Math.max(0, actualKms - packageKms);
-  const extraKmCharges = extraKms * EXTRA_KM_RATES[category];
-
-  // Calculate extra minute charges
-  const packageMinutes = packageHours * 60;
-  const extraMinutes = Math.max(0, actualMinutes - packageMinutes);
-  const extraMinuteCharges = extraMinutes * EXTRA_MINUTE_RATE;
-
-  return {
-    basePrice,
-    packageKms,
-    extraKmCharges,
-    extraMinuteCharges,
-    totalAmount: basePrice + extraKmCharges + extraMinuteCharges,
-  };
-};
-
-// Type guards for validation
-const isValidCarCategory = (category: string): category is CarCategory => {
-  return ["mini", "sedan", "suv"].includes(category.toLowerCase());
-};
-
-const isValidPackageHours = (hours: number): hours is PackageHours => {
-  return hours >= 1 && hours <= 8;
-};
-
-// Modify createRide to handle carrier requests for all ride types
-export const createRide = async (req: Request, res: Response) => {
-  // 1. Extract request body data
-  const {
-    pickupLocation,
-    dropLocation, // May be empty for rentals
-    carCategory,
-    paymentMode,
-    isCarRental, // Boolean indicating rental type
-    rentalPackageHours, // Only relevant for rentals
-    carrierRequested, // Boolean for carrier need
-  } = req.body;
-
-  // 2. Validate user authentication
-  if (!req.user) {
-    console.error("[createRide] Error: Unauthorized access attempt.");
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  const userId = req.user.userId;
-  console.log(`[createRide] Received request from user: ${userId}`);
-
+});
+// Verify OTP and Sign Up
+router.post("/verify-otp", async (req: Request, res: Response) => {
   try {
-    // 3. Prepare common ride data
-    console.log(`[createRide] Preparing ride data for user ${userId}`);
-    let rideData: any = {
-      userId,
-      pickupLocation,
-      carCategory,
-      status: RideStatus.SEARCHING, // Initial status
-      paymentMode: paymentMode || PaymentMode.CASH, // Default to CASH
-      otp: generateOTP().toString(), // Generate OTP
-      rideType: isCarRental ? RideType.CAR_RENTAL : RideType.LOCAL,
-      carrierRequested: carrierRequested || false,
-      carrierCharge: carrierRequested ? CARRIER_CHARGE : 0,
-      waitingStartTime: null,
-      waitingMinutes: 0,
-      waitingCharges: 0,
-      extraCharges: 0,
-      totalAmount: 0, // Initialize totalAmount (will be calculated below)
-    };
+    const { phone, otp, password } = req.body;
 
-    // 4. Add specific data based on ride type (Rental vs Local)
-    let calculatedBaseFare = 0; // To store fare
-
-    if (isCarRental) {
-      console.log(`[createRide] Processing CAR_RENTAL for user ${userId}`);
-      // Validate rental-specific inputs
-      const isValidCategoryFlag = isValidCarCategory(carCategory);
-      const isValidHoursFlag = isValidPackageHours(rentalPackageHours);
-      if (!isValidCategoryFlag) {
-        console.error(`[createRide] Invalid car category: ${carCategory}`);
-        return res.status(400).json({ error: "Invalid car category" });
-      }
-      if (!isValidHoursFlag) {
-        console.error(
-          `[createRide] Invalid package hours: ${rentalPackageHours}`
-        );
-        return res.status(400).json({ error: "Invalid package hours" });
-      }
-      // Get rental package details
-      const packageDetails =
-        RENTAL_PACKAGES[carCategory.toLowerCase() as CarCategory][
-          rentalPackageHours
-        ];
-      const baseRentalPrice =
-        packageDetails.price + (rideData.carrierCharge || 0);
-      calculatedBaseFare = baseRentalPrice; // Store base rental price
-
-      rideData = {
-        ...rideData,
-        isCarRental: true,
-        rentalPackageHours,
-        rentalPackageKms: packageDetails.km,
-        rentalBasePrice: baseRentalPrice,
-        fare: baseRentalPrice, // Initial fare is base price
-        totalAmount: baseRentalPrice, // Set total amount directly
-        dropLocation: "", // Default empty drop location for rentals
-        actualKmsTravelled: 0, // Initialize rental specific fields
-        actualMinutes: 0,
-        extraKmCharges: 0,
-        extraMinuteCharges: 0,
-      };
-      console.log(`[createRide] Rental data prepared:`, rideData);
-    } else {
-      // Regular Local Ride
-      console.log(`[createRide] Processing LOCAL ride for user ${userId}`);
-      if (!dropLocation) {
-        console.error(
-          `[createRide] Error: Drop location is required for local rides.`
-        );
-        return res
-          .status(400)
-          .json({ error: "Drop location is required for local rides" });
-      }
-      // Calculate distance, duration, and fare
-      rideData.dropLocation = dropLocation;
-      console.log(
-        `[createRide] Calculating distance/duration for ${pickupLocation} to ${dropLocation}`
-      );
-      const distance = await calculateDistance(pickupLocation, dropLocation);
-      const duration = await calculateDuration(pickupLocation, dropLocation);
-      console.log(
-        `[createRide] Calculated Distance: ${distance} km, Duration: ${duration} min`
-      );
-      console.log(
-        `[createRide] Calculating fare for category ${carCategory}, carrier: ${carrierRequested}`
-      );
-      const fareDetails = await calculateFare(
-        pickupLocation,
-        dropLocation,
-        distance,
-        carCategory,
-        carrierRequested
-      );
-      calculatedBaseFare = fareDetails.totalFare; // Store calculated fare
-
-      rideData = {
-        ...rideData,
-        distance,
-        duration,
-        fare: fareDetails.totalFare,
-        totalAmount: fareDetails.totalFare, // Set total amount directly
-        dropLocation: dropLocation, // Add drop location back
-      };
-      console.log(`[createRide] Local ride data prepared:`, rideData);
+    // Validate input
+    if (!phone || !otp) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // 5. Create the Ride record (Removed fee reset logic)
-    console.log(`[createRide] Creating ride record in database...`); // Simplified log
-
-    // --- START: Simplified Ride Creation (Removed Transaction for Fee Reset) ---
-    const ride = await prisma.ride.create({
-      data: rideData, // Use the prepared rideData
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-            // outstandingCancellationFee: true, // REMOVED - No longer needed here
-          },
-        },
-        driver: {
-          select: { id: true, name: true, phone: true, driverDetails: true },
-        },
-      },
-    });
-    // --- END: Simplified Ride Creation ---
-
-    console.log(
-      `[createRide] Ride record created successfully with ID: ${ride.id}. Final Total Amount: ${ride.totalAmount}`
-    ); // Simplified log
-
-    // 6. Respond IMMEDIATELY
-    console.log(
-      `[createRide] Sending immediate response (201) for ride ${ride.id}`
-    );
-    res.status(201).json({
-      // message: feeAppliedToRide // REMOVED conditional message
-      //   ? `Ride created, outstanding fee of ${outstandingFee} applied. Searching for driver...` // REMOVED
-      //   : "Ride created, searching for driver...", // REMOVED
-      message: "Ride created, searching for driver...", // SIMPLIFIED message
-      ride: ride, // Send the full created ride object back
-      // outstandingFeeApplied: feeAppliedToRide ? outstandingFee : 0, // REMOVED
-    });
-    console.log(
-      `[createRide] Response sent for ride ${ride.id}. Initiating async driver search...`
-    );
-
-    // 7. Initiate driver search asynchronously (IIFE)
-    (async () => {
-      try {
-        console.log(
-          `[Async Search] Starting background driver search for ride ${ride.id}`
-        );
-        // Pass the newly created ride object with includes to the search function
-        const driverSearchResult = await findAndRequestDrivers(ride); // This function searches and handles acceptance/socket emits
-        console.log(
-          `[Async Search] Background search completed for ride ${ride.id}. Result Success: ${driverSearchResult.success}, Message: ${driverSearchResult.message}`
-        );
-
-        // If the async search fails to find a driver
-        if (!driverSearchResult.success) {
-          console.log(
-            `[Async Search] Driver search failed for ride ${ride.id}. Checking current status before potentially cancelling...`
-          );
-          // Check the ride status again before updating
-          const currentRideState = await prisma.ride.findUnique({
-            where: { id: ride.id },
-            select: { status: true },
-          });
-
-          // Only update to CANCELLED if it's still in SEARCHING state
-          if (currentRideState?.status === RideStatus.SEARCHING) {
-            console.log(
-              `[Async Search] Ride ${ride.id} still SEARCHING. Updating status to CANCELLED (No drivers found).`
-            );
-            // Update the database first
-            await updateRideInDatabase(ride.id, RideStatus.CANCELLED);
-            // Notify the user via socket AFTER db update
-            io.to(ride.userId).emit("ride_status_update", {
-              rideId: ride.id,
-              status: RideStatus.CANCELLED,
-              reason:
-                driverSearchResult.message || "No available drivers found",
-            });
-            console.log(
-              `[Async Search] Sent CANCELLED status update to user ${ride.userId} for ride ${ride.id}`
-            );
-          } else {
-            console.log(
-              `[Async Search] Ride ${ride.id} status is already ${currentRideState?.status}. No cancellation needed from async search failure.`
-            );
-          }
-        }
-        // If driverSearchResult.success is true, findAndRequestDrivers handles DB updates and socket emits.
-      } catch (searchError) {
-        console.error(
-          `[Async Search] Error during background driver search for ride ${ride.id}:`,
-          searchError
-        );
-        // Attempt to cancel the ride if an error occurred, checking status first
-        try {
-          const currentRideStateOnError = await prisma.ride.findUnique({
-            where: { id: ride.id },
-            select: { status: true },
-          });
-          if (currentRideStateOnError?.status === RideStatus.SEARCHING) {
-            console.log(
-              `[Async Search] Error occurred for ${ride.id} while SEARCHING. Updating status to CANCELLED.`
-            );
-            await updateRideInDatabase(ride.id, RideStatus.CANCELLED); // Update DB first
-            io.to(ride.userId).emit("ride_status_update", {
-              // Notify user after DB update
-              rideId: ride.id,
-              status: RideStatus.CANCELLED,
-              reason: "Error during driver search process",
-            });
-            console.log(
-              `[Async Search] Sent CANCELLED status update due to error to user ${ride.userId} for ride ${ride.id}`
-            );
-          } else {
-            console.log(
-              `[Async Search] Error occurred for ${ride.id}, but status is already ${currentRideStateOnError?.status}. No cancellation needed.`
-            );
-          }
-        } catch (dbError) {
-          console.error(
-            `[Async Search] Error updating ride ${ride.id} to CANCELLED after search error:`,
-            dbError
-          );
-        }
-      }
-    })(); // End of async IIFE
-  } catch (error) {
-    console.error(
-      "[createRide] Error during initial ride creation process:",
-      error
-    );
-    // Ensure response is sent only once
-    if (!res.headersSent) {
-      console.error(
-        "[createRide] Sending 500 error response as headers were not sent."
-      );
-      res.status(500).json({ error: "Failed to create ride record" });
-    } else {
-      console.error(
-        "[createRide] Error occurred after response was already sent. Ride ID potentially unknown or not created."
-      );
-    }
-  }
-};
-
-//  updateRideStatus with wait timer and extra charges
-export const updateRideStatus = async (req: Request, res: Response) => {
-  const rideId = req.params.id;
-  const { status, otp, cancellationReason } = req.body;
-  const userId = req.user?.userId;
-  const userType = req.user?.userType as UserType;
-
-  try {
-    const ride = await prisma.ride.findUnique({
-      where: { id: rideId },
-      include: { driver: true },
-    });
-
-    if (!ride) return res.status(404).json({ error: "Ride not found" });
-
-    // Permission validation
-    if (!validatePermissions(userType, userId, ride, status)) {
-      return res.status(403).json({ error: "Forbidden" });
+    // Check if user already exists
+    const existingUser = await prisma.user.findUnique({ where: { phone } });
+    if (existingUser) {
+      return res.status(400).json({ error: "User already exists" });
     }
 
-    // status-specific logic
-    switch (status) {
-      case "DRIVER_ARRIVED":
-        await handleDriverArrival(ride);
-        break;
-      case "RIDE_STARTED":
-        if (!validateOTP(ride, otp)) {
-          return res.status(400).json({ error: "Invalid OTP" });
-        }
-        await calculateWaitingCharges(ride);
-        break;
-      case "RIDE_ENDED":
-        return handleRideCompletion(req, res);
-      case "CANCELLED":
-        if (!userType)
-          return res.status(403).json({ error: "User type is required" });
-        return handleRideCancellation(
-          ride.id,
-          userId!,
-          userType,
-          cancellationReason,
-          res
-        );
+    // Verify OTP using Twilio Verify Service
+    const verification = await twilioClient.verify.v2
+      .services(process.env.TWILIO_VERIFY_SID!)
+      .verificationChecks.create({
+        to: phone,
+        code: otp,
+      });
+
+    if (!verification.valid) {
+      return res.status(400).json({ error: "Invalid or expired OTP" });
     }
-    const updatedRide = await updateRideInDatabase(rideId, status);
-    emitRideStatusUpdate(ride, status);
-    res.json(updatedRide);
-  } catch (error) {
-    res.status(500).json({ error: "Failed to update ride status" });
-  }
-};
 
-// Helper functions
-const validatePermissions = (
-  userType: UserType | undefined,
-  userId: string | undefined,
-  ride: any,
-  newStatus: RideStatus
-): boolean => {
-  if (!userType || !userId) return false;
-
-  // Allow ride cancellation for both drivers and users
-  if (newStatus === RideStatus.CANCELLED) {
-    if (userType === "DRIVER") {
-      return ride.driverId === userId;
+    // Hash password if provided
+    let hashedPassword = null;
+    if (password) {
+      hashedPassword = await bcryptjs.hash(password, 10);
     }
-    if (userType === "USER") {
-      return ride.userId === userId;
-    }
-    return false;
-  }
 
-  // Other status updates for drivers
-  if (userType === "DRIVER") {
-    return (
-      ride.driverId === userId &&
-      ["DRIVER_ARRIVED", "RIDE_STARTED", "RIDE_ENDED"].includes(newStatus)
-    );
-  }
-
-  // For users, allow other actions if needed
-  if (userType === "USER") {
-    return ride.userId === userId;
-  }
-
-  return false;
-};
-
-const handleDriverArrival = async (ride: any) => {
-  await prisma.ride.update({
-    where: { id: ride.id },
-    data: {
-      driverArrivedAt: new Date(),
-      waitingStartTime: new Date(),
-    },
-  });
-};
-
-const calculateWaitingCharges = async (ride: any) => {
-  if (ride.waitingStartTime) {
-    const now = new Date();
-    const waitingTimeMs =
-      now.getTime() - new Date(ride.waitingStartTime).getTime();
-    const waitingMinutes = Math.floor(waitingTimeMs / (1000 * 60));
-
-    // Only charge for waiting time beyond the free period
-    const chargableMinutes = Math.max(0, waitingMinutes - FREE_WAITING_MINUTES);
-    const waitingCharges = chargableMinutes * WAITING_CHARGE_PER_MINUTE;
-
-    await prisma.ride.update({
-      where: { id: ride.id },
+    // Create user with verified status
+    const user = await prisma.user.create({
       data: {
-        waitingMinutes,
-        waitingCharges,
-        fare: ride.fare + waitingCharges, // Add waiting charges to the fare
+        phone,
+        userType: "USER",
+        verified: true,
+        password: hashedPassword,
       },
     });
 
-    return { waitingMinutes, chargableMinutes, waitingCharges };
-  }
-  return { waitingMinutes: 0, chargableMinutes: 0, waitingCharges: 0 };
-};
-
-export const handleRideCompletion = async (req: Request, res: Response) => {
-  const { rideId } = req.params;
-  const { finalLocation, actualKmsTravelled, actualMinutes } = req.body;
-
-  try {
-    const ride = await prisma.ride.findFirst({
-      where: {
-        id: rideId,
-        status: RideStatus.RIDE_STARTED,
-      },
-      include: {
-        user: true,
-        driver: true,
-      },
-    });
-
-    if (!ride) {
-      return res
-        .status(404)
-        .json({ error: "Ride not found or invalid status" });
-    }
-
-    let finalAmount: number;
-    let updateData: any = {
-      status:
-        ride.paymentMode === PaymentMode.CASH
-          ? RideStatus.RIDE_ENDED
-          : RideStatus.PAYMENT_PENDING,
-      dropLocation: finalLocation,
-    };
-
-    let fareBreakdown: any = {};
-
-    if (ride.isCarRental) {
-      // Calculate final amount for rental
-      const rentalCalculation = calculateRentalFare(
-        ride.carCategory!,
-        ride.rentalPackageHours!,
-        actualKmsTravelled,
-        actualMinutes
-      );
-
-      updateData = {
-        ...updateData,
-        actualKmsTravelled,
-        actualMinutes,
-        extraKmCharges: rentalCalculation.extraKmCharges,
-        extraMinuteCharges: rentalCalculation.extraMinuteCharges,
-        totalAmount: rentalCalculation.totalAmount + (ride.carrierCharge || 0),
-      };
-
-      finalAmount = updateData.totalAmount;
-
-      // Create rental-specific fare breakdown
-      fareBreakdown = {
-        basePrice: rentalCalculation.basePrice,
-        packageKms: rentalCalculation.packageKms,
-        extraKmCharges: rentalCalculation.extraKmCharges,
-        extraMinuteCharges: rentalCalculation.extraMinuteCharges,
-        carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
-        totalAmount: finalAmount,
-      };
-    } else {
-      // Include waiting charges in final amount
-      finalAmount = calculateFinalAmount(ride);
-
-      // Make sure waiting charges are included in totalAmount
-      updateData.totalAmount = finalAmount;
-
-      // Create standard ride fare breakdown
-      fareBreakdown = {
-        baseFare: ride.fare || 0,
-        waitingCharges: ride.waitingCharges || 0,
-        carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
-        extraCharges: ride.extraCharges || 0,
-        totalAmount: finalAmount,
-      };
-    }
-
-    const updatedRide = await prisma.ride.update({
-      where: { id: rideId },
-      data: updateData,
-      include: {
-        user: true,
-        driver: true,
-      },
-    });
-
-    // Emit ride completion event with detailed fare breakdown
-    io.to(ride.userId).emit("ride_completed", {
-      rideId: ride.id,
-      finalLocation,
-      amount: finalAmount,
-      paymentMode: ride.paymentMode,
-      fareBreakdown: fareBreakdown,
-      distance: ride.distance || 0,
-      duration: ride.duration || 0,
-      isCarRental: ride.isCarRental,
-      carrierRequested: ride.carrierRequested,
-      carrierCharge: ride.carrierCharge,
-      waitingCharges: ride.waitingCharges || 0,
-      waitingMinutes: ride.waitingMinutes || 0,
-      ...(ride.isCarRental && {
-        actualKmsTravelled,
-        actualMinutes,
-        extraKmCharges: updateData.extraKmCharges,
-        extraMinuteCharges: updateData.extraMinuteCharges,
-      }),
-    });
-
-    // Handle payment based on mode
-    if (ride.paymentMode === PaymentMode.CASH) {
-      return res.json({
-        success: true,
-        message: "Ride completed, awaiting cash collection",
-        ride: updatedRide,
-        fareBreakdown: fareBreakdown,
-      });
-    } else {
-      const paymentDetails = await initiateRazorpayPayment(updatedRide);
-      return res.json({
-        success: true,
-        message: "Payment initiated",
-        ride: updatedRide,
-        paymentDetails,
-        fareBreakdown: fareBreakdown,
-      });
-    }
-  } catch (error) {
-    console.error("Error completing ride:", error);
-    return res.status(500).json({
-      error: "Failed to complete ride",
-      message: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
-};
-
-const updateRideInDatabase = async (rideId: string, status: RideStatus) => {
-  return prisma.ride.update({
-    where: { id: rideId },
-    data: {
-      status,
-      ...(status === RideStatus.CANCELLED ? { driverId: null } : {}),
-    },
-    include: {
-      user: {
-        select: {
-          id: true,
-          name: true,
-          phone: true,
-        },
-      },
-      driver: {
-        select: {
-          id: true,
-          name: true,
-          phone: true,
-        },
-      },
-    },
-  });
-};
-
-// emitRideStatusUpdate function -> driver and user notifications
-
-const emitRideStatusUpdate = (ride: any, status: string) => {
-  if (ride.userId) {
-    io.to(ride.userId).emit("ride_status_update", {
-      rideId: ride.id,
-      status,
-    });
-  }
-  if (ride.driverId) {
-    io.to(ride.driverId).emit("ride_status_update", {
-      rideId: ride.id,
-      status,
-    });
-  }
-};
-
-// get ride details endpoint
-export const getRide = async (req: Request, res: Response) => {
-  const rideId = req.params.id;
-  console.log(`Received request to fetch ride details for ID: ${rideId}`);
-
-  if (!req.user) {
-    console.log("Unauthorized access attempt.");
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  const { userId, userType } = req.user;
-  console.log(`Authenticated user ID: ${userId}, Type: ${userType}`);
-
-  try {
-    const ride = await prisma.ride.findFirst({
-      where: {
-        id: rideId,
-        OR: [
-          { userId },
-          userType === "DRIVER" ? { driverId: userId } : {}, // Ensure only drivers check driverId
-        ],
-      },
-      include: { driver: true, user: true },
-    });
-
-    if (!ride) {
-      console.log(`No ride found with ID: ${rideId} for user ID: ${userId}`);
-      return res.status(404).json({ error: "Ride not found" });
-    }
-
-    console.log(`Ride found: ${JSON.stringify(ride)}`);
-
-    const driverStatus = ride.driverId
-      ? await prisma.driverStatus.findUnique({
-          where: { driverId: ride.driverId },
-        })
-      : null;
-
-    // Calculate waiting time details if driver has arrived
-    let waitingTimeDetails = null;
-    if (ride.status === RideStatus.DRIVER_ARRIVED && ride.waitingStartTime) {
-      const now = new Date();
-      const waitingTimeMs =
-        now.getTime() - new Date(ride.waitingStartTime).getTime();
-      const waitingMinutes = Math.floor(waitingTimeMs / (1000 * 60));
-      const chargableMinutes = Math.max(
-        0,
-        waitingMinutes - FREE_WAITING_MINUTES
-      );
-
-      waitingTimeDetails = {
-        waitingStartTime: ride.waitingStartTime,
-        currentWaitingMinutes: waitingMinutes,
-        freeWaitingMinutes: FREE_WAITING_MINUTES,
-        chargableMinutes: chargableMinutes,
-        currentWaitingCharges: chargableMinutes * WAITING_CHARGE_PER_MINUTE,
-        chargePerMinute: WAITING_CHARGE_PER_MINUTE,
-      };
-    }
-
-    res.json({ ride, driverStatus, waitingTimeDetails });
-  } catch (error) {
-    console.error("Error fetching ride details:", error);
-    res.status(500).json({ error: "Failed to retrieve ride details" });
-  }
-};
-
-const CANCELLATION_FEE_AMOUNT = 25; // Define the fee amount
-
-// Modify handleRideCancellation to accept rideId and cancellingUserId
-const handleRideCancellation = async (
-  rideId: string,
-  cancellingUserId: string, // ID of the user/driver initiating the cancellation
-  cancellingUserType: UserType, // Type of the user cancelling
-  cancellationReason: string,
-  res: Response // Pass response object to send result
-) => {
-  try {
-    // 1. Fetch the current ride details FIRST
-    const ride = await prisma.ride.findUnique({
-      where: { id: rideId },
-      select: {
-        // Select necessary fields
-        id: true,
-        status: true,
-        driverArrivedAt: true, // Key field to check for fee
-        userId: true,
-        driverId: true,
-        paymentMode: true, // Needed potentially for other logic
-        totalAmount: true, // Needed if we modify it directly (less likely now)
-      },
-    });
-
-    if (!ride) {
-      console.error(`[handleRideCancellation] Ride not found: ${rideId}`);
-      return res.status(404).json({ error: "Ride not found" });
-    }
-
-    // Prevent cancellation if ride is already completed or cancelled
-    if (
-      [
-        RideStatus.RIDE_ENDED,
-        RideStatus.PAYMENT_COMPLETED,
-        RideStatus.CANCELLED,
-      ].some((s) => s === ride.status) // Use .some() for type safety
-    ) {
-      console.log(
-        `[handleRideCancellation] Ride ${rideId} already finished or cancelled. Status: ${ride.status}`
-      );
-      return res
-        .status(400)
-        .json({ error: "Ride cannot be cancelled in its current state" });
-    }
-
-    console.log(
-      `[handleRideCancellation] Processing cancellation for ride ${ride.id} by ${cancellingUserType} (${cancellingUserId}). Reason: ${cancellationReason}`
+    const token = jwt.sign(
+      { userId: user.id, userType: user.userType },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
     );
 
-    // 2. Determine if cancellation fee applies (Driver has arrived)
-    const feeApplies = ride.driverArrivedAt !== null;
-    let cancellationFee = feeApplies ? CANCELLATION_FEE_AMOUNT : 0;
-    let feeMessage = feeApplies
-      ? `Cancellation fee of ${cancellationFee} INR applied.`
-      : "No cancellation fee applied.";
-
-    console.log(
-      `[handleRideCancellation] Driver arrived: ${!!ride.driverArrivedAt}. Fee applies: ${feeApplies}. Fee amount: ${cancellationFee}`
-    );
-
-    let updatedRideData: any;
-    let responsePayload: any = {
-      success: true,
-      message: `Ride cancelled successfully. ${feeMessage}`,
-      cancellationFee,
-      cancelledBy: cancellingUserType,
-    };
-
-    // 3. Apply cancellation logic based on who cancelled and if fee applies
-    if (cancellingUserType === UserType.USER) {
-      console.log(
-        `[handleRideCancellation] User cancellation for ride ${ride.id}.`
-      );
-      if (feeApplies) {
-        // User cancels after driver arrived - Deduct fee from user's wallet
-        console.log(
-          `[handleRideCancellation] Fee applies. Deducting from user ${ride.userId}'s wallet.`
-        );
-        try {
-          // --- Start: Transaction for User Fee Deduction ---
-          const transactionResult = await prisma.$transaction(async (tx) => {
-            // 1. Deduct from user wallet
-            const wallet = await tx.wallet.update({
-              where: { userId: ride.userId }, // Use user ID
-              data: {
-                balance: {
-                  decrement: cancellationFee, // Deduct the fee
-                },
-              },
-            });
-            console.log(
-              `[handleRideCancellation] User ${ride.userId}'s wallet updated. New balance: ${wallet.balance}`
-            );
-
-            // 2. Create Transaction record using existing type
-            await tx.transaction.create({
-              data: {
-                amount: cancellationFee,
-                currency: "INR",
-                type: TransactionType.USER_CANCELLATION_FEE_APPLIED,
-                status: TransactionStatus.COMPLETED,
-                senderId: ride.userId, // User is the 'sender' of the fee
-                receiverId: null, // Or system/admin ID
-                rideId: ride.id,
-                description: `Cancellation fee (user) deducted from wallet for ride ${ride.id}`,
-              },
-            });
-            console.log(
-              `[handleRideCancellation] User cancellation fee transaction created (using USER_CANCELLATION_FEE_APPLIED type) for ride ${ride.id}.`
-            );
-
-            // 3. Update Ride status
-            const updatedRide = await tx.ride.update({
-              where: { id: ride.id },
-              data: {
-                status: RideStatus.CANCELLED,
-                cancellationReason,
-                cancellationFee, // Record the fee on the ride itself
-                cancelledBy: CancelledBy.USER,
-                driverId: null, // Ensure driver is unassigned
-              },
-              include: { user: true, driver: true }, // Include relations for notification
-            });
-            return updatedRide; // Return the updated ride from the transaction
-          });
-          // --- End: Transaction ---
-
-          updatedRideData = transactionResult; // Assign the result from the transaction
-          responsePayload.ride = updatedRideData;
-          responsePayload.message = `Ride cancelled. A fee of ${cancellationFee} INR has been deducted from your wallet.`; // Update message
-          console.log(
-            `[handleRideCancellation] User ${ride.userId} fee deducted from wallet.`
-          );
-        } catch (error) {
-          console.error(
-            `[handleRideCancellation] Error processing user fee transaction for ride ${ride.id}:`,
-            error
-          );
-          return res.status(500).json({
-            error:
-              "Failed to process cancellation fee deduction. Ride not cancelled.",
-          });
-        }
-      } else {
-        // User cancels before driver arrives - No fee
-        updatedRideData = await prisma.ride.update({
-          where: { id: ride.id },
-          data: {
-            status: RideStatus.CANCELLED,
-            cancellationReason,
-            cancellationFee: 0, // Explicitly 0 fee
-            cancelledBy: CancelledBy.USER,
-            driverId: null, // Ensure driver is unassigned
-          },
-          include: { user: true, driver: true }, // Include relations for notification
-        });
-        responsePayload.ride = updatedRideData;
-      }
-    } else if (cancellingUserType === UserType.DRIVER) {
-      console.log(
-        `[handleRideCancellation] Driver cancellation for ride ${ride.id}.`
-      );
-      if (feeApplies) {
-        // Driver cancels after arriving - Deduct fee from driver's wallet
-        console.log(
-          `[handleRideCancellation] Fee applies. Deducting from driver ${ride.driverId}'s wallet.`
-        );
-        if (!ride.driverId) {
-          console.error(
-            `[handleRideCancellation] Critical error: Fee applies but driverId is null for ride ${ride.id}`
-          );
-          // Handle this unlikely case - maybe just cancel without fee deduction?
-          return res.status(500).json({
-            error:
-              "Internal server error: Cannot apply driver fee without driver ID.",
-          });
-        }
-        try {
-          const transactionResult = await prisma.$transaction(async (tx) => {
-            // 1. Deduct from wallet
-            const wallet = await tx.wallet.update({
-              where: { userId: ride.driverId! },
-              data: {
-                balance: {
-                  decrement: cancellationFee,
-                },
-              },
-            });
-            console.log(
-              `[handleRideCancellation] Driver ${ride.driverId}'s wallet updated. New balance: ${wallet.balance}`
-            );
-
-            // 2. Create Transaction record
-            await tx.transaction.create({
-              data: {
-                amount: cancellationFee,
-                currency: "INR",
-                type: TransactionType.DRIVER_CANCELLATION_FEE, // Use specific type
-                status: TransactionStatus.COMPLETED,
-                senderId: ride.driverId, // Driver is the 'sender' of the fee
-                receiverId: null, // Or a system/admin ID if you have one
-                rideId: ride.id,
-                description: `Cancellation fee (driver) for ride ${ride.id}`,
-              },
-            });
-            console.log(
-              `[handleRideCancellation] Driver cancellation fee transaction created for ride ${ride.id}.`
-            );
-
-            // 3. Update Ride status
-            const updatedRide = await tx.ride.update({
-              where: { id: ride.id },
-              data: {
-                status: RideStatus.CANCELLED,
-                cancellationReason,
-                cancellationFee,
-                cancelledBy: CancelledBy.DRIVER, // Use the enum
-              },
-              include: { user: true, driver: true },
-            });
-            return updatedRide; // Return the updated ride from the transaction
-          });
-          updatedRideData = transactionResult; // Assign the result from the transaction
-          responsePayload.ride = updatedRideData;
-          responsePayload.message = `Ride cancelled. A fee of ${cancellationFee} INR has been deducted from your wallet.`;
-        } catch (error) {
-          console.error(
-            `[handleRideCancellation] Error processing driver fee transaction for ride ${ride.id}:`,
-            error
-          );
-          // Don't cancel the ride if the transaction fails? Or cancel without fee? Decide policy.
-          // For now, respond with error and don't cancel.
-          return res.status(500).json({
-            error:
-              "Failed to process cancellation fee deduction. Ride not cancelled.",
-          });
-        }
-      } else {
-        // Driver cancels before arriving - No fee
-        updatedRideData = await prisma.ride.update({
-          where: { id: ride.id },
-          data: {
-            status: RideStatus.CANCELLED,
-            cancellationReason,
-            cancellationFee: 0, // Explicitly set fee to 0
-            cancelledBy: CancelledBy.DRIVER,
-          },
-          include: { user: true, driver: true },
-        });
-        responsePayload.ride = updatedRideData;
-      }
-    } else {
-      console.error(
-        `[handleRideCancellation] Invalid user type for cancellation: ${cancellingUserType}`
-      );
-      return res
-        .status(400)
-        .json({ error: "Invalid user type initiating cancellation." });
-    }
-
-    // 4. Emit socket events AFTER database updates are successful
-    if (updatedRideData) {
-      console.log(
-        `[handleRideCancellation] Emitting cancellation updates for ride ${ride.id}.`
-      );
-      // Notify the other party (if they exist)
-      const targetUserId =
-        cancellingUserType === UserType.USER
-          ? updatedRideData.driverId
-          : updatedRideData.userId;
-      const targetDriverId =
-        cancellingUserType === UserType.DRIVER
-          ? updatedRideData.userId
-          : updatedRideData.driverId;
-
-      if (updatedRideData.userId) {
-        io.to(updatedRideData.userId).emit("ride_status_update", {
-          rideId: ride.id,
-          status: RideStatus.CANCELLED,
-          reason: cancellationReason,
-          cancelledBy: cancellingUserType,
-          cancellationFee: cancellationFee, // Send fee info
-          feeDeducted: cancellingUserType === UserType.USER && feeApplies, // Indicate if fee was deducted from user wallet
-        });
-      }
-      if (updatedRideData.driverId) {
-        io.to(updatedRideData.driverId).emit("ride_status_update", {
-          rideId: ride.id,
-          status: RideStatus.CANCELLED,
-          reason: cancellationReason,
-          cancelledBy: cancellingUserType,
-          cancellationFee: cancellationFee, // Send fee info
-          feeDeducted: cancellingUserType === UserType.DRIVER && feeApplies, // Existing - Indicate if fee was deducted from driver wallet
-        });
-      }
-
-      // Broadcast generic cancellation (optional, maybe remove if specific updates are enough)
-      io.emit("ride_cancelled", {
-        rideId: ride.id,
-        status: "CANCELLED",
-        cancelledBy: cancellingUserType,
-        reason: cancellationReason,
-      });
-    }
-
-    console.log(
-      `[handleRideCancellation] Sending final response for ride ${ride.id}.`
-    );
-    res.json(responsePayload);
-  } catch (error) {
-    console.error(
-      `[handleRideCancellation] General error cancelling ride ${rideId}:`,
-      error
-    );
-    // Avoid sending response if headers already sent (e.g., from transaction error)
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Failed to cancel ride" });
-    }
-  }
-};
-
-// calculateDistance and calculateDuration functions -> Delhi/ncr rides
-
-export const calculateDistance = async (
-  pickup: string,
-  drop: string
-): Promise<number> => {
-  try {
-    const response = await axios.get(
-      `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(
-        pickup
-      )}&destinations=${encodeURIComponent(drop)}&key=${GOOGLE_MAPS_API_KEY}`
-    );
-    const distanceInMeters = response.data.rows[0].elements[0].distance.value;
-    return distanceInMeters / 1000; // Convert to kilometers
-  } catch (error) {
-    console.error("Error calculating distance:", error);
-    return 0;
-  }
-};
-
-export const calculateDuration = async (
-  pickup: string,
-  drop: string
-): Promise<number> => {
-  try {
-    const response = await axios.get(
-      `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${encodeURIComponent(
-        pickup
-      )}&destinations=${encodeURIComponent(drop)}&key=${GOOGLE_MAPS_API_KEY}`
-    );
-    const durationInSeconds = response.data.rows[0].elements[0].duration.value;
-    return Math.ceil(durationInSeconds / 60); // Convert to minutes
-  } catch (error) {
-    console.error("Error calculating duration:", error);
-    return 0;
-  }
-};
-
-export const generateOTP = (): number => {
-  return Math.floor(1000 + Math.random() * 9000);
-};
-
-const validateOTP = (ride: any, otp: number): boolean => {
-  return ride.otp === otp;
-};
-
-export const validateRideChatAccess = async (
-  rideId: string,
-  userId: string
-): Promise<boolean> => {
-  try {
-    const ride = await prisma.ride.findFirst({
-      where: {
-        id: rideId,
-        OR: [{ userId }, { driverId: userId }],
-        status: {
-          in: [
-            RideStatus.ACCEPTED,
-            RideStatus.DRIVER_ARRIVED,
-            RideStatus.RIDE_STARTED,
-            RideStatus.PAYMENT_PENDING,
-          ],
-        },
-      },
+    res.json({
+      token,
+      userId: user.id,
+      message: "User verified and created successfully",
     });
-
-    return !!ride;
-  } catch (error) {
-    console.error("Error validating ride chat access:", error);
-    return false;
-  }
-};
-
-export const getChatMessages = async (req: Request, res: Response) => {
-  const { id: rideId } = req.params;
-  const userId = req.user?.userId;
-
-  if (!userId) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  try {
-    // Validate access
-    const hasAccess = await validateRideChatAccess(rideId, userId);
-    if (!hasAccess) {
-      return res.status(403).json({ error: "Forbidden" });
-    }
-
-    // Get messages
-    const messages = await prisma.chatMessage.findMany({
-      where: {
-        rideId,
-      },
-      include: {
-        sender: {
-          select: {
-            name: true,
-            userType: true,
-          },
-        },
-      },
-      orderBy: {
-        createdAt: "asc",
-      },
-    });
-
-    // Mark messages as read
-    await prisma.chatMessage.updateMany({
-      where: {
-        rideId,
-        NOT: {
-          senderId: userId,
-        },
-        read: false,
-      },
-      data: {
-        read: true,
-      },
-    });
-
-    res.json(messages);
-  } catch (error) {
-    console.error("Error fetching chat messages:", error);
-    res.status(500).json({ error: "Failed to fetch chat messages" });
-  }
-};
-
-export const getUserSelfieUrl = async (req: Request, res: Response) => {
-  const { userId } = req.params;
-  const requestingUserId = req.user?.userId;
-
-  if (!requestingUserId) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  try {
-    // Find the user and include necessary details
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        userType: true,
-        selfieUrl: true,
-        driverDetails: {
-          select: {
-            dlUrl: true,
-            carFrontUrl: true,
-            carBackUrl: true,
-          },
-        },
-        vendorDetails: {
-          select: {
-            aadharFrontUrl: true,
-            aadharBackUrl: true,
-            panUrl: true,
-          },
-        },
-      },
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    // Construct response based on user type
-    const response: any = {
-      id: user.id,
-      userType: user.userType,
-      selfieUrl: user.selfieUrl,
-    };
-
-    // Add driver-specific URLs if user is a driver
-    if (user.userType === "DRIVER" && user.driverDetails) {
-      response.driverUrls = {
-        dlUrl: user.driverDetails.dlUrl,
-        carFrontUrl: user.driverDetails.carFrontUrl,
-        carBackUrl: user.driverDetails.carBackUrl,
-      };
-    }
-
-    // Add vendor-specific URLs if user is a vendor
-    if (user.userType === "VENDOR" && user.vendorDetails) {
-      response.vendorUrls = {
-        aadharFrontUrl: user.vendorDetails.aadharFrontUrl,
-        aadharBackUrl: user.vendorDetails.aadharBackUrl,
-        panUrl: user.vendorDetails.panUrl,
-      };
-    }
-
-    res.json(response);
-  } catch (error) {
-    console.error("Error fetching user selfie URL:", error);
+  } catch (error: any) {
+    console.error("Verify OTP error:", error);
     res.status(500).json({
-      error: "Failed to fetch user details",
-      message: error instanceof Error ? error.message : "Unknown error",
+      error: error.message || "Failed to verify OTP",
     });
   }
-};
+});
 
-// Add a new function to get waiting time details
-export const getWaitingTimeDetails = async (req: Request, res: Response) => {
-  const { id: rideId } = req.params;
-
-  if (!req.user) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-
-  const { userId, userType } = req.user;
-
+// Add this new route for driver OTP sending
+router.post("/send-driver-otp", async (req: Request, res: Response) => {
   try {
-    const ride = await prisma.ride.findFirst({
+    const { phone } = req.body;
+
+    // Validate phone number
+    if (!phone) {
+      return res.status(400).json({ error: "Phone number is required" });
+    }
+
+    // Check if driver already exists
+    const existingDriver = await prisma.user.findFirst({
       where: {
-        id: rideId,
-        OR: [{ userId }, userType === "DRIVER" ? { driverId: userId } : {}],
-        status: RideStatus.DRIVER_ARRIVED,
+        phone,
+        userType: "DRIVER",
       },
     });
 
-    if (!ride) {
-      return res.status(404).json({
-        error: "Ride not found or driver has not arrived yet",
-      });
+    if (existingDriver) {
+      return res.status(400).json({ error: "Driver already exists" });
     }
 
-    if (!ride.waitingStartTime) {
+    // Send OTP via Twilio Verify Service
+    await twilioClient.verify.v2
+      .services(process.env.TWILIO_VERIFY_SID!)
+      .verifications.create({
+        to: phone,
+        channel: "sms",
+      });
+
+    res.json({ message: "OTP sent successfully" });
+  } catch (error) {
+    console.error("Send Driver OTP error:", error);
+    res.status(500).json({ error: "Failed to send OTP" });
+  }
+});
+
+// Update the verify-driver-otp route
+router.post("/verify-driver-otp", async (req: Request, res: Response) => {
+  try {
+    const { phone, otp, password } = req.body;
+
+    // Validate input
+    if (!phone || !otp) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Format phone number
+    const formattedPhone = phone.startsWith("+") ? phone : `+${phone}`;
+
+    // Check if driver already exists
+    const existingDriver = await prisma.user.findFirst({
+      where: {
+        phone: formattedPhone,
+        userType: "DRIVER",
+      },
+    });
+
+    if (existingDriver) {
+      return res.status(400).json({ error: "Driver already exists" });
+    }
+
+    // Verify OTP using Twilio Verify Service
+    try {
+      const verification = await twilioClient.verify.v2
+        .services(process.env.TWILIO_VERIFY_SID!)
+        .verificationChecks.create({
+          to: formattedPhone,
+          code: otp,
+        });
+
+      if (!verification.valid) {
+        return res.status(400).json({ error: "Invalid or expired OTP" });
+      }
+    } catch (twilioError: any) {
+      console.error("Twilio verification error:", twilioError);
       return res.status(400).json({
-        error: "Waiting time has not started yet",
+        error: "OTP verification failed",
+        details: twilioError.message,
       });
     }
 
-    const now = new Date();
-    const waitingTimeMs =
-      now.getTime() - new Date(ride.waitingStartTime).getTime();
-    const waitingMinutes = Math.floor(waitingTimeMs / (1000 * 60));
-    const chargableMinutes = Math.max(0, waitingMinutes - FREE_WAITING_MINUTES);
-    const currentWaitingCharges = chargableMinutes * WAITING_CHARGE_PER_MINUTE;
+    // Hash password if provided
+    let hashedPassword = null;
+    if (password) {
+      hashedPassword = await bcryptjs.hash(password, 10);
+    }
 
-    return res.json({
-      success: true,
-      waitingTimeDetails: {
-        waitingStartTime: ride.waitingStartTime,
-        currentWaitingMinutes: waitingMinutes,
-        freeWaitingMinutes: FREE_WAITING_MINUTES,
-        chargableMinutes: chargableMinutes,
-        currentWaitingCharges: currentWaitingCharges,
-        chargePerMinute: WAITING_CHARGE_PER_MINUTE,
-        elapsedTimeMs: waitingTimeMs,
+    // Create driver with verified status
+    const driver = await prisma.user.create({
+      data: {
+        phone: formattedPhone,
+        userType: "DRIVER",
+        verified: true,
+        password: hashedPassword,
       },
     });
-  } catch (error) {
-    console.error("Error getting waiting time details:", error);
-    return res.status(500).json({
-      error: "Failed to get waiting time details",
+
+    const token = jwt.sign(
+      { userId: driver.id, userType: driver.userType },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      userId: driver.id,
+      message: "Driver verified and created successfully",
+    });
+  } catch (error: any) {
+    console.error("Verify Driver OTP error:", error);
+    res.status(500).json({
+      error: "Failed to verify OTP",
+      details: error.message || "Unknown error",
     });
   }
-};
+});
 
-/**
- * Gets unread message count for a ride chat
- * @param req Request with rideId and userId parameters
- * @param res Response with unread message count
- */
-export const getUnreadMessageCount = async (req: Request, res: Response) => {
-  const { rideId, userId } = req.params;
-
+// Verify OTP and create vendor
+router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
   try {
-    // Check if user has access to this ride chat
-    const hasAccess = await validateRideChatAccess(rideId, userId);
-    if (!hasAccess) {
-      return res.status(403).json({
-        error: "Unauthorized access to chat",
-      });
+    const { phone, otp, password } = req.body;
+
+    // Validate input
+    if (!phone || !otp) {
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Count unread messages for this user in this ride
-    const unreadCount = await prisma.chatMessage.count({
+    // Check if vendor already exists
+    const existingVendor = await prisma.user.findUnique({
       where: {
-        rideId,
-        senderId: { not: userId }, // Messages not sent by this user
-        read: false, // That are unread
+        phone,
+        userType: "VENDOR",
       },
     });
 
-    return res.json({ unreadCount });
-  } catch (error) {
-    console.error("Error getting unread message count:", error);
-    return res.status(500).json({
-      error: "Failed to get unread message count",
-      details: error instanceof Error ? error.message : "Unknown error",
+    if (existingVendor) {
+      return res.status(400).json({ error: "Vendor already exists" });
+    }
+
+    // Verify OTP using Twilio Verify Service
+    const verification = await twilioClient.verify.v2
+      .services(process.env.TWILIO_VERIFY_SID!)
+      .verificationChecks.create({
+        to: phone,
+        code: otp,
+      });
+
+    if (!verification.valid) {
+      return res.status(400).json({ error: "Invalid or expired OTP" });
+    }
+
+    // Hash password if provided
+    let hashedPassword = null;
+    if (password) {
+      hashedPassword = await bcryptjs.hash(password, 10);
+    }
+
+    // Create vendor with verified status
+    const vendor = await prisma.user.create({
+      data: {
+        phone,
+        userType: "VENDOR",
+        verified: true,
+        password: hashedPassword,
+      },
+    });
+
+    const token = jwt.sign(
+      { userId: vendor.id, userType: vendor.userType },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      userId: vendor.id,
+      message: "Vendor verified and created successfully",
+    });
+  } catch (error: any) {
+    console.error("Verify Vendor OTP error:", error);
+    res.status(500).json({
+      error: error.message || "Failed to verify OTP",
     });
   }
-};
+});
+
+// Vendor registration endpoint
+router.post(
+  "/vendor-register",
+  verifyToken,
+  upload.fields([
+    { name: "aadharFront", maxCount: 1 },
+    { name: "aadharBack", maxCount: 1 },
+    { name: "panCard", maxCount: 1 },
+  ]),
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const userId = req.user.userId;
+      const files = req.files as
+        | { [fieldname: string]: Express.Multer.File[] }
+        | undefined;
+
+      const {
+        name,
+        email,
+        state,
+        city,
+        businessName,
+        address,
+        experience,
+        gstNumber,
+        aadharNumber,
+        panNumber,
+      } = req.body;
+
+      // Validate required fields
+      if (
+        !businessName ||
+        !address ||
+        !experience ||
+        !gstNumber ||
+        !aadharNumber ||
+        !panNumber
+      ) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      // Upload documents to Cloudinary
+      const aadharFrontUrl = files?.["aadharFront"]?.[0]
+        ? await uploadImage(files["aadharFront"][0].buffer)
+        : null;
+      const aadharBackUrl = files?.["aadharBack"]?.[0]
+        ? await uploadImage(files["aadharBack"][0].buffer)
+        : null;
+      const panUrl = files?.["panCard"]?.[0]
+        ? await uploadImage(files["panCard"][0].buffer)
+        : null;
+
+      if (!aadharFrontUrl || !aadharBackUrl || !panUrl) {
+        return res.status(400).json({ error: "All documents are required" });
+      }
+
+      // Update user profile
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          name,
+          email,
+          state,
+          city,
+          userType: "VENDOR",
+        },
+      });
+
+      // Check if vendor details already exist
+      const existingVendorDetails = await prisma.vendorDetails.findUnique({
+        where: { userId },
+      });
+
+      let vendorDetails;
+      if (existingVendorDetails) {
+        // Update existing vendor details
+        vendorDetails = await prisma.vendorDetails.update({
+          where: { userId },
+          data: {
+            businessName,
+            address,
+            experience,
+            gstNumber,
+            aadharNumber,
+            panNumber,
+            aadharFrontUrl,
+            aadharBackUrl,
+            panUrl,
+          },
+        });
+      } else {
+        // Create new vendor details
+        vendorDetails = await prisma.vendorDetails.create({
+          data: {
+            userId,
+            businessName,
+            address,
+            experience,
+            gstNumber,
+            aadharNumber,
+            panNumber,
+            aadharFrontUrl,
+            aadharBackUrl,
+            panUrl,
+          },
+        });
+      }
+
+      // Get updated user data
+      const updatedUser = await prisma.user.findUnique({
+        where: { id: userId },
+        include: { vendorDetails: true },
+      });
+
+      if (!updatedUser) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // Generate new token with updated user type
+      const token = jwt.sign(
+        { userId, userType: "VENDOR" },
+        process.env.JWT_SECRET!,
+        { expiresIn: "7d" }
+      );
+
+      res.json({
+        message: "Vendor registration completed successfully",
+        token,
+        userId,
+        name: updatedUser.name,
+        email: updatedUser.email,
+        phone: updatedUser.phone,
+        state: updatedUser.state,
+        city: updatedUser.city,
+        vendorDetails: updatedUser.vendorDetails,
+      });
+    } catch (error) {
+      console.error("Vendor registration error:", error);
+      res.status(500).json({
+        error: "Failed to complete vendor registration",
+        details: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
+);
+
+// Vendor sign-in
+router.post("/vendor-sign-in", async (req: Request, res: Response) => {
+  try {
+    const { phone, password } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ error: "Phone number is required" });
+    }
+
+    const vendor = await prisma.user.findFirst({
+      where: {
+        phone,
+        userType: "VENDOR",
+      },
+      include: {
+        vendorDetails: true,
+      },
+    });
+
+    if (!vendor || !vendor.verified) {
+      return res.status(401).json({
+        error: "Invalid phone number or vendor not verified",
+        vendor: vendor,
+        vendorDetails: vendor?.vendorDetails,
+      });
+    }
+
+    // Verify password if it exists in the system and was provided
+    if (vendor.password && password) {
+      const isPasswordValid = await bcryptjs.compare(password, vendor.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ error: "Invalid password" });
+      }
+    } else if (vendor.password && !password) {
+      // Password is set in the system but not provided
+      return res.status(400).json({ error: "Password is required" });
+    }
+
+    const token = jwt.sign(
+      {
+        userId: vendor.id,
+        userType: vendor.userType,
+      },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      vendorId: vendor.id,
+      name: vendor.name,
+      phone: vendor.phone,
+      verified: vendor.verified,
+      vendorDetails: vendor.vendorDetails,
+    });
+  } catch (error) {
+    console.error("Vendor sign-in error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Sign In (simplified to use phone number only)
+router.post("/sign-in", async (req: Request, res: Response) => {
+  try {
+    const { phone, password } = req.body;
+
+    const user = await prisma.user.findUnique({ where: { phone } });
+    if (!user || !user.verified) {
+      return res
+        .status(400)
+        .json({ error: "Invalid phone number or user not verified" });
+    }
+
+    // Verify password if it exists in the system and was provided
+    if (user.password && password) {
+      const isPasswordValid = await bcryptjs.compare(password, user.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ error: "Invalid password" });
+      }
+    } else if (user.password && !password) {
+      // Password is set in the system but not provided
+      return res.status(400).json({ error: "Password is required" });
+    }
+
+    const token = jwt.sign(
+      { userId: user.id, userType: user.userType },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      userId: user.id,
+      userType: user.userType,
+      name: user.name,
+      phone: user.phone,
+      verified: user.verified,
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to sign in" });
+  }
+});
+
+router.post(
+  "/register/:type",
+  verifyToken,
+  uploadFields,
+  async (req: AuthRequest, res) => {
+    try {
+      const { type } = req.params;
+      const userId = req.user.userId;
+      const files = req.files as
+        | { [fieldname: string]: Express.Multer.File[] }
+        | undefined;
+
+      // Common fields for both user types
+      const { name, email, state, city } = req.body;
+
+      // Upload selfie for both user types
+      const selfieUrl = files?.["selfiePath"]?.[0]
+        ? await uploadImage(files["selfiePath"][0].buffer)
+        : null;
+
+      // Update base user information
+      await prisma.user.update({
+        where: { id: userId },
+        data: {
+          name,
+          email,
+          state,
+          city,
+          selfieUrl,
+          userType: type.toUpperCase() as "USER" | "DRIVER" | "ADMIN",
+        },
+      });
+
+      if (type.toUpperCase() === "DRIVER") {
+        const {
+          aadharNumber,
+          panNumber,
+          dlNumber,
+          vehicleNumber,
+          vehicleName,
+          vehicleCategory,
+        } = req.body;
+
+        // Upload all documents
+        const dlUrl = files?.["dlPath"]?.[0]
+          ? await uploadImage(files["dlPath"][0].buffer)
+          : null;
+        const carFrontUrl = files?.["carFront"]?.[0]
+          ? await uploadImage(files["carFront"][0].buffer)
+          : null;
+        const carBackUrl = files?.["carBack"]?.[0]
+          ? await uploadImage(files["carBack"][0].buffer)
+          : null;
+
+        // Handle permit images
+        const permitUrls = files?.["permitImages"]
+          ? await Promise.all(
+              files["permitImages"].map((file) => uploadImage(file.buffer))
+            )
+          : [];
+
+        // Upload new optional documents
+        const rcUrl = files?.["rcDocument"]?.[0]
+          ? await uploadImage(files["rcDocument"][0].buffer)
+          : null;
+        const fitnessUrl = files?.["fitnessDocument"]?.[0]
+          ? await uploadImage(files["fitnessDocument"][0].buffer)
+          : null;
+        const pollutionUrl = files?.["pollutionDocument"]?.[0]
+          ? await uploadImage(files["pollutionDocument"][0].buffer)
+          : null;
+        const insuranceUrl = files?.["insuranceDocument"]?.[0]
+          ? await uploadImage(files["insuranceDocument"][0].buffer)
+          : null;
+
+        // Create driver details with new fields
+        await prisma.driverDetails.create({
+          data: {
+            userId,
+            aadharNumber,
+            panNumber,
+            dlNumber,
+            vehicleNumber,
+            vehicleName,
+            vehicleCategory,
+            carCategory: vehicleCategory,
+            dlUrl,
+            permitUrls,
+            carFrontUrl,
+            carBackUrl,
+            rcUrl,
+            fitnessUrl,
+            pollutionUrl,
+            insuranceUrl,
+          },
+        });
+      } else if (type.toUpperCase() === "USER") {
+        // Create user details
+        await prisma.userDetails.create({
+          data: {
+            userId,
+          },
+        });
+      } else {
+        return res.status(400).json({ error: "Invalid user type" });
+      }
+
+      // Generate new token with updated user type
+      const token = jwt.sign(
+        { userId, userType: type.toUpperCase() },
+        process.env.JWT_SECRET!,
+        { expiresIn: "7d" }
+      );
+
+      res.json({
+        message: `${type} registration completed successfully`,
+        token,
+        userId: userId,
+        userType: type.toUpperCase(),
+        name: name,
+        email: email,
+        state: state,
+        city: city,
+      });
+    } catch (error) {
+      console.error("Registration error:", error);
+      res.status(500).json({
+        error: "Failed to complete registration",
+        details: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
+);
+
+// Admin registration (one-time setup)
+router.post("/admin-register", async (req: Request, res: Response) => {
+  try {
+    const ADMIN_PHONE = "9999999999"; // Hardcoded admin phone
+
+    // Check if admin already exists
+    const existingAdmin = await prisma.user.findFirst({
+      where: {
+        phone: ADMIN_PHONE,
+        userType: "ADMIN",
+      },
+    });
+
+    if (existingAdmin) {
+      return res.status(400).json({ error: "Admin already exists" });
+    }
+
+    // Create admin user
+    const admin = await prisma.user.create({
+      data: {
+        phone: ADMIN_PHONE,
+        userType: "ADMIN",
+        verified: true,
+        name: "Admin",
+      },
+    });
+
+    const token = jwt.sign(
+      { userId: admin.id, userType: admin.userType },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      message: "Admin registered successfully",
+      token,
+      adminId: admin.id,
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to register admin" });
+  }
+});
+
+// Admin sign-in with hardcoded phone
+router.post("/admin-sign-in", async (req: Request, res: Response) => {
+  try {
+    const ADMIN_PHONE = "9999999999"; // Same hardcoded phone
+
+    const admin = await prisma.user.findFirst({
+      where: {
+        phone: ADMIN_PHONE,
+        userType: "ADMIN",
+      },
+    });
+
+    if (!admin) {
+      return res.status(401).json({ error: "Admin not found" });
+    }
+
+    const token = jwt.sign(
+      { userId: admin.id, userType: admin.userType },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      adminId: admin.id,
+      message: "Admin signed in successfully",
+    });
+  } catch (error) {
+    res.status(500).json({ error: "Failed to sign in" });
+  }
+});
+
+// Driver sign-in (simplified)
+router.post("/driver-sign-in", async (req, res) => {
+  try {
+    const { phone, password } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({ error: "Phone number is required" });
+    }
+
+    const driver = await prisma.user.findFirst({
+      where: {
+        phone,
+        userType: "DRIVER",
+      },
+      include: {
+        driverDetails: true,
+      },
+    });
+
+    if (!driver || !driver.verified) {
+      return res
+        .status(401)
+        .json({ error: "Invalid phone number or driver not verified" });
+    }
+
+    // Verify password if it exists in the system and was provided
+    if (driver.password && password) {
+      const isPasswordValid = await bcryptjs.compare(password, driver.password);
+      if (!isPasswordValid) {
+        return res.status(401).json({ error: "Invalid password" });
+      }
+    } else if (driver.password && !password) {
+      // Password is set in the system but not provided
+      return res.status(400).json({ error: "Password is required" });
+    }
+
+    const token = jwt.sign(
+      {
+        userId: driver.id,
+        userType: driver.userType,
+      },
+      process.env.JWT_SECRET!,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      token,
+      driverId: driver.id,
+      name: driver.name,
+      phone: driver.phone,
+      verified: driver.verified,
+      vehicleDetails: driver.driverDetails,
+    });
+  } catch (error) {
+    console.error("Driver sign-in error:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Logout
+router.post("/logout", verifyToken, (req, res) => {
+  res.json({ message: "Logged out successfully" });
+});
+
+router.post(
+  "/driver/registration-fee/create",
+  verifyToken,
+  createRegistrationOrder
+);
+router.post(
+  "/driver/registration-fee/verify",
+  verifyToken,
+  verifyRegistrationPayment
+);
+router.get(
+  "/driver/registration-fee/status",
+  verifyToken,
+  checkRegistrationStatus
+);
+
+// Forgot Password - Send OTP
+router.post(
+  "/forgot-password/send-otp",
+  async (req: Request, res: Response) => {
+    try {
+      const { phone } = req.body;
+
+      if (!phone) {
+        return res.status(400).json({ error: "Phone number is required" });
+      }
+
+      // Check if user exists
+      const user = await prisma.user.findUnique({ where: { phone } });
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // Send OTP via Twilio Verify Service
+      await twilioClient.verify.v2
+        .services(process.env.TWILIO_VERIFY_SID!)
+        .verifications.create({
+          to: phone,
+          channel: "sms",
+        });
+
+      res.json({ message: "OTP sent successfully" });
+    } catch (error) {
+      console.error("Forgot Password - Send OTP error:", error);
+      res.status(500).json({ error: "Failed to send OTP" });
+    }
+  }
+);
+
+// Forgot Password - Verify OTP and Reset Password
+router.post(
+  "/forgot-password/verify-otp",
+  async (req: Request, res: Response) => {
+    try {
+      const { phone, otp, newPassword } = req.body;
+
+      if (!phone || !otp || !newPassword) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      // Check if user exists
+      const user = await prisma.user.findUnique({ where: { phone } });
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      // Verify OTP
+      const verification = await twilioClient.verify.v2
+        .services(process.env.TWILIO_VERIFY_SID!)
+        .verificationChecks.create({
+          to: phone,
+          code: otp,
+        });
+
+      if (!verification.valid) {
+        return res.status(400).json({ error: "Invalid or expired OTP" });
+      }
+
+      // Hash new password
+      const hashedPassword = await bcryptjs.hash(newPassword, 10);
+
+      // Update user password
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { password: hashedPassword },
+      });
+
+      res.json({ message: "Password reset successful" });
+    } catch (error) {
+      console.error("Forgot Password - Verify OTP error:", error);
+      res.status(500).json({ error: "Failed to reset password" });
+    }
+  }
+);
+
+export { router as authRouter };

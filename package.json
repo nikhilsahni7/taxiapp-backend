@@ -36,7 +36,7 @@
     "@types/socket.io": "^3.0.2",
     "@types/uuid": "^10.0.0",
     "aws-sdk": "^2.1692.0",
-    "axios": "^1.7.9",
+    "axios": "^1.9.0",
     "bcrypt": "^5.1.1",
     "bcryptjs": "^3.0.2",
     "cloudinary": "^2.5.1",
