@@ -1137,63 +1137,70 @@ export const cancelBooking = async (req: Request, res: Response) => {
 
       if (isUserCancelling) {
         // User cancellation logic
-        if (!isDriverArrived) {
-          // If driver hasn't arrived, refund full advance
-          await tx.wallet.upsert({
-            where: { userId: booking.userId },
-            create: {
-              userId: booking.userId,
-              balance: booking.advanceAmount,
-            },
-            update: {
-              balance: {
-                increment: booking.advanceAmount,
-              },
-            },
-          });
+        // Only refund if advance payment was successfully made through Razorpay
+        const advancePaymentMade =
+          booking.advancePaymentStatus === "COMPLETED" &&
+          booking.advancePaymentId;
 
-          // Create transaction record for refund
-          await tx.longDistanceTransaction.create({
-            data: {
-              bookingId,
-              amount: booking.advanceAmount,
-              type: "REFUND",
-              status: "COMPLETED",
-              description: "Refund for cancelled booking",
-              senderId: null,
-              receiverId: booking.userId,
-            },
-          });
-        } else {
-          // If driver has arrived, refund advance minus cancellation fee
-          const refundAmount = booking.advanceAmount - userCancellationFee;
-          if (refundAmount > 0) {
+        if (advancePaymentMade) {
+          if (!isDriverArrived) {
+            // If driver hasn't arrived, refund full advance
             await tx.wallet.upsert({
               where: { userId: booking.userId },
               create: {
                 userId: booking.userId,
-                balance: refundAmount,
+                balance: booking.advanceAmount,
               },
               update: {
                 balance: {
-                  increment: refundAmount,
+                  increment: booking.advanceAmount,
                 },
               },
             });
 
-            // Create transaction record for partial refund
+            // Create transaction record for refund
             await tx.longDistanceTransaction.create({
               data: {
                 bookingId,
-                amount: refundAmount,
+                amount: booking.advanceAmount,
                 type: "REFUND",
                 status: "COMPLETED",
-                description:
-                  "Partial refund for cancelled booking after driver arrival",
+                description: "Refund for cancelled booking",
                 senderId: null,
                 receiverId: booking.userId,
               },
             });
+          } else {
+            // If driver has arrived, refund advance minus cancellation fee
+            const refundAmount = booking.advanceAmount - userCancellationFee;
+            if (refundAmount > 0) {
+              await tx.wallet.upsert({
+                where: { userId: booking.userId },
+                create: {
+                  userId: booking.userId,
+                  balance: refundAmount,
+                },
+                update: {
+                  balance: {
+                    increment: refundAmount,
+                  },
+                },
+              });
+
+              // Create transaction record for partial refund
+              await tx.longDistanceTransaction.create({
+                data: {
+                  bookingId,
+                  amount: refundAmount,
+                  type: "REFUND",
+                  status: "COMPLETED",
+                  description:
+                    "Partial refund for cancelled booking after driver arrival",
+                  senderId: null,
+                  receiverId: booking.userId,
+                },
+              });
+            }
           }
         }
       } else {
@@ -1225,32 +1232,38 @@ export const cancelBooking = async (req: Request, res: Response) => {
           },
         });
 
-        // Refund full advance to user
-        await tx.wallet.upsert({
-          where: { userId: booking.userId },
-          create: {
-            userId: booking.userId,
-            balance: booking.advanceAmount,
-          },
-          update: {
-            balance: {
-              increment: booking.advanceAmount,
-            },
-          },
-        });
+        // Refund full advance to user only if advance payment was made through Razorpay
+        const advancePaymentMade =
+          booking.advancePaymentStatus === "COMPLETED" &&
+          booking.advancePaymentId;
 
-        // Create transaction record for user refund
-        await tx.longDistanceTransaction.create({
-          data: {
-            bookingId,
-            amount: booking.advanceAmount,
-            type: "REFUND",
-            status: "COMPLETED",
-            description: "Refund for driver cancelled booking",
-            senderId: null,
-            receiverId: booking.userId,
-          },
-        });
+        if (advancePaymentMade) {
+          await tx.wallet.upsert({
+            where: { userId: booking.userId },
+            create: {
+              userId: booking.userId,
+              balance: booking.advanceAmount,
+            },
+            update: {
+              balance: {
+                increment: booking.advanceAmount,
+              },
+            },
+          });
+
+          // Create transaction record for user refund
+          await tx.longDistanceTransaction.create({
+            data: {
+              bookingId,
+              amount: booking.advanceAmount,
+              type: "REFUND",
+              status: "COMPLETED",
+              description: "Refund for driver cancelled booking",
+              senderId: null,
+              receiverId: booking.userId,
+            },
+          });
+        }
       }
 
       return updatedBooking;
