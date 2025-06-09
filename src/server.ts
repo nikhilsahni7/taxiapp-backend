@@ -2,6 +2,7 @@ import { RideStatus } from "@prisma/client";
 import cors from "cors";
 import express from "express";
 import http from "http";
+import cron from "node-cron";
 import { Server, Socket } from "socket.io";
 import { setupPaymentSocketEvents } from "./controllers/paymentController";
 import {
@@ -20,12 +21,12 @@ import { hillStationRouter } from "./routes/hillStationRoutes";
 import { outstationRouter } from "./routes/outstationRoutes";
 import { paymentRouter } from "./routes/payment";
 import { rideRouter } from "./routes/ride";
-
 import { userRouter } from "./routes/user";
 import { userWalletRouter } from "./routes/userWallet";
 import { vendorRouter } from "./routes/vendorRoutes";
 import { vendorWalletRouter } from "./routes/vendorWallet";
 import { walletRouter } from "./routes/wallet";
+import { AutoCancellationService } from "./services/autoCancellationService";
 
 const app = express();
 const server = http.createServer(app);
@@ -986,7 +987,24 @@ io.on("connection", (socket: Socket) => {
     console.log("Client disconnected:", socket.id);
   });
 });
+// Initialize auto-cancellation cron job
+// Runs every minute to check for overdue bookings
+cron.schedule(
+  "* * * * *",
+  async () => {
+    await AutoCancellationService.checkAndCancelOverdueBookings();
+  },
+  {
+    timezone: "Asia/Kolkata", // Run in IST timezone
+  }
+);
+
+console.log(
+  "[AutoCancellation] Cron job scheduled to run every minute in IST timezone"
+);
+
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log("[AutoCancellation] Auto-cancellation service is active");
 });
