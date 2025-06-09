@@ -16,8 +16,6 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_SECRET!,
 });
 
-
-
 if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_SECRET) {
   console.error("Razorpay credentials are not configured properly");
 }
@@ -162,7 +160,7 @@ export const handleRideEnd = async (req: Request, res: Response) => {
 // Handle cash payment
 export const handleCashPayment = async (ride: any) => {
   try {
-    // Create transaction record
+    // Create transaction record (for tracking only, no wallet update for cash)
     const transaction = await prisma.transaction.create({
       data: {
         amount: ride.totalAmount,
@@ -171,24 +169,11 @@ export const handleCashPayment = async (ride: any) => {
         senderId: ride.userId,
         receiverId: ride.driverId,
         rideId: ride.id,
-        description: `Cash payment for ride ${ride.id}`,
+        description: `Cash payment for ride ${ride.id} (direct to driver)`,
       },
     });
 
-    // Update driver's wallet
-    await prisma.wallet.upsert({
-      where: { userId: ride.driverId },
-      update: {
-        balance: {
-          increment: ride.totalAmount,
-        },
-      },
-      create: {
-        userId: ride.driverId,
-        balance: ride.totalAmount,
-        currency: "INR",
-      },
-    });
+    // Note: No wallet update for cash payments as money goes directly to driver
 
     // Create fare breakdown for detailed billing
     const fareBreakdown = {
@@ -329,7 +314,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
         },
       });
 
-      // Update driver's wallet
+      // Update driver's wallet for digital payment (correct for Razorpay)
       const updatedWallet = await prisma.wallet.upsert({
         where: { userId: ride.driverId! },
         update: {

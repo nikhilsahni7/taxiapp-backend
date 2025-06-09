@@ -1191,7 +1191,7 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // --- Main Transaction: Update Ride, Create Transaction, Update Wallet --- START
+    // --- Main Transaction: Update Ride and Create Transaction (NO Wallet Update for Cash) --- START
     const [updatedRental, transaction] = await prisma.$transaction([
       // 1. Update Ride Status
       prisma.ride.update({
@@ -1202,7 +1202,7 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
           paymentStatus: TransactionStatus.COMPLETED,
         },
       }),
-      // 2. Create Transaction Record
+      // 2. Create Transaction Record (for tracking only, no wallet update for cash)
       prisma.transaction.create({
         data: {
           amount: rental.totalAmount!,
@@ -1211,22 +1211,7 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
           senderId: rental.userId,
           receiverId: rental.driverId!,
           rideId: rental.id,
-          description: "Cash payment for car rental",
-        },
-      }),
-      // 3. Update Driver Wallet
-      prisma.wallet.upsert({
-        where: {
-          userId: rental.driverId!,
-        },
-        create: {
-          userId: rental.driverId!,
-          balance: rental.totalAmount!,
-        },
-        update: {
-          balance: {
-            increment: rental.totalAmount!,
-          },
+          description: "Cash payment for car rental (direct to driver)",
         },
       }),
     ]);
@@ -1276,8 +1261,9 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
     return res.json({
       success: true,
       message:
-        "Payment confirmed and rental completed" +
-        (feeWasApplied ? " (Outstanding fee cleared)." : "."),
+        "Cash payment confirmed and rental completed" +
+        (feeWasApplied ? " (Outstanding fee cleared)." : ".") +
+        " Cash received directly by driver.",
       rental: updatedRental,
       transaction,
     });
@@ -1375,6 +1361,7 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
             description: "Online payment for car rental",
           },
         }),
+        // Update driver's wallet for digital payment (correct for Razorpay)
         prisma.wallet.upsert({
           where: { userId: rental.driverId! },
           create: {

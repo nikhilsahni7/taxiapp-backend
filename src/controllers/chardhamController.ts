@@ -1503,7 +1503,7 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
         },
       });
 
-      // Update driver's wallet - only for online payments
+      // Update driver's wallet for digital payment (correct for Razorpay)
       if (booking.driverId) {
         await prisma.wallet.upsert({
           where: { userId: booking.driverId },
@@ -1576,7 +1576,7 @@ export const confirmCashCollection = async (req: Request, res: Response) => {
           },
         });
 
-        // Create transaction record
+        // Create transaction record (for tracking only, no wallet update for cash)
         await prisma.longDistanceTransaction.create({
           data: {
             bookingId,
@@ -1585,22 +1585,7 @@ export const confirmCashCollection = async (req: Request, res: Response) => {
             status: "COMPLETED",
             senderId: booking.userId,
             receiverId: booking.driverId,
-            description: `Final cash payment for Chardham Yatra ${bookingId}`,
-          },
-        });
-
-        // Update driver's wallet
-        const driverPayout = booking.totalAmount - booking.commission;
-        await prisma.wallet.upsert({
-          where: { userId: booking.driverId! },
-          create: {
-            userId: booking.driverId!,
-            balance: driverPayout,
-          },
-          update: {
-            balance: {
-              increment: driverPayout,
-            },
+            description: `Final cash payment for Chardham Yatra ${bookingId} (direct to driver)`,
           },
         });
 
@@ -1609,7 +1594,8 @@ export const confirmCashCollection = async (req: Request, res: Response) => {
 
       res.json({
         success: true,
-        message: "Cash payment confirmed and ride completed",
+        message:
+          "Cash payment confirmed and ride completed. Cash received directly by driver.",
         booking: result,
       });
     } else {
