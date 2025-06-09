@@ -546,26 +546,106 @@ async function findDriversForRental(rental: any, carCategory: string) {
   };
 }
 
+// Reject rental
+export const rejectRental = async (req: Request, res: Response) => {
+  const { rentalId } = req.params;
+  if (!req.user) return res.status(401).json({ error: "Unauthorized" });
+
+  try {
+    const rental = await prisma.ride.findFirst({
+      where: {
+        id: rentalId,
+        status: RideStatus.SEARCHING,
+        isCarRental: true,
+      },
+    });
+
+    if (!rental) {
+      return res
+        .status(404)
+        .json({ error: "Rental not found or no longer available" });
+    }
+
+    // Get existing metadata or initialize empty object
+    const existingMetadata =
+      (rental.metadata as Prisma.JsonObject | null) ?? {};
+
+    // Get existing rejected drivers array or initialize empty array
+    const rejectedDrivers =
+      (existingMetadata.rejectedDrivers as string[]) || [];
+
+    // Add current driver to rejected drivers if not already present
+    if (!rejectedDrivers.includes(req.user.userId)) {
+      rejectedDrivers.push(req.user.userId);
+    }
+
+    // Update the metadata with rejected drivers
+    const updatedMetadata = {
+      ...existingMetadata,
+      rejectedDrivers: rejectedDrivers,
+    };
+
+    // Update the ride with the new metadata
+    await prisma.ride.update({
+      where: { id: rentalId },
+      data: { metadata: updatedMetadata },
+    });
+
+    console.log(`🚫 Driver ${req.user.userId} rejected rental ${rentalId}`);
+
+    return res.json({
+      success: true,
+      message: "Rental rejected successfully",
+    });
+  } catch (error) {
+    console.error("Error rejecting rental:", error);
+    return res.status(500).json({ error: "Failed to reject rental" });
+  }
+};
+
 // Get available rentals for driver
 export const getAvailableRentals = async (req: Request, res: Response) => {
   if (!req.user) return res.status(401).json({ error: "Unauthorized" });
 
   try {
-    const rentals = await prisma.ride.findMany({
+    // First, get all rentals where this driver is in availableDrivers
+    const allRentals = await prisma.ride.findMany({
       where: {
         status: RideStatus.SEARCHING,
         isCarRental: true,
         carCategory: {
           in: ["mini", "sedan", "suv"],
         },
-        metadata: {
-          path: ["availableDrivers"],
-          array_contains: [{ driverId: req.user.userId }],
-        },
       },
     });
 
-    return res.json(rentals);
+    // Filter rentals where:
+    // 1. Driver is in availableDrivers array
+    // 2. Driver is NOT in rejectedDrivers array
+    const availableRentals = allRentals.filter((rental) => {
+      const metadata = rental.metadata as Prisma.JsonObject | null;
+
+      if (!metadata) return false;
+
+      // Check if driver is in availableDrivers
+      const availableDrivers = metadata.availableDrivers as Array<{
+        driverId: string;
+      }> | null;
+      const isDriverAvailable = availableDrivers?.some(
+        (driver) => driver.driverId === req.user!.userId
+      );
+
+      if (!isDriverAvailable) return false;
+
+      // Check if driver has rejected this rental
+      const rejectedDrivers = (metadata.rejectedDrivers as string[]) || [];
+      const hasDriverRejected = rejectedDrivers.includes(req.user!.userId);
+
+      // Return true only if driver is available AND has not rejected
+      return !hasDriverRejected;
+    });
+
+    return res.json(availableRentals);
   } catch (error) {
     console.error("Error getting available rentals:", error);
     return res.status(500).json({ error: "Failed to get available rentals" });
