@@ -26,7 +26,7 @@ const router = express.Router();
 const prisma = new PrismaClient();
 
 const PRP_SMS_CONFIG = {
-  apiKey: "4BNLLQPvbnjzvHC",
+  apiKey: process.env.PRP_SMS_API_KEY,
   baseUrl: "https://api.bulksmsadmin.com/BulkSMSapi/keyApiSendSMS",
   sender: "TXISUR",
   templateName: "OTP",
