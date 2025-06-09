@@ -100,6 +100,9 @@ async function sendBookingNotificationsToDrivers(
     distance?: string;
     duration?: string;
     carrierRequested?: boolean;
+    toPickupDistance?: string;
+    toPickupTime?: string;
+    paymentType?: string;
   }
 ): Promise<void> {
   try {
@@ -150,6 +153,9 @@ async function sendBookingNotificationsToDrivers(
           duration: rentalData.duration || "Package based",
           rideType: rentalData.rideType,
           carrierRequested: rentalData.carrierRequested,
+          toPickupDistance: rentalData.toPickupDistance,
+          toPickupTime: rentalData.toPickupTime,
+          paymentType: rentalData.paymentType,
         };
 
         await sendTaxiSureBookingNotification(
@@ -497,9 +503,13 @@ async function findDriversForRental(rental: any, carCategory: string) {
           distance: `${rental.rentalPackageKms}km`,
           duration: `${rental.rentalPackageHours}hrs`,
           carrierRequested: rental.carrierRequested,
+          toPickupDistance: "Calculating...",
+          toPickupTime: "Calculating...",
+          paymentType:
+            rental.paymentMode === PaymentMode.CASH ? "CASH" : "ONLINE",
         });
         console.log(
-          `✅ Booking notifications sent successfully for rental ${rental.id}`
+          `✅ Enhanced booking notifications sent successfully for rental ${rental.id}`
         );
       } catch (notificationError) {
         console.error(
@@ -687,17 +697,20 @@ export const acceptRental = async (req: Request, res: Response) => {
       },
     });
 
-    // Send notification to user that driver has accepted
+    // Send enhanced notification to user that driver has accepted
     await sendNotificationToUser(
       rental.userId,
-      "Driver Found! 🚗",
-      `${updatedRental.driver?.name || "Your driver"} has accepted your car rental request and is on the way to pickup location.`,
+      "🎉 Driver Found - Car Rental Confirmed!",
+      `${updatedRental.driver?.name || "Your driver"} is now heading to your pickup location for your ${rental.carCategory?.toUpperCase()} rental package. Get ready! 🚗✨`,
       "booking_confirmed",
       {
         rideId: updatedRental.id,
         driverName: updatedRental.driver?.name || "Driver",
         driverPhone: updatedRental.driver?.phone || "",
         status: "accepted",
+        packageInfo: `${rental.rentalPackageHours}hrs - ${rental.rentalPackageKms}km`,
+        carCategory: rental.carCategory || "CAR",
+        estimatedAmount: `₹${rental.rentalBasePrice}`,
       }
     );
 
@@ -740,11 +753,11 @@ export const markDriverArrived = async (req: Request, res: Response) => {
       },
     });
 
-    // Send notification to user that driver has arrived
+    // Send enhanced notification to user that driver has arrived
     await sendNotificationToUser(
       rental.userId,
-      "Driver Arrived! 📍",
-      `${updatedRental.driver?.name || "Your driver"} has arrived at the pickup location. Please provide OTP: ${rental.otp}`,
+      "🎯 Driver Arrived - Time to Start Your Journey!",
+      `${updatedRental.driver?.name || "Your driver"} is waiting at your pickup location! Share your OTP: ${rental.otp} to begin your ${rental.carCategory?.toUpperCase()} rental adventure! 🚗🔑`,
       "driver_arrived",
       {
         rideId: updatedRental.id,
@@ -752,6 +765,9 @@ export const markDriverArrived = async (req: Request, res: Response) => {
         driverPhone: updatedRental.driver?.phone || "",
         otp: rental.otp || "",
         status: "driver_arrived",
+        packageInfo: `${rental.rentalPackageHours}hrs package`,
+        urgentAction: "true",
+        showOtpProminent: "true",
       }
     );
 
@@ -844,11 +860,11 @@ export const startRide = async (req: Request, res: Response) => {
       },
     });
 
-    // Send notification to user that ride has started
+    // Send enhanced notification to user that ride has started
     await sendNotificationToUser(
       rental.userId,
-      "Car Rental Started! 🚗",
-      `Your car rental has started with ${updatedRental.driver?.name || "your driver"}. Enjoy your ${rental.rentalPackageHours}hr package!`,
+      "🎊 Car Rental Journey Started!",
+      `Your ${rental.carCategory?.toUpperCase()} rental is now active with ${updatedRental.driver?.name || "your driver"}! Enjoy your ${rental.rentalPackageHours}hr/${rental.rentalPackageKms}km package. Have an amazing trip! 🛣️✨`,
       "ride_started",
       {
         rideId: updatedRental.id,
@@ -856,6 +872,10 @@ export const startRide = async (req: Request, res: Response) => {
         packageHours: rental.rentalPackageHours?.toString() || "",
         packageKms: rental.rentalPackageKms?.toString() || "",
         status: "ride_started",
+        carCategory: rental.carCategory || "CAR",
+        totalAmount: `₹${rental.rentalBasePrice}`,
+        showJourneyTracker: "true",
+        enableLiveTracking: "true",
       }
     );
 
@@ -1317,18 +1337,22 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
     }
     // --- Separate Step: Reset User Fee if Applicable --- END
 
-    // Send payment success notifications
+    // Send enhanced payment success notifications
     try {
       await sendNotificationToUser(
         rental.userId,
-        "Payment Completed! ✅",
-        `Your car rental payment of ₹${rental.totalAmount} has been completed successfully. Thank you for using our service!`,
+        "🎉 Payment Completed - Trip Successful!",
+        `Your car rental journey is complete! Payment of ₹${rental.totalAmount} received successfully. Thank you for choosing TaxiSure! Rate your experience! ⭐`,
         "payment_success",
         {
           rideId: rental.id,
           amount: rental.totalAmount!.toString(),
           paymentMethod: "cash",
           status: "completed",
+          enableRating: "true",
+          showReceiptOption: "true",
+          tripSummary: "true",
+          thankYouMessage: "true",
         }
       );
     } catch (notificationError) {
@@ -1475,12 +1499,12 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
       }
     }
 
-    // Send payment success notifications
+    // Send enhanced payment success notifications
     try {
       await sendNotificationToUser(
         rental.userId,
-        "Payment Completed! ✅",
-        `Your car rental payment of ₹${rental.totalAmount} has been completed successfully. Thank you for using our service!`,
+        "🎉 Payment Successful - Journey Complete!",
+        `Your car rental payment of ₹${rental.totalAmount} has been processed successfully via online payment! Thank you for choosing TaxiSure! ⭐ Please rate your experience!`,
         "payment_success",
         {
           rideId: rental.id,
@@ -1488,6 +1512,11 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
           paymentMethod: "online",
           razorpayPaymentId: razorpay_payment_id,
           status: "completed",
+          enableRating: "true",
+          showReceiptOption: "true",
+          tripSummary: "true",
+          thankYouMessage: "true",
+          showLoyaltyPoints: "true",
         }
       );
     } catch (notificationError) {
