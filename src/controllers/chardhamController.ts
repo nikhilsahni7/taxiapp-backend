@@ -497,9 +497,9 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
     const baseFare = rates.perDayRate * numberOfDays;
     const totalFare = baseFare + extraKmCharges;
 
-    // Calculate advance amount (25%) and remaining amount (75%)
-    const advanceAmount = totalFare * 0.25;
-    const remainingAmount = totalFare * 0.75;
+    // Calculate advance amount (12%) and remaining amount (88%)
+    const advanceAmount = totalFare * 0.12;
+    const remainingAmount = totalFare * 0.88;
 
     // Calculate commission (12%)
     const commission = totalFare * 0.12;
