@@ -1139,9 +1139,13 @@ export const cancelBooking = async (req: Request, res: Response) => {
         // User cancellation logic
         if (!isDriverArrived) {
           // If driver hasn't arrived, refund full advance
-          await tx.wallet.update({
+          await tx.wallet.upsert({
             where: { userId: booking.userId },
-            data: {
+            create: {
+              userId: booking.userId,
+              balance: booking.advanceAmount,
+            },
+            update: {
               balance: {
                 increment: booking.advanceAmount,
               },
@@ -1164,9 +1168,13 @@ export const cancelBooking = async (req: Request, res: Response) => {
           // If driver has arrived, refund advance minus cancellation fee
           const refundAmount = booking.advanceAmount - userCancellationFee;
           if (refundAmount > 0) {
-            await tx.wallet.update({
+            await tx.wallet.upsert({
               where: { userId: booking.userId },
-              data: {
+              create: {
+                userId: booking.userId,
+                balance: refundAmount,
+              },
+              update: {
                 balance: {
                   increment: refundAmount,
                 },
@@ -1191,9 +1199,13 @@ export const cancelBooking = async (req: Request, res: Response) => {
       } else {
         // Driver cancellation logic
         // Deduct cancellation fee from driver's wallet
-        await tx.wallet.update({
+        await tx.wallet.upsert({
           where: { userId: booking.driverId! },
-          data: {
+          create: {
+            userId: booking.driverId!,
+            balance: -driverCancellationFee,
+          },
+          update: {
             balance: {
               decrement: driverCancellationFee,
             },
@@ -1214,9 +1226,13 @@ export const cancelBooking = async (req: Request, res: Response) => {
         });
 
         // Refund full advance to user
-        await tx.wallet.update({
+        await tx.wallet.upsert({
           where: { userId: booking.userId },
-          data: {
+          create: {
+            userId: booking.userId,
+            balance: booking.advanceAmount,
+          },
+          update: {
             balance: {
               increment: booking.advanceAmount,
             },
