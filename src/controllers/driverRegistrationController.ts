@@ -1,11 +1,11 @@
-import type { Request, Response } from "express";
 import {
   PrismaClient,
   TransactionStatus,
   TransactionType,
 } from "@prisma/client";
-import Razorpay from "razorpay";
 import crypto from "crypto";
+import type { Request, Response } from "express";
+import Razorpay from "razorpay";
 
 const prisma = new PrismaClient();
 
@@ -25,15 +25,15 @@ const razorpay = new Razorpay({
 
 // Registration fee constants
 const REGISTRATION_FEES: Record<string, number> = {
-  mini: 1200,
-  sedan: 1200,
-  suv: 1200,
-  ertiga: 1200,
-  innova: 1200,
-  tempo_12: 2100,
-  tempo_16: 2100,
-  tempo_20: 2100,
-  tempo_26: 2100,
+  mini: 1260,
+  sedan: 1260,
+  suv: 1260,
+  ertiga: 1260,
+  innova: 1260,
+  tempo_12: 2160,
+  tempo_16: 2160,
+  tempo_20: 2160,
+  tempo_26: 2160,
 };
 
 export const createRegistrationOrder = async (
