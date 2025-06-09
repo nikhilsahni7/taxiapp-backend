@@ -39,10 +39,10 @@ type OutstationCarRate = {
 
 // Define the rate objects with proper typing
 const VEHICLE_RATES: Record<string, OutstationCarRate | TempoRate> = {
-  mini: { base: 10, short: 14 },
-  sedan: { base: 12, short: 19 },
-  ertiga: { base: 15, short: 24 },
-  innova: { base: 18, short: 27 },
+  mini: { base: 11, short: 14 },
+  sedan: { base: 13, short: 19 },
+  ertiga: { base: 18, short: 24 },
+  innova: { base: 21, short: 27 },
   tempo_12: { fixed: 16000, extra: 23 },
   tempo_16: { fixed: 18000, extra: 26 },
   tempo_20: { fixed: 20000, extra: 30 },
