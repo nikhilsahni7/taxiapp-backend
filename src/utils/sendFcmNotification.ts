@@ -334,7 +334,7 @@ export async function sendTaxiSureBookingNotification(
   return sendFcmNotification(
     fcmToken,
     "New Booking Request 🚖",
-    `₹${bookingData.amount} • ${bookingData.distance || "Distance unknown"} • ${bookingData.passengerName || "Customer"}`,
+    `${bookingData.amount} • ${bookingData.distance || "Distance unknown"} • ${bookingData.passengerName || "Customer"}`,
     completeBookingData
   );
 }

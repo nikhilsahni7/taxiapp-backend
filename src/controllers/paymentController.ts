@@ -20,6 +20,63 @@ if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_SECRET) {
   console.error("Razorpay credentials are not configured properly");
 }
 
+/**
+ * Helper function to send notification to a specific user
+ */
+async function sendNotificationToUser(
+  userId: string,
+  title: string,
+  body: string,
+  notificationType:
+    | "general"
+    | "booking_confirmed"
+    | "driver_arrived"
+    | "ride_started"
+    | "payment_success"
+    | "promotion"
+    | "rating_request",
+  additionalData?: Record<string, string>
+): Promise<void> {
+  try {
+    console.log(
+      `📤 Attempting to send notification to user ${userId}: ${title}`
+    );
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { fcmToken: true, name: true },
+    });
+
+    console.log(
+      `🔍 User found: ${user?.name || "Unknown"}, Has FCM token: ${!!user?.fcmToken}`
+    );
+
+    if (!user?.fcmToken) {
+      console.warn(`❌ No FCM token found for user ${userId}`);
+      return;
+    }
+
+    if (!validateFcmToken(user.fcmToken)) {
+      console.warn(`❌ Invalid FCM token for user ${userId}`);
+      return;
+    }
+
+    await sendTaxiSureRegularNotification(
+      user.fcmToken,
+      title,
+      body,
+      notificationType,
+      additionalData
+    );
+
+    console.log(
+      `✅ Notification sent to user ${user.name || userId}: ${title}`
+    );
+  } catch (error) {
+    console.error(`❌ Failed to send notification to user ${userId}:`, error);
+  }
+}
+
 // Handle ride completion and payment initiation
 export const handleRideEnd = async (req: Request, res: Response) => {
   const { rideId } = req.params;
@@ -172,6 +229,31 @@ export const handleCashPayment = async (ride: any) => {
         description: `Cash payment for ride ${ride.id} (direct to driver)`,
       },
     });
+
+    // Send FCM notifications for cash payment completion
+    try {
+      await sendNotificationToUser(
+        ride.userId,
+        "🎉 Payment Completed - Trip Successful!",
+        `Your ride payment of ₹${ride.totalAmount} has been completed successfully via cash! Thank you for choosing TaxiSure! ⭐ Please rate your experience!`,
+        "payment_success",
+        {
+          rideId: ride.id,
+          amount: ride.totalAmount.toString(),
+          paymentMethod: "cash",
+          status: "completed",
+          enableRating: "true",
+          showReceiptOption: "true",
+          tripSummary: "true",
+          thankYouMessage: "true",
+        }
+      );
+    } catch (fcmError) {
+      console.error(
+        `Failed to send cash payment completion FCM notification to user ${ride.userId}:`,
+        fcmError
+      );
+    }
 
     // Note: No wallet update for cash payments as money goes directly to driver
 
@@ -349,6 +431,33 @@ export const verifyPayment = async (req: Request, res: Response) => {
       paymentId: razorpay_payment_id,
       walletBalance: result.wallet.balance,
     });
+
+    // Send FCM notifications for online payment completion
+    try {
+      await sendNotificationToUser(
+        result.ride.userId,
+        "🎉 Payment Successful - Journey Complete!",
+        `Your ride payment of ₹${result.ride.totalAmount} has been processed successfully via online payment! Thank you for choosing TaxiSure! ⭐ Please rate your experience!`,
+        "payment_success",
+        {
+          rideId: result.ride.id,
+          amount: result.ride.totalAmount!.toString(),
+          paymentMethod: "online",
+          razorpayPaymentId: razorpay_payment_id,
+          status: "completed",
+          enableRating: "true",
+          showReceiptOption: "true",
+          tripSummary: "true",
+          thankYouMessage: "true",
+          showLoyaltyPoints: "true",
+        }
+      );
+    } catch (fcmError) {
+      console.error(
+        `Failed to send online payment completion FCM notification to user ${result.ride.userId}:`,
+        fcmError
+      );
+    }
 
     return res.json({
       success: true,

@@ -13,6 +13,11 @@ import type { Request, Response } from "express";
 import { searchAvailableDrivers } from "../lib/driverService";
 
 import {
+  sendTaxiSureBookingNotification,
+  sendTaxiSureRegularNotification,
+  validateFcmToken,
+} from "../utils/sendFcmNotification";
+import {
   calculateFinalAmount,
   initiateRazorpayPayment,
 } from "./paymentController";
@@ -547,7 +552,6 @@ async function findAndRequestDrivers(ride: any) {
                                 vehicleName: true,
                                 vehicleNumber: true,
                                 hasCarrier: true,
-
                               },
                             },
                           },
@@ -670,11 +674,36 @@ async function findAndRequestDrivers(ride: any) {
               userName: ride.user?.name,
               userPhone: ride.user?.phone,
             });
+
+            // Send FCM notification alongside socket emission
+            try {
+              await sendRideRequestNotificationsToDrivers([driver.driverId], {
+                rideId: ride.id,
+                pickupLocation: ride.pickupLocation,
+                dropLocation: ride.dropLocation,
+                fare: `₹${ride.fare}`,
+                distance: `${ride.distance || 0}km`,
+                duration: `${ride.duration || 0}min`,
+                carCategory: ride.carCategory || "CAR",
+                carrierRequested: ride.carrierRequested,
+                paymentMode:
+                  ride.paymentMode === PaymentMode.CASH ? "CASH" : "ONLINE",
+                userInfo: {
+                  name: ride.user?.name,
+                  phone: ride.user?.phone,
+                },
+              });
+            } catch (fcmError) {
+              console.error(
+                `Failed to send FCM notification to driver ${driver.driverId}:`,
+                fcmError
+              );
+            }
           });
         });
 
         Promise.race(acceptancePromises)
-          .then((acceptedRideDetails) => {
+          .then(async (acceptedRideDetails) => {
             if (
               acceptedRideDetails &&
               rideAccepted &&
@@ -713,6 +742,34 @@ async function findAndRequestDrivers(ride: any) {
                 pickupDuration: winningRideDetails.pickupMetrics.pickupDuration,
                 otp: winningRideDetails.otp,
               });
+
+              // Send FCM notification to user that driver has been found
+              try {
+                await sendNotificationToUser(
+                  winningRideDetails.userId,
+                  "🎉 Driver Found - Ride Confirmed!",
+                  `${winningRideDetails.driver.name || "Your driver"} is now heading to your pickup location. Vehicle: ${winningRideDetails.driver.driverDetails?.vehicleNumber || "N/A"}. Get ready! 🚗✨`,
+                  "booking_confirmed",
+                  {
+                    rideId: winningRideDetails.id,
+                    driverName: winningRideDetails.driver.name || "Driver",
+                    driverPhone: winningRideDetails.driver.phone || "",
+                    vehicleNumber:
+                      winningRideDetails.driver.driverDetails?.vehicleNumber ||
+                      "",
+                    status: "accepted",
+                    otp: winningRideDetails.otp,
+                    estimatedAmount: `₹${ride.fare}`,
+                    pickupDistance: `${winningRideDetails.pickupMetrics.pickupDistance}km`,
+                    pickupTime: `${winningRideDetails.pickupMetrics.pickupDuration}min`,
+                  }
+                );
+              } catch (fcmError) {
+                console.error(
+                  `Failed to send ride accepted FCM notification to user ${winningRideDetails.userId}:`,
+                  fcmError
+                );
+              }
 
               io.to(winningRideDetails.driverId).emit(
                 "ride_assignment_confirmed",
@@ -1034,11 +1091,7 @@ export const createRide = async (req: Request, res: Response) => {
         dropLocation: dropLocation, // Add drop location back
       };
       console.log(`[createRide] Local ride data prepared:`, rideData);
-
-
     }
-
-
 
     // 5. Create the Ride record (Removed fee reset logic)
     console.log(`[createRide] Creating ride record in database...`); // Simplified log
@@ -1275,13 +1328,42 @@ const validatePermissions = (
 };
 
 const handleDriverArrival = async (ride: any) => {
-  await prisma.ride.update({
+  const updatedRide = await prisma.ride.update({
     where: { id: ride.id },
     data: {
       driverArrivedAt: new Date(),
       waitingStartTime: new Date(),
     },
+    include: {
+      driver: {
+        select: { name: true, phone: true },
+      },
+    },
   });
+
+  // Send FCM notification to user that driver has arrived
+  try {
+    await sendNotificationToUser(
+      ride.userId,
+      "🎯 Driver Arrived - Time to Go!",
+      `${updatedRide.driver?.name || "Your driver"} is waiting at your pickup location! Share your OTP: ${ride.otp} to start your journey! 🚗🔑`,
+      "driver_arrived",
+      {
+        rideId: ride.id,
+        driverName: updatedRide.driver?.name || "Driver",
+        driverPhone: updatedRide.driver?.phone || "",
+        otp: ride.otp || "",
+        status: "driver_arrived",
+        urgentAction: "true",
+        showOtpProminent: "true",
+      }
+    );
+  } catch (fcmError) {
+    console.error(
+      `Failed to send driver arrived FCM notification to user ${ride.userId}:`,
+      fcmError
+    );
+  }
 };
 
 const calculateWaitingCharges = async (ride: any) => {
@@ -1295,14 +1377,43 @@ const calculateWaitingCharges = async (ride: any) => {
     const chargableMinutes = Math.max(0, waitingMinutes - FREE_WAITING_MINUTES);
     const waitingCharges = chargableMinutes * WAITING_CHARGE_PER_MINUTE;
 
-    await prisma.ride.update({
+    const updatedRide = await prisma.ride.update({
       where: { id: ride.id },
       data: {
         waitingMinutes,
         waitingCharges,
         fare: ride.fare + waitingCharges, // Add waiting charges to the fare
       },
+      include: {
+        driver: {
+          select: { name: true, phone: true },
+        },
+      },
     });
+
+    // Send FCM notification to user that ride has started
+    try {
+      await sendNotificationToUser(
+        ride.userId,
+        "🎊 Journey Started!",
+        `Your ride with ${updatedRide.driver?.name || "your driver"} has started! Enjoy your journey to ${ride.dropLocation}! 🛣️✨`,
+        "ride_started",
+        {
+          rideId: ride.id,
+          driverName: updatedRide.driver?.name || "Driver",
+          status: "ride_started",
+          dropLocation: ride.dropLocation || "",
+          estimatedAmount: `₹${ride.fare + waitingCharges}`,
+          showJourneyTracker: "true",
+          enableLiveTracking: "true",
+        }
+      );
+    } catch (fcmError) {
+      console.error(
+        `Failed to send ride started FCM notification to user ${ride.userId}:`,
+        fcmError
+      );
+    }
 
     return { waitingMinutes, chargableMinutes, waitingCharges };
   }
@@ -1556,6 +1667,162 @@ export const getRide = async (req: Request, res: Response) => {
 };
 
 const CANCELLATION_FEE_AMOUNT = 25; // Define the fee amount
+
+/**
+ * Helper function to send ride request notifications to multiple drivers
+ */
+async function sendRideRequestNotificationsToDrivers(
+  driverIds: string[],
+  rideData: {
+    rideId: string;
+    pickupLocation: string;
+    dropLocation: string;
+    fare: string;
+    distance?: string;
+    duration?: string;
+    carCategory: string;
+    carrierRequested?: boolean;
+    paymentMode?: string;
+    userInfo?: {
+      name?: string;
+      phone?: string;
+    };
+  }
+): Promise<void> {
+  try {
+    console.log(`🔍 Looking for FCM tokens for driver IDs:`, driverIds);
+
+    // Fetch drivers' FCM tokens from database
+    const drivers = await prisma.user.findMany({
+      where: {
+        id: { in: driverIds },
+        fcmToken: { not: null },
+      },
+      select: { id: true, fcmToken: true, name: true },
+    });
+
+    console.log(
+      `📋 Found ${drivers.length} drivers with FCM tokens out of ${driverIds.length} total drivers`
+    );
+    console.log(
+      `📱 Drivers with tokens:`,
+      drivers.map((d) => ({ id: d.id, name: d.name, hasToken: !!d.fcmToken }))
+    );
+
+    if (drivers.length === 0) {
+      console.warn(
+        `⚠️ No drivers found with valid FCM tokens for ride ${rideData.rideId}`
+      );
+      return;
+    }
+
+    console.log(
+      `📤 Sending ride request notifications to ${drivers.length} drivers for ride ${rideData.rideId}`
+    );
+
+    // Send notifications to all drivers with valid FCM tokens
+    const notificationPromises = drivers.map(async (driver) => {
+      if (!driver.fcmToken || !validateFcmToken(driver.fcmToken)) {
+        console.warn(`❌ Invalid FCM token for driver ${driver.id}`);
+        return;
+      }
+
+      try {
+        const notificationData = {
+          bookingId: rideData.rideId,
+          amount: rideData.fare,
+          pickupLocation: rideData.pickupLocation,
+          dropLocation: rideData.dropLocation,
+          distance: rideData.distance || "Calculating...",
+          duration: rideData.duration || "Calculating...",
+          rideType: rideData.carCategory.toUpperCase(),
+          carrierRequested: rideData.carrierRequested,
+          paymentType: rideData.paymentMode || "CASH",
+          passengerName: rideData.userInfo?.name || "Customer",
+          passengerPhone: rideData.userInfo?.phone || "",
+        };
+
+        await sendTaxiSureBookingNotification(
+          driver.fcmToken,
+          notificationData
+        );
+
+        console.log(
+          `✅ Ride request notification sent to driver ${driver.name || driver.id}`
+        );
+      } catch (error) {
+        console.error(
+          `❌ Failed to send notification to driver ${driver.id}:`,
+          error
+        );
+      }
+    });
+
+    await Promise.allSettled(notificationPromises);
+  } catch (error) {
+    console.error(
+      "❌ Error sending ride request notifications to drivers:",
+      error
+    );
+  }
+}
+
+/**
+ * Helper function to send notification to a specific user
+ */
+async function sendNotificationToUser(
+  userId: string,
+  title: string,
+  body: string,
+  notificationType:
+    | "general"
+    | "booking_confirmed"
+    | "driver_arrived"
+    | "ride_started"
+    | "payment_success"
+    | "promotion"
+    | "rating_request",
+  additionalData?: Record<string, string>
+): Promise<void> {
+  try {
+    console.log(
+      `📤 Attempting to send notification to user ${userId}: ${title}`
+    );
+
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { fcmToken: true, name: true },
+    });
+
+    console.log(
+      `🔍 User found: ${user?.name || "Unknown"}, Has FCM token: ${!!user?.fcmToken}`
+    );
+
+    if (!user?.fcmToken) {
+      console.warn(`❌ No FCM token found for user ${userId}`);
+      return;
+    }
+
+    if (!validateFcmToken(user.fcmToken)) {
+      console.warn(`❌ Invalid FCM token for user ${userId}`);
+      return;
+    }
+
+    await sendTaxiSureRegularNotification(
+      user.fcmToken,
+      title,
+      body,
+      notificationType,
+      additionalData
+    );
+
+    console.log(
+      `✅ Notification sent to user ${user.name || userId}: ${title}`
+    );
+  } catch (error) {
+    console.error(`❌ Failed to send notification to user ${userId}:`, error);
+  }
+}
 
 // Modify handleRideCancellation to accept rideId and cancellingUserId
 const handleRideCancellation = async (
@@ -1869,6 +2136,52 @@ const handleRideCancellation = async (
           cancellationFee: cancellationFee, // Send fee info
           feeDeducted: cancellingUserType === UserType.DRIVER && feeApplies, // Existing - Indicate if fee was deducted from driver wallet
         });
+      }
+
+      // Send FCM notifications for cancellation
+      try {
+        const cancelledByUser = cancellingUserType === UserType.USER;
+        const cancelledByDriver = cancellingUserType === UserType.DRIVER;
+
+        if (cancelledByUser && updatedRideData.driverId) {
+          // User cancelled - notify driver
+          await sendNotificationToUser(
+            updatedRideData.driverId,
+            "Ride Cancelled 😞",
+            `The ride has been cancelled by the customer.${cancellationReason ? ` Reason: ${cancellationReason}` : ""}${feeApplies ? ` A cancellation fee of ₹${cancellationFee} has been applied.` : ""}`,
+            "general",
+            {
+              rideId: updatedRideData.id,
+              cancelledBy: "user",
+              reason: cancellationReason || "",
+              status: "cancelled",
+              cancellationFee: cancellationFee.toString(),
+              feeApplied: feeApplies.toString(),
+            }
+          );
+        } else if (cancelledByDriver) {
+          // Driver cancelled - notify user
+          await sendNotificationToUser(
+            updatedRideData.userId,
+            "Ride Cancelled 😞",
+            `Your ride has been cancelled by the driver.${cancellationReason ? ` Reason: ${cancellationReason}` : ""}${feeApplies ? ` A cancellation fee of ₹${cancellationFee} may apply.` : ""}`,
+            "general",
+            {
+              rideId: updatedRideData.id,
+              cancelledBy: "driver",
+              reason: cancellationReason || "",
+              status: "cancelled",
+              cancellationFee: cancellationFee.toString(),
+              feeApplied: feeApplies.toString(),
+            }
+          );
+        }
+      } catch (notificationError) {
+        console.error(
+          "Failed to send cancellation FCM notification:",
+          notificationError
+        );
+        // Don't fail the cancellation due to notification error
       }
 
       // Broadcast generic cancellation (optional, maybe remove if specific updates are enough)
