@@ -32,7 +32,7 @@ const PRP_SMS_CONFIG = {
   templateName: process.env.PRP_SMS_TEMPLATE_NAME || "OTP",
   peId: process.env.PRP_SMS_PE_ID,
   templateId: process.env.PRP_SMS_TEMPLATE_ID,
-  useTemplateId: process.env.PRP_SMS_USE_TEMPLATE_ID === "true" || true,
+  useTemplateId: process.env.PRP_SMS_USE_TEMPLATE_ID === "true" || false, // Default to false for Template Name approach
 };
 
 const generateOTP = (): string => {
@@ -70,7 +70,7 @@ const sendSMSViaPRP = async (
         sender: PRP_SMS_CONFIG.sender,
         peId: PRP_SMS_CONFIG.peId,
         teId: PRP_SMS_CONFIG.templateId,
-        message: `Welcome DEAR CUSTOMER YOUR OTP FOR SECURE LOG IN IS ${otp} Thank you for choosing TAXI SURE...`,
+        message: `Welcome DEAR CUSTOMER, YOUR OTP FOR SECURE LOGIN IS ${otp}. Thank you for choosing TAXI SURE.`,
         smsReciever: [
           {
             reciever: formattedPhone,
