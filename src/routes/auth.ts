@@ -30,6 +30,9 @@ const PRP_SMS_CONFIG = {
   baseUrl: "https://api.bulksmsadmin.com/BulkSMSapi/keyApiSendSMS",
   sender: process.env.PRP_SMS_SENDER || "TXISRE",
   templateName: process.env.PRP_SMS_TEMPLATE_NAME || "OTP",
+  peId: process.env.PRP_SMS_PE_ID,
+  templateId: process.env.PRP_SMS_TEMPLATE_ID,
+  useTemplateId: process.env.PRP_SMS_USE_TEMPLATE_ID === "true" || true,
 };
 
 const generateOTP = (): string => {
@@ -50,32 +53,56 @@ const sendSMSViaPRP = async (
     console.log(`📱 Sending SMS to: ${formattedPhone}, OTP: ${otp}`);
     console.log(`🔧 Template Name: ${PRP_SMS_CONFIG.templateName}`);
     console.log(`👤 Sender: ${PRP_SMS_CONFIG.sender}`);
+    console.log(`🆔 PE ID: ${PRP_SMS_CONFIG.peId}`);
+    console.log(`📋 Template ID: ${PRP_SMS_CONFIG.templateId}`);
+    console.log(`⚙️ Use Template ID: ${PRP_SMS_CONFIG.useTemplateId}`);
 
-    const payload = {
-      sender: PRP_SMS_CONFIG.sender,
-      templateName: PRP_SMS_CONFIG.templateName,
-      smsReciever: [
-        {
-          mobileNo: formattedPhone,
-          templateParams: `${otp}`,
-        },
-      ],
-    };
+    let payload: any;
+    let endpoint: string;
+
+    if (
+      PRP_SMS_CONFIG.useTemplateId &&
+      PRP_SMS_CONFIG.peId &&
+      PRP_SMS_CONFIG.templateId
+    ) {
+      // Use Template ID approach
+      payload = {
+        sender: PRP_SMS_CONFIG.sender,
+        peId: PRP_SMS_CONFIG.peId,
+        teId: PRP_SMS_CONFIG.templateId,
+        message: `Welcome DEAR CUSTOMER YOUR OTP FOR SECURE LOG IN IS ${otp} Thank you for choosing TAXI SURE...`,
+        smsReciever: [
+          {
+            reciever: formattedPhone,
+          },
+        ],
+      };
+      endpoint = `${PRP_SMS_CONFIG.baseUrl}/sendSMS`;
+    } else {
+      // Use Template Name approach (fallback)
+      payload = {
+        sender: PRP_SMS_CONFIG.sender,
+        templateName: PRP_SMS_CONFIG.templateName,
+        smsReciever: [
+          {
+            mobileNo: formattedPhone,
+            templateParams: `${otp}`,
+          },
+        ],
+      };
+      endpoint = `${PRP_SMS_CONFIG.baseUrl}/SendSmsTemplateName`;
+    }
 
     console.log("📤 SMS Payload:", JSON.stringify(payload, null, 2));
     console.log(`🎯 OTP Value being sent: "${otp}"`);
 
-    const response = await axios.post(
-      `${PRP_SMS_CONFIG.baseUrl}/SendSmsTemplateName`,
-      payload,
-      {
-        headers: {
-          apikey: PRP_SMS_CONFIG.apiKey,
-          "Content-Type": "application/json",
-        },
-        timeout: 10000,
-      }
-    );
+    const response = await axios.post(endpoint, payload, {
+      headers: {
+        apikey: PRP_SMS_CONFIG.apiKey,
+        "Content-Type": "application/json",
+      },
+      timeout: 10000,
+    });
 
     console.log("✅ PRP SMS Response Status:", response.status);
     console.log("📋 PRP SMS Response Data:", response.data);
@@ -112,8 +139,6 @@ const sendSMSViaPRP = async (
         response.data.returnMessage || response.data.message
       );
 
-      // In production, you might want to return false here
-      // For development/testing, we're returning true to allow flow to continue
       if (process.env.NODE_ENV === "production") {
         return false;
       } else {
@@ -126,7 +151,6 @@ const sendSMSViaPRP = async (
   } catch (error: any) {
     console.error("💥 PRP SMS Error:", error.response?.data || error.message);
 
-    // In production, you might want to return false here
     if (process.env.NODE_ENV === "production") {
       return false;
     } else {
