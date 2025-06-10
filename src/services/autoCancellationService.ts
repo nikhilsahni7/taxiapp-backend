@@ -168,13 +168,29 @@ export class AutoCancellationService {
         return false;
       }
 
-      // Create the pickup datetime by combining start date and pickup time
-      // Note: booking.startDate is already a Date object from Prisma
-      const pickupDateTime = new Date(booking.startDate);
-      pickupDateTime.setHours(hours, minutes, 0, 0);
+      // Get the start date and extract the date components
+      const startDate = new Date(booking.startDate);
 
-      console.log(`  - Parsed pickup datetime (local): ${pickupDateTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
-      console.log(`  - Current time (local): ${currentTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+      // The key insight: we need to create the pickup datetime based on the calendar date
+      // that the user intended, not by modifying the UTC timestamp
+
+      // Convert start date to IST to get the correct calendar date
+      const startDateIST = new Date(startDate.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+
+      // Create pickup datetime using the IST calendar date and pickup time
+      const pickupDateTime = new Date(
+        startDateIST.getFullYear(),
+        startDateIST.getMonth(),
+        startDateIST.getDate(),
+        hours,
+        minutes,
+        0,
+        0
+      );
+
+      console.log(`  - Start date converted to IST: ${startDateIST.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+      console.log(`  - Pickup datetime created: ${pickupDateTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+      console.log(`  - Current time: ${currentTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
 
       // Check if current time has passed the pickup time
       const isOverdue = currentTime > pickupDateTime;
@@ -185,6 +201,10 @@ export class AutoCancellationService {
         const timeDiffMs = currentTime.getTime() - pickupDateTime.getTime();
         const timeDiffMinutes = Math.floor(timeDiffMs / (1000 * 60));
         console.log(`[AutoCancellation] Booking ${booking.id} is overdue by ${timeDiffMinutes} minutes`);
+      } else {
+        const timeDiffMs = pickupDateTime.getTime() - currentTime.getTime();
+        const timeDiffMinutes = Math.floor(timeDiffMs / (1000 * 60));
+        console.log(`[AutoCancellation] Booking ${booking.id} is scheduled in ${timeDiffMinutes} minutes`);
       }
 
       return isOverdue;
