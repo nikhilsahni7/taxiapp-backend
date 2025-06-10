@@ -2018,6 +2018,7 @@ const handleRideCancellation = async (
         }
       } else {
         // User cancels before driver arrives - No fee
+        // Preserve driverId for notification, but mark ride as cancelled
         updatedRideData = await prisma.ride.update({
           where: { id: ride.id },
           data: {
@@ -2025,7 +2026,7 @@ const handleRideCancellation = async (
             cancellationReason,
             cancellationFee: 0, // Explicitly 0 fee
             cancelledBy: CancelledBy.USER,
-            driverId: null, // Ensure driver is unassigned
+            // Keep driverId for FCM notification purposes - don't set to null
           },
           include: { user: true, driver: true }, // Include relations for notification
         });
@@ -2192,10 +2193,17 @@ const handleRideCancellation = async (
       console.log(
         `[handleRideCancellation] Cancelled by: ${cancellingUserType}, Driver ID: ${updatedRideData.driverId}, User ID: ${updatedRideData.userId}`
       );
+      console.log(
+        `[handleRideCancellation] Updated ride data includes - User: ${!!updatedRideData.user}, Driver: ${!!updatedRideData.driver}`
+      );
 
       try {
         const cancelledByUser = cancellingUserType === UserType.USER;
         const cancelledByDriver = cancellingUserType === UserType.DRIVER;
+
+        console.log(
+          `[handleRideCancellation] FCM condition check - CancelledByUser: ${cancelledByUser}, DriverId exists: ${!!updatedRideData.driverId}, CancelledByDriver: ${cancelledByDriver}`
+        );
 
         if (cancelledByUser && updatedRideData.driverId) {
           console.log(
