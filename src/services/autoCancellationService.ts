@@ -16,18 +16,14 @@ export class AutoCancellationService {
     try {
       console.log("[AutoCancellation] Starting overdue booking check...");
 
-      // Get current IST time
+      // Get current time in IST (India Standard Time)
       const now = new Date();
-      const istOffset = 5.5 * 60 * 60 * 1000; // IST is UTC+5:30
-      const istNow = new Date(now.getTime() + istOffset);
-
-      console.log(
-        `[AutoCancellation] Current IST time: ${istNow.toISOString()}`
-      );
+      console.log(`[AutoCancellation] Current UTC time: ${now.toISOString()}`);
+      console.log(`[AutoCancellation] Current IST time: ${now.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
 
       // Check both long distance bookings and vendor bookings
-      await this.checkLongDistanceBookings(istNow);
-      await this.checkVendorBookings(istNow);
+      await this.checkLongDistanceBookings(now);
+      await this.checkVendorBookings(now);
     } catch (error) {
       console.error(
         "[AutoCancellation] Error during overdue booking check:",
@@ -39,7 +35,7 @@ export class AutoCancellationService {
   /**
    * Check and cancel overdue long distance bookings (with refund logic)
    */
-  private static async checkLongDistanceBookings(istNow: Date): Promise<void> {
+  private static async checkLongDistanceBookings(currentTime: Date): Promise<void> {
     try {
       // Find all long distance bookings that are still waiting for driver acceptance
       const waitingBookings = await prisma.longDistanceBooking.findMany({
@@ -47,10 +43,7 @@ export class AutoCancellationService {
           status: {
             in: ["PENDING", "ADVANCE_PAID"], // Statuses where no driver has accepted yet
           },
-          // Only check bookings where startDate is today or earlier
-          startDate: {
-            lte: istNow,
-          },
+          // Include all bookings regardless of date for now, we'll filter by pickup time
         },
         include: {
           user: {
@@ -71,7 +64,7 @@ export class AutoCancellationService {
 
       // Check each booking to see if pickup time has passed
       for (const booking of waitingBookings) {
-        const shouldCancel = this.shouldCancelBooking(booking, istNow);
+        const shouldCancel = this.shouldCancelBooking(booking, currentTime);
         if (shouldCancel) {
           bookingsToCancel.push(booking);
         }
@@ -102,16 +95,13 @@ export class AutoCancellationService {
   /**
    * Check and cancel overdue vendor bookings (no refund needed)
    */
-  private static async checkVendorBookings(istNow: Date): Promise<void> {
+  private static async checkVendorBookings(currentTime: Date): Promise<void> {
     try {
       // Find all vendor bookings that are still waiting for driver acceptance
       const waitingVendorBookings = await prisma.vendorBooking.findMany({
         where: {
           status: "PENDING", // Only PENDING status as drivers haven't accepted yet
-          // Only check bookings where startDate is today or earlier
-          startDate: {
-            lte: istNow,
-          },
+          // Include all bookings regardless of date for now, we'll filter by pickup time
         },
         include: {
           vendor: {
@@ -132,7 +122,7 @@ export class AutoCancellationService {
 
       // Check each vendor booking to see if pickup time has passed
       for (const booking of waitingVendorBookings) {
-        const shouldCancel = this.shouldCancelBooking(booking, istNow);
+        const shouldCancel = this.shouldCancelBooking(booking, currentTime);
         if (shouldCancel) {
           vendorBookingsToCancel.push(booking);
         }
@@ -163,26 +153,38 @@ export class AutoCancellationService {
   /**
    * Determine if a booking should be cancelled based on pickup time
    */
-  private static shouldCancelBooking(booking: any, istNow: Date): boolean {
+  private static shouldCancelBooking(booking: any, currentTime: Date): boolean {
     try {
-      // Parse the pickup time (format: "HH:MM" like "13:26")
+      console.log(`[AutoCancellation] Checking booking ${booking.id}:`);
+      console.log(`  - Start Date: ${booking.startDate}`);
+      console.log(`  - Pickup Time: ${booking.pickupTime}`);
+      console.log(`  - Status: ${booking.status}`);
+
+      // Parse the pickup time (format: "HH:MM" like "9:27")
       const [hours, minutes] = booking.pickupTime.split(":").map(Number);
 
-      // Create the pickup datetime in IST
-      const pickupDate = new Date(booking.startDate);
-      pickupDate.setHours(hours, minutes, 0, 0);
+      if (isNaN(hours) || isNaN(minutes)) {
+        console.error(`[AutoCancellation] Invalid pickup time format for booking ${booking.id}: ${booking.pickupTime}`);
+        return false;
+      }
 
-      // Add IST offset to pickup time for comparison
-      const istOffset = 5.5 * 60 * 60 * 1000;
-      const pickupTimeIST = new Date(pickupDate.getTime() + istOffset);
+      // Create the pickup datetime by combining start date and pickup time
+      // Note: booking.startDate is already a Date object from Prisma
+      const pickupDateTime = new Date(booking.startDate);
+      pickupDateTime.setHours(hours, minutes, 0, 0);
 
-      // Check if current IST time has passed the pickup time
-      const isOverdue = istNow > pickupTimeIST;
+      console.log(`  - Parsed pickup datetime (local): ${pickupDateTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+      console.log(`  - Current time (local): ${currentTime.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}`);
+
+      // Check if current time has passed the pickup time
+      const isOverdue = currentTime > pickupDateTime;
+
+      console.log(`  - Is overdue: ${isOverdue}`);
 
       if (isOverdue) {
-        console.log(
-          `[AutoCancellation] Booking ${booking.id} is overdue. Pickup: ${pickupTimeIST.toISOString()}, Now: ${istNow.toISOString()}`
-        );
+        const timeDiffMs = currentTime.getTime() - pickupDateTime.getTime();
+        const timeDiffMinutes = Math.floor(timeDiffMs / (1000 * 60));
+        console.log(`[AutoCancellation] Booking ${booking.id} is overdue by ${timeDiffMinutes} minutes`);
       }
 
       return isOverdue;
@@ -356,6 +358,162 @@ export class AutoCancellationService {
         `[AutoCancellation] Error cancelling vendor booking ${booking.id}:`,
         error
       );
+    }
+  }
+
+  /**
+   * Debug method to check a specific booking by ID
+   */
+  static async debugBooking(bookingId: string): Promise<void> {
+    try {
+      console.log(`[AutoCancellation] Debug check for booking ${bookingId}`);
+
+      // Try to find as long distance booking first
+      const longDistanceBooking = await prisma.longDistanceBooking.findUnique({
+        where: { id: bookingId },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+            },
+          },
+        },
+      });
+
+      if (longDistanceBooking) {
+        console.log(`[AutoCancellation] Found long distance booking:`);
+        console.log(`  - ID: ${longDistanceBooking.id}`);
+        console.log(`  - Status: ${longDistanceBooking.status}`);
+        console.log(`  - Start Date: ${longDistanceBooking.startDate}`);
+        console.log(`  - Pickup Time: ${longDistanceBooking.pickupTime}`);
+        console.log(`  - Service Type: ${longDistanceBooking.serviceType}`);
+        console.log(`  - Created At: ${longDistanceBooking.createdAt}`);
+
+        const currentTime = new Date();
+        const shouldCancel = this.shouldCancelBooking(longDistanceBooking, currentTime);
+        console.log(`  - Should be cancelled: ${shouldCancel}`);
+
+        if (shouldCancel) {
+          console.log(`[AutoCancellation] This booking should be cancelled!`);
+        }
+        return;
+      }
+
+      // Try to find as vendor booking
+      const vendorBooking = await prisma.vendorBooking.findUnique({
+        where: { id: bookingId },
+        include: {
+          vendor: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+            },
+          },
+        },
+      });
+
+      if (vendorBooking) {
+        console.log(`[AutoCancellation] Found vendor booking:`);
+        console.log(`  - ID: ${vendorBooking.id}`);
+        console.log(`  - Status: ${vendorBooking.status}`);
+        console.log(`  - Start Date: ${vendorBooking.startDate}`);
+        console.log(`  - Pickup Time: ${vendorBooking.pickupTime}`);
+        console.log(`  - Service Type: ${vendorBooking.serviceType}`);
+        console.log(`  - Created At: ${vendorBooking.createdAt}`);
+
+        const currentTime = new Date();
+        const shouldCancel = this.shouldCancelBooking(vendorBooking, currentTime);
+        console.log(`  - Should be cancelled: ${shouldCancel}`);
+
+        if (shouldCancel) {
+          console.log(`[AutoCancellation] This vendor booking should be cancelled!`);
+        }
+        return;
+      }
+
+      console.log(`[AutoCancellation] No booking found with ID: ${bookingId}`);
+    } catch (error) {
+      console.error(`[AutoCancellation] Error debugging booking ${bookingId}:`, error);
+    }
+  }
+
+  /**
+   * Manual method to force check and cancel overdue bookings (for testing)
+   */
+  static async manualCheckAndCancel(): Promise<{
+    longDistanceCancelled: number;
+    vendorCancelled: number;
+    total: number
+  }> {
+    try {
+      console.log("[AutoCancellation] Manual check triggered");
+
+      const currentTime = new Date();
+      let longDistanceCancelled = 0;
+      let vendorCancelled = 0;
+
+      // Check long distance bookings
+      const waitingLongDistance = await prisma.longDistanceBooking.findMany({
+        where: {
+          status: {
+            in: ["PENDING", "ADVANCE_PAID"],
+          },
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+            },
+          },
+        },
+      });
+
+      for (const booking of waitingLongDistance) {
+        if (this.shouldCancelBooking(booking, currentTime)) {
+          await this.cancelOverdueLongDistanceBooking(booking);
+          longDistanceCancelled++;
+        }
+      }
+
+      // Check vendor bookings
+      const waitingVendor = await prisma.vendorBooking.findMany({
+        where: {
+          status: "PENDING",
+        },
+        include: {
+          vendor: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+            },
+          },
+        },
+      });
+
+      for (const booking of waitingVendor) {
+        if (this.shouldCancelBooking(booking, currentTime)) {
+          await this.cancelOverdueVendorBooking(booking);
+          vendorCancelled++;
+        }
+      }
+
+      const total = longDistanceCancelled + vendorCancelled;
+      console.log(`[AutoCancellation] Manual check completed: ${longDistanceCancelled} long distance, ${vendorCancelled} vendor, ${total} total cancelled`);
+
+      return {
+        longDistanceCancelled,
+        vendorCancelled,
+        total
+      };
+    } catch (error) {
+      console.error("[AutoCancellation] Error in manual check:", error);
+      throw error;
     }
   }
 }

@@ -992,10 +992,15 @@ io.on("connection", (socket: Socket) => {
 cron.schedule(
   "* * * * *",
   async () => {
-    await AutoCancellationService.checkAndCancelOverdueBookings();
+    try {
+      await AutoCancellationService.checkAndCancelOverdueBookings();
+    } catch (error) {
+      console.error("[AutoCancellation] Cron job error:", error);
+    }
   },
   {
     timezone: "Asia/Kolkata", // Run in IST timezone
+    scheduled: true,
   }
 );
 

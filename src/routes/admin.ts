@@ -106,10 +106,8 @@ router.post(
 // Add this endpoint before the trigger endpoint
 router.get("/auto-cancellation-status", async (req: Request, res: Response) => {
   try {
-    // Get current IST time
+    // Get current time
     const now = new Date();
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const istNow = new Date(now.getTime() + istOffset);
 
     // Count pending long distance bookings
     const pendingLongDistanceBookings = await prisma.longDistanceBooking.count({
@@ -200,6 +198,52 @@ router.post(
       res.status(500).json({
         success: false,
         message: "Failed to execute auto-cancellation check",
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
+);
+
+// Debug endpoint to check specific booking
+router.get(
+  "/debug-booking/:bookingId",
+  async (req: Request, res: Response) => {
+    try {
+      const { bookingId } = req.params;
+      console.log(`[Admin] Debug booking request for: ${bookingId}`);
+      await AutoCancellationService.debugBooking(bookingId);
+      res.json({
+        success: true,
+        message: `Debug information for booking ${bookingId} logged to console`,
+      });
+    } catch (error) {
+      console.error("[Admin] Error debugging booking:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to debug booking",
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+    }
+  }
+);
+
+// Manual cancellation check with results
+router.post(
+  "/manual-cancellation-check",
+  async (req: Request, res: Response) => {
+    try {
+      console.log("[Admin] Manual cancellation check initiated");
+      const results = await AutoCancellationService.manualCheckAndCancel();
+      res.json({
+        success: true,
+        message: "Manual cancellation check completed",
+        results,
+      });
+    } catch (error) {
+      console.error("[Admin] Error in manual cancellation check:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to execute manual cancellation check",
         error: error instanceof Error ? error.message : "Unknown error",
       });
     }
