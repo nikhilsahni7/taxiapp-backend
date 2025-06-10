@@ -28,8 +28,8 @@ const prisma = new PrismaClient();
 const PRP_SMS_CONFIG = {
   apiKey: process.env.PRP_SMS_API_KEY,
   baseUrl: "https://api.bulksmsadmin.com/BulkSMSapi/keyApiSendSMS",
-  sender: "TXISUR",
-  templateName: "OTP",
+  sender: process.env.PRP_SMS_SENDER || "TXISUR",
+  templateName: process.env.PRP_SMS_TEMPLATE_NAME || "OTP",
 };
 
 const generateOTP = (): string => {
@@ -77,27 +77,48 @@ const sendSMSViaPRP = async (
     console.log("✅ PRP SMS Response Status:", response.status);
     console.log("📋 PRP SMS Response Data:", response.data);
 
+    // Check for specific error responses
+    if (response.data && response.data.returnMessage) {
+      if (response.data.returnMessage.includes("TempName does not exists")) {
+        console.error(`❌ Template '${PRP_SMS_CONFIG.templateName}' does not exist in SMS panel`);
+        console.error("📝 Please create and approve the template in your PRP SMS dashboard");
+        console.error("🔧 Or update the PRP_SMS_TEMPLATE_NAME environment variable");
+        return false;
+      }
+    }
+
+    // Check for success conditions based on API documentation
     const isSuccess =
       response.status === 200 &&
-      (response.data.status === "success" ||
+      (response.data.isSuccess === true ||
+        response.data.status === "success" ||
         response.data.message === "SMS sent successfully.");
 
     if (isSuccess) {
       console.log("🎉 SMS sent successfully!");
       return true;
     } else {
-      console.log(
-        "⚠️ SMS response indicates failure, but continuing for testing"
-      );
-      return true;
+      console.error("❌ SMS sending failed:", response.data.returnMessage || response.data.message);
+
+      // In production, you might want to return false here
+      // For development/testing, we're returning true to allow flow to continue
+      if (process.env.NODE_ENV === "production") {
+        return false;
+      } else {
+        console.log("⚠️ Development mode: Allowing flow to continue despite SMS failure");
+        return true;
+      }
     }
   } catch (error: any) {
     console.error("💥 PRP SMS Error:", error.response?.data || error.message);
 
-    console.log(
-      "⚠️ SMS sending failed, but allowing flow to continue for testing..."
-    );
-    return true;
+    // In production, you might want to return false here
+    if (process.env.NODE_ENV === "production") {
+      return false;
+    } else {
+      console.log("⚠️ Development mode: Allowing flow to continue despite SMS error");
+      return true;
+    }
   }
 };
 
