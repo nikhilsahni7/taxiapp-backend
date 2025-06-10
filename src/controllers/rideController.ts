@@ -743,33 +743,41 @@ async function findAndRequestDrivers(ride: any) {
                 otp: winningRideDetails.otp,
               });
 
-              // Send FCM notification to user that driver has been found
-              try {
-                await sendNotificationToUser(
-                  winningRideDetails.userId,
-                  "🎉 Driver Found - Ride Confirmed!",
-                  `${winningRideDetails.driver.name || "Your driver"} is now heading to your pickup location. Vehicle: ${winningRideDetails.driver.driverDetails?.vehicleNumber || "N/A"}. Get ready! 🚗✨`,
-                  "booking_confirmed",
-                  {
-                    rideId: winningRideDetails.id,
-                    driverName: winningRideDetails.driver.name || "Driver",
-                    driverPhone: winningRideDetails.driver.phone || "",
-                    vehicleNumber:
-                      winningRideDetails.driver.driverDetails?.vehicleNumber ||
-                      "",
-                    status: "accepted",
-                    otp: winningRideDetails.otp,
-                    estimatedAmount: `₹${ride.fare}`,
-                    pickupDistance: `${winningRideDetails.pickupMetrics.pickupDistance}km`,
-                    pickupTime: `${winningRideDetails.pickupMetrics.pickupDuration}min`,
-                  }
-                );
-              } catch (fcmError) {
-                console.error(
-                  `Failed to send ride accepted FCM notification to user ${winningRideDetails.userId}:`,
-                  fcmError
-                );
-              }
+              // Send FCM notification to user that driver has been found - Fixed async call
+              (async () => {
+                try {
+                  console.log(
+                    `[FCM] Sending driver found notification to user ${winningRideDetails.userId}`
+                  );
+                  await sendNotificationToUser(
+                    winningRideDetails.userId,
+                    "🎉 Driver Found - Ride Confirmed!",
+                    `${winningRideDetails.driver.name || "Your driver"} is now heading to your pickup location. Vehicle: ${winningRideDetails.driver.driverDetails?.vehicleNumber || "N/A"}. Get ready! 🚗✨`,
+                    "booking_confirmed",
+                    {
+                      rideId: winningRideDetails.id,
+                      driverName: winningRideDetails.driver.name || "Driver",
+                      driverPhone: winningRideDetails.driver.phone || "",
+                      vehicleNumber:
+                        winningRideDetails.driver.driverDetails
+                          ?.vehicleNumber || "",
+                      status: "accepted",
+                      otp: winningRideDetails.otp,
+                      estimatedAmount: `₹${ride.fare}`,
+                      pickupDistance: `${winningRideDetails.pickupMetrics.pickupDistance}km`,
+                      pickupTime: `${winningRideDetails.pickupMetrics.pickupDuration}min`,
+                    }
+                  );
+                  console.log(
+                    `[FCM] Driver found notification sent successfully to user ${winningRideDetails.userId}`
+                  );
+                } catch (fcmError) {
+                  console.error(
+                    `[FCM] Failed to send ride accepted FCM notification to user ${winningRideDetails.userId}:`,
+                    fcmError
+                  );
+                }
+              })();
 
               io.to(winningRideDetails.driverId).emit(
                 "ride_assignment_confirmed",
@@ -1786,28 +1794,29 @@ async function sendNotificationToUser(
 ): Promise<void> {
   try {
     console.log(
-      `📤 Attempting to send notification to user ${userId}: ${title}`
+      `[FCM] 📤 Attempting to send notification to user ${userId}: ${title}`
     );
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { fcmToken: true, name: true },
+      select: { fcmToken: true, name: true, userType: true },
     });
 
     console.log(
-      `🔍 User found: ${user?.name || "Unknown"}, Has FCM token: ${!!user?.fcmToken}`
+      `[FCM] 🔍 User found: ${user?.name || "Unknown"} (${user?.userType}), Has FCM token: ${!!user?.fcmToken}`
     );
 
     if (!user?.fcmToken) {
-      console.warn(`❌ No FCM token found for user ${userId}`);
+      console.warn(`[FCM] ❌ No FCM token found for user ${userId}`);
       return;
     }
 
     if (!validateFcmToken(user.fcmToken)) {
-      console.warn(`❌ Invalid FCM token for user ${userId}`);
+      console.warn(`[FCM] ❌ Invalid FCM token for user ${userId}`);
       return;
     }
 
+    console.log(`[FCM] 📤 Sending notification via FCM to ${user.name}...`);
     await sendTaxiSureRegularNotification(
       user.fcmToken,
       title,
@@ -1817,10 +1826,13 @@ async function sendNotificationToUser(
     );
 
     console.log(
-      `✅ Notification sent to user ${user.name || userId}: ${title}`
+      `[FCM] ✅ Notification sent successfully to user ${user.name || userId}: ${title}`
     );
   } catch (error) {
-    console.error(`❌ Failed to send notification to user ${userId}:`, error);
+    console.error(
+      `[FCM] ❌ Failed to send notification to user ${userId}:`,
+      error
+    );
   }
 }
 
