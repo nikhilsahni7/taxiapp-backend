@@ -112,16 +112,26 @@ const sendSMSViaPRP = async (
       setTimeout(async () => {
         try {
           console.log("🔍 Checking SMS delivery status...");
-          const deliveryResponse = await axios.get(
+
+          // Extract message ID from response data
+          const messageId = response.data.data;
+
+          // Create form data for delivery report
+          const formData = new URLSearchParams();
+          formData.append("searchMobile", formattedPhone);
+          formData.append("Fromdate", new Date().toISOString().split("T")[0]);
+          formData.append("Todate", new Date().toISOString().split("T")[0]);
+          if (messageId) {
+            formData.append("Msgid", messageId);
+          }
+
+          const deliveryResponse = await axios.post(
             `${PRP_SMS_CONFIG.baseUrl}/APIDeliveryReport`,
+            formData,
             {
               headers: {
                 Apikey: PRP_SMS_CONFIG.apiKey,
-              },
-              params: {
-                searchMobile: formattedPhone,
-                Fromdate: new Date().toISOString().split("T")[0],
-                Todate: new Date().toISOString().split("T")[0],
+                "Content-Type": "application/x-www-form-urlencoded",
               },
               timeout: 10000,
             }
