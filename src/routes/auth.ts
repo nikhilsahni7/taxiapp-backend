@@ -28,7 +28,7 @@ const prisma = new PrismaClient();
 const PRP_SMS_CONFIG = {
   apiKey: process.env.PRP_SMS_API_KEY,
   baseUrl: "https://api.bulksmsadmin.com/BulkSMSapi/keyApiSendSMS",
-  sender: process.env.PRP_SMS_SENDER || "TXISUR",
+  sender: process.env.PRP_SMS_SENDER || "TXISRE",
   templateName: process.env.PRP_SMS_TEMPLATE_NAME || "OTP",
 };
 
@@ -80,9 +80,15 @@ const sendSMSViaPRP = async (
     // Check for specific error responses
     if (response.data && response.data.returnMessage) {
       if (response.data.returnMessage.includes("TempName does not exists")) {
-        console.error(`❌ Template '${PRP_SMS_CONFIG.templateName}' does not exist in SMS panel`);
-        console.error("📝 Please create and approve the template in your PRP SMS dashboard");
-        console.error("🔧 Or update the PRP_SMS_TEMPLATE_NAME environment variable");
+        console.error(
+          `❌ Template '${PRP_SMS_CONFIG.templateName}' does not exist in SMS panel`
+        );
+        console.error(
+          "📝 Please create and approve the template in your PRP SMS dashboard"
+        );
+        console.error(
+          "🔧 Or update the PRP_SMS_TEMPLATE_NAME environment variable"
+        );
         return false;
       }
     }
@@ -98,14 +104,19 @@ const sendSMSViaPRP = async (
       console.log("🎉 SMS sent successfully!");
       return true;
     } else {
-      console.error("❌ SMS sending failed:", response.data.returnMessage || response.data.message);
+      console.error(
+        "❌ SMS sending failed:",
+        response.data.returnMessage || response.data.message
+      );
 
       // In production, you might want to return false here
       // For development/testing, we're returning true to allow flow to continue
       if (process.env.NODE_ENV === "production") {
         return false;
       } else {
-        console.log("⚠️ Development mode: Allowing flow to continue despite SMS failure");
+        console.log(
+          "⚠️ Development mode: Allowing flow to continue despite SMS failure"
+        );
         return true;
       }
     }
@@ -116,7 +127,9 @@ const sendSMSViaPRP = async (
     if (process.env.NODE_ENV === "production") {
       return false;
     } else {
-      console.log("⚠️ Development mode: Allowing flow to continue despite SMS error");
+      console.log(
+        "⚠️ Development mode: Allowing flow to continue despite SMS error"
+      );
       return true;
     }
   }
