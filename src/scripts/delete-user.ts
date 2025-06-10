@@ -35,64 +35,7 @@ export async function deleteUserWithPrisma(
     // Use a longer transaction timeout to prevent "Transaction already closed" errors
     await prisma.$transaction(
       async (tx) => {
-        // 1. Delete ChatMessages sent by the user
-        const chatMessagesDeleted = await tx.chatMessage.deleteMany({
-          where: { senderId: userId },
-        });
-        console.log(`Deleted ${chatMessagesDeleted.count} chat messages`);
-
-        // 2. Delete RideLocationLogs for rides where user is driver
-        if (user.userType === "DRIVER") {
-          // Get all rides where this user was the driver
-          const driverRides = await tx.ride.findMany({
-            where: { driverId: userId },
-            select: { id: true },
-          });
-
-          const rideIds = driverRides.map((ride) => ride.id);
-
-          if (rideIds.length > 0) {
-            const locationLogsDeleted = await tx.rideLocationLog.deleteMany({
-              where: { rideId: { in: rideIds } },
-            });
-            console.log(
-              `Deleted ${locationLogsDeleted.count} ride location logs`
-            );
-          }
-        }
-
-        // 3. Delete Transactions where user is sender or receiver
-        const transactionsDeleted = await tx.transaction.deleteMany({
-          where: {
-            OR: [{ senderId: userId }, { receiverId: userId }],
-          },
-        });
-        console.log(`Deleted ${transactionsDeleted.count} transactions`);
-
-        // 4. Delete LongDistanceTransactions where user is sender or receiver
-        const ldTransactionsDeleted =
-          await tx.longDistanceTransaction.deleteMany({
-            where: {
-              OR: [{ senderId: userId }, { receiverId: userId }],
-            },
-          });
-        console.log(
-          `Deleted ${ldTransactionsDeleted.count} long distance transactions`
-        );
-
-        // 5. Delete VendorBookingTransactions where user is sender or receiver
-        const vbTransactionsDeleted =
-          await tx.vendorBookingTransaction.deleteMany({
-            where: {
-              OR: [{ senderId: userId }, { receiverId: userId }],
-            },
-          });
-        console.log(
-          `Deleted ${vbTransactionsDeleted.count} vendor booking transactions`
-        );
-
-        // 6. Handle Rides
-        // First get all ride IDs where this user is involved (either as user or driver)
+        // 1. Get all ride IDs where this user is involved (either as user or driver)
         const rideIdsToDelete = await tx.ride.findMany({
           where: {
             OR: [{ userId: userId }, { driverId: userId }],
@@ -102,45 +45,122 @@ export async function deleteUserWithPrisma(
 
         const rideIds = rideIdsToDelete.map((ride) => ride.id);
 
+        // 2. Get all long distance booking IDs where this user is involved
+        const ldBookingIdsToDelete = await tx.longDistanceBooking.findMany({
+          where: {
+            OR: [{ userId: userId }, { driverId: userId }],
+          },
+          select: { id: true },
+        });
+
+        const ldBookingIds = ldBookingIdsToDelete.map((booking) => booking.id);
+
+        // 3. Get all vendor booking IDs where this user is involved
+        const vbBookingIdsToDelete = await tx.vendorBooking.findMany({
+          where: {
+            OR: [{ vendorId: userId }, { driverId: userId }],
+          },
+          select: { id: true },
+        });
+
+        const vbBookingIds = vbBookingIdsToDelete.map((booking) => booking.id);
+
+        // 4. Delete chat messages for rides and sent by user
         if (rideIds.length > 0) {
-          // Delete all chat messages for these rides
           const rideChatsDeleted = await tx.chatMessage.deleteMany({
             where: { rideId: { in: rideIds } },
           });
           console.log(`Deleted ${rideChatsDeleted.count} ride chat messages`);
+        }
 
-          // Delete all location logs for these rides
-          const logsDeleted = await tx.rideLocationLog.deleteMany({
+        const chatMessagesDeleted = await tx.chatMessage.deleteMany({
+          where: { senderId: userId },
+        });
+        console.log(`Deleted ${chatMessagesDeleted.count} user chat messages`);
+
+        // 5. Delete ride location logs for rides
+        if (rideIds.length > 0) {
+          const locationLogsDeleted = await tx.rideLocationLog.deleteMany({
             where: { rideId: { in: rideIds } },
           });
-          console.log(`Deleted ${logsDeleted.count} ride location logs`);
+          console.log(
+            `Deleted ${locationLogsDeleted.count} ride location logs`
+          );
+        }
 
-          // Delete the rides themselves
+        // 6. Delete all transactions that reference rides
+        const transactionsDeleted = await tx.transaction.deleteMany({
+          where: {
+            OR: [
+              { senderId: userId },
+              { receiverId: userId },
+              ...(rideIds.length > 0 ? [{ rideId: { in: rideIds } }] : []),
+            ],
+          },
+        });
+        console.log(`Deleted ${transactionsDeleted.count} transactions`);
+
+        // 7. Delete all long distance transactions that reference bookings or involve user
+        const ldTransactionsDeleted =
+          await tx.longDistanceTransaction.deleteMany({
+            where: {
+              OR: [
+                { senderId: userId },
+                { receiverId: userId },
+                ...(ldBookingIds.length > 0
+                  ? [{ bookingId: { in: ldBookingIds } }]
+                  : []),
+              ],
+            },
+          });
+        console.log(
+          `Deleted ${ldTransactionsDeleted.count} long distance transactions`
+        );
+
+        // 8. Delete all vendor booking transactions that reference bookings or involve user
+        const vbTransactionsDeleted =
+          await tx.vendorBookingTransaction.deleteMany({
+            where: {
+              OR: [
+                { senderId: userId },
+                { receiverId: userId },
+                ...(vbBookingIds.length > 0
+                  ? [{ bookingId: { in: vbBookingIds } }]
+                  : []),
+              ],
+            },
+          });
+        console.log(
+          `Deleted ${vbTransactionsDeleted.count} vendor booking transactions`
+        );
+
+        // 9. Now delete the rides themselves
+        if (rideIds.length > 0) {
           const ridesDeleted = await tx.ride.deleteMany({
             where: { id: { in: rideIds } },
           });
           console.log(`Deleted ${ridesDeleted.count} rides`);
         }
 
-        // 7. Handle LongDistanceBookings
-        const ldBookingsDeleted = await tx.longDistanceBooking.deleteMany({
-          where: {
-            OR: [{ userId: userId }, { driverId: userId }],
-          },
-        });
-        console.log(
-          `Deleted ${ldBookingsDeleted.count} long distance bookings`
-        );
+        // 10. Now delete the long distance bookings
+        if (ldBookingIds.length > 0) {
+          const ldBookingsDeleted = await tx.longDistanceBooking.deleteMany({
+            where: { id: { in: ldBookingIds } },
+          });
+          console.log(
+            `Deleted ${ldBookingsDeleted.count} long distance bookings`
+          );
+        }
 
-        // 8. Handle VendorBookings
-        const vbBookingsDeleted = await tx.vendorBooking.deleteMany({
-          where: {
-            OR: [{ vendorId: userId }, { driverId: userId }],
-          },
-        });
-        console.log(`Deleted ${vbBookingsDeleted.count} vendor bookings`);
+        // 11. Now delete the vendor bookings
+        if (vbBookingIds.length > 0) {
+          const vbBookingsDeleted = await tx.vendorBooking.deleteMany({
+            where: { id: { in: vbBookingIds } },
+          });
+          console.log(`Deleted ${vbBookingsDeleted.count} vendor bookings`);
+        }
 
-        // 9. Delete DriverStatus if user is a driver
+        // 12. Delete DriverStatus if user is a driver
         if (user.userType === "DRIVER") {
           const driverStatusDeleted = await tx.driverStatus.deleteMany({
             where: { driverId: userId },
@@ -150,13 +170,13 @@ export async function deleteUserWithPrisma(
           );
         }
 
-        // 10. Delete Wallet
+        // 13. Delete Wallet
         const walletDeleted = await tx.wallet.deleteMany({
           where: { userId: userId },
         });
         console.log(`Deleted ${walletDeleted.count} wallet records`);
 
-        // 11. Delete type-specific details
+        // 14. Delete type-specific details
         if (user.userType === "DRIVER" && user.driverDetails) {
           await tx.driverDetails.delete({
             where: { id: user.driverDetails.id },
@@ -178,7 +198,7 @@ export async function deleteUserWithPrisma(
           console.log(`Deleted user details`);
         }
 
-        // 12. Finally delete the user record
+        // 15. Finally delete the user record
         const deletedUser = await tx.user.delete({
           where: { id: userId },
         });
@@ -234,7 +254,27 @@ export async function deleteUserNonTransactionalWithPrisma(
 
     const rideIds = rideIdsToDelete.map((ride) => ride.id);
 
-    // 2. Delete chat messages for these rides and from this user
+    // 2. Get all long distance booking IDs where this user is involved
+    const ldBookingIdsToDelete = await prisma.longDistanceBooking.findMany({
+      where: {
+        OR: [{ userId: userId }, { driverId: userId }],
+      },
+      select: { id: true },
+    });
+
+    const ldBookingIds = ldBookingIdsToDelete.map((booking) => booking.id);
+
+    // 3. Get all vendor booking IDs where this user is involved
+    const vbBookingIdsToDelete = await prisma.vendorBooking.findMany({
+      where: {
+        OR: [{ vendorId: userId }, { driverId: userId }],
+      },
+      select: { id: true },
+    });
+
+    const vbBookingIds = vbBookingIdsToDelete.map((booking) => booking.id);
+
+    // 4. Delete chat messages for these rides and from this user
     if (rideIds.length > 0) {
       const rideChatsDeleted = await prisma.chatMessage.deleteMany({
         where: { rideId: { in: rideIds } },
@@ -247,7 +287,7 @@ export async function deleteUserNonTransactionalWithPrisma(
     });
     console.log(`Deleted ${userChatsDeleted.count} user chat messages`);
 
-    // 3. Delete ride location logs
+    // 5. Delete ride location logs
     if (rideIds.length > 0) {
       const logsDeleted = await prisma.rideLocationLog.deleteMany({
         where: { rideId: { in: rideIds } },
@@ -255,37 +295,53 @@ export async function deleteUserNonTransactionalWithPrisma(
       console.log(`Deleted ${logsDeleted.count} ride location logs`);
     }
 
-    // 4. Delete all transactions
+    // 6. Delete all transactions
     const transactionsDeleted = await prisma.transaction.deleteMany({
       where: {
-        OR: [{ senderId: userId }, { receiverId: userId }],
+        OR: [
+          { senderId: userId },
+          { receiverId: userId },
+          ...(rideIds.length > 0 ? [{ rideId: { in: rideIds } }] : []),
+        ],
       },
     });
     console.log(`Deleted ${transactionsDeleted.count} transactions`);
 
-    // 5. Delete all long distance transactions
+    // 7. Delete all long distance transactions
     const ldTransactionsDeleted =
       await prisma.longDistanceTransaction.deleteMany({
         where: {
-          OR: [{ senderId: userId }, { receiverId: userId }],
+          OR: [
+            { senderId: userId },
+            { receiverId: userId },
+            ...(ldBookingIds.length > 0
+              ? [{ bookingId: { in: ldBookingIds } }]
+              : []),
+          ],
         },
       });
     console.log(
       `Deleted ${ldTransactionsDeleted.count} long distance transactions`
     );
 
-    // 6. Delete all vendor booking transactions
+    // 8. Delete all vendor booking transactions
     const vbTransactionsDeleted =
       await prisma.vendorBookingTransaction.deleteMany({
         where: {
-          OR: [{ senderId: userId }, { receiverId: userId }],
+          OR: [
+            { senderId: userId },
+            { receiverId: userId },
+            ...(vbBookingIds.length > 0
+              ? [{ bookingId: { in: vbBookingIds } }]
+              : []),
+          ],
         },
       });
     console.log(
       `Deleted ${vbTransactionsDeleted.count} vendor booking transactions`
     );
 
-    // 7. Delete rides
+    // 9. Delete rides
     if (rideIds.length > 0) {
       const ridesDeleted = await prisma.ride.deleteMany({
         where: { id: { in: rideIds } },
@@ -293,23 +349,23 @@ export async function deleteUserNonTransactionalWithPrisma(
       console.log(`Deleted ${ridesDeleted.count} rides`);
     }
 
-    // 8. Delete long distance bookings
-    const ldBookingsDeleted = await prisma.longDistanceBooking.deleteMany({
-      where: {
-        OR: [{ userId: userId }, { driverId: userId }],
-      },
-    });
-    console.log(`Deleted ${ldBookingsDeleted.count} long distance bookings`);
+    // 10. Delete long distance bookings
+    if (ldBookingIds.length > 0) {
+      const ldBookingsDeleted = await prisma.longDistanceBooking.deleteMany({
+        where: { id: { in: ldBookingIds } },
+      });
+      console.log(`Deleted ${ldBookingsDeleted.count} long distance bookings`);
+    }
 
-    // 9. Delete vendor bookings
-    const vbBookingsDeleted = await prisma.vendorBooking.deleteMany({
-      where: {
-        OR: [{ vendorId: userId }, { driverId: userId }],
-      },
-    });
-    console.log(`Deleted ${vbBookingsDeleted.count} vendor bookings`);
+    // 11. Delete vendor bookings
+    if (vbBookingIds.length > 0) {
+      const vbBookingsDeleted = await prisma.vendorBooking.deleteMany({
+        where: { id: { in: vbBookingIds } },
+      });
+      console.log(`Deleted ${vbBookingsDeleted.count} vendor bookings`);
+    }
 
-    // 10. Delete driver status if applicable
+    // 12. Delete driver status if applicable
     if (user.userType === "DRIVER") {
       const driverStatusDeleted = await prisma.driverStatus.deleteMany({
         where: { driverId: userId },
@@ -317,13 +373,13 @@ export async function deleteUserNonTransactionalWithPrisma(
       console.log(`Deleted ${driverStatusDeleted.count} driver status records`);
     }
 
-    // 11. Delete wallet
+    // 13. Delete wallet
     const walletDeleted = await prisma.wallet.deleteMany({
       where: { userId },
     });
     console.log(`Deleted ${walletDeleted.count} wallet records`);
 
-    // 12. Delete type-specific details
+    // 14. Delete type-specific details
     if (user.userType === "DRIVER" && user.driverDetails) {
       await prisma.driverDetails.delete({
         where: { id: user.driverDetails.id },
@@ -345,7 +401,7 @@ export async function deleteUserNonTransactionalWithPrisma(
       console.log("Deleted user details");
     }
 
-    // 13. Finally delete the user
+    // 15. Finally delete the user
     const deletedUser = await prisma.user.delete({
       where: { id: userId },
     });

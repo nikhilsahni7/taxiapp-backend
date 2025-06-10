@@ -100,47 +100,54 @@ router.get("/", async (req: Request, res: Response) => {
 });
 
 // Get user by ID
-router.get("/:id", verifyToken, async (req: Request, res: Response) => {
-  try {
-    if (!req.user) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-    const userId = req.user.userId;
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        phone: true,
-        selfieUrl: true,
-        state: true,
-        city: true,
-        userType: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
+router.get(
+  "/:id",
+  verifyToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      if (!req.user) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      const userId = req.user.userId;
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          selfieUrl: true,
+          state: true,
+          city: true,
+          userType: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
 
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
+      if (!user) {
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
 
-    res.json(user);
-  } catch (error) {
-    res.status(500).json({ error: "Failed to fetch user" });
+      res.json(user);
+    } catch (error) {
+      res.status(500).json({ error: "Failed to fetch user" });
+    }
   }
-});
+);
 
 // Update user
 router.put(
   "/:id",
   verifyToken,
   upload.single("selfie"),
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
     try {
       if (!req.user) {
-        return res.status(401).json({ error: "Unauthorized" });
+        res.status(401).json({ error: "Unauthorized" });
+        return;
       }
       const userId = req.user.userId;
       const { name, email, state, city } = req.body;
@@ -184,297 +191,317 @@ router.put(
 );
 
 // Delete user
-router.delete("/:id", verifyToken, async (req: Request, res: Response) => {
-  try {
-    if (!req.user) {
-      return res.status(401).json({ error: "Unauthorized" });
+router.delete(
+  "/:id",
+  verifyToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      if (!req.user) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      const userId = req.user.userId;
+
+      // First delete related records
+      await prisma.userDetails.deleteMany({ where: { userId: userId } });
+      await prisma.driverDetails.deleteMany({ where: { userId: userId } });
+      await prisma.vendorDetails.deleteMany({ where: { userId: userId } });
+
+      // Then delete the user
+      await prisma.user.delete({ where: { id: userId } });
+
+      res.json({ message: "User deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ error: "Failed to delete user" });
     }
-    const userId = req.user.userId;
-
-    // First delete related records
-    await prisma.userDetails.deleteMany({ where: { userId: userId } });
-    await prisma.driverDetails.deleteMany({ where: { userId: userId } });
-    await prisma.vendorDetails.deleteMany({ where: { userId: userId } });
-
-    // Then delete the user
-    await prisma.user.delete({ where: { id: userId } });
-
-    res.json({ message: "User deleted successfully" });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to delete user" });
   }
-});
+);
 
 // Get all rides for a user (all services)
-router.get("/:id/rides", verifyToken, async (req: Request, res: Response) => {
-  try {
-    if (!req.user) {
-      return res.status(401).json({ error: "Unauthorized" });
-    }
-    const userId = req.user.userId;
+router.get(
+  "/:id/rides",
+  verifyToken,
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      if (!req.user) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+      const userId = req.user.userId;
 
-    // Get service filter from query params
-    const serviceFilter = req.query.service as string | undefined;
+      // Get service filter from query params
+      const serviceFilter = req.query.service as string | undefined;
 
-    // Build filter conditions for local rides (city ride and car rental)
-    const localRideFilter: any = { userId };
+      // Build filter conditions for local rides (city ride and car rental)
+      const localRideFilter: any = { userId };
 
-    // Build filter conditions for long distance rides
-    const longDistanceFilter: any = { userId };
-    if (
-      serviceFilter === "OUTSTATION" ||
-      serviceFilter === "HILL_STATION" ||
-      serviceFilter === "CHARDHAM_YATRA" ||
-      serviceFilter === "ALL_INDIA_TOUR"
-    ) {
-      longDistanceFilter.serviceType = serviceFilter as LongDistanceServiceType;
-    }
+      // Build filter conditions for long distance rides
+      const longDistanceFilter: any = { userId };
+      if (
+        serviceFilter === "OUTSTATION" ||
+        serviceFilter === "HILL_STATION" ||
+        serviceFilter === "CHARDHAM_YATRA" ||
+        serviceFilter === "ALL_INDIA_TOUR"
+      ) {
+        longDistanceFilter.serviceType =
+          serviceFilter as LongDistanceServiceType;
+      }
 
-    // Specific filters for car rental and city ride
-    let carRentalFilter = {};
-    let cityRideFilter = {};
+      // Specific filters for car rental and city ride
+      let carRentalFilter = {};
+      let cityRideFilter = {};
 
-    if (serviceFilter === "CAR_RENTAL") {
-      carRentalFilter = { isCarRental: true };
-      localRideFilter.isCarRental = true;
-    } else if (serviceFilter === "CITY_RIDE") {
-      cityRideFilter = { isCarRental: false, rideType: "LOCAL" };
-      localRideFilter.isCarRental = false;
-      localRideFilter.rideType = "LOCAL";
-    }
+      if (serviceFilter === "CAR_RENTAL") {
+        carRentalFilter = { isCarRental: true };
+        localRideFilter.isCarRental = true;
+      } else if (serviceFilter === "CITY_RIDE") {
+        cityRideFilter = { isCarRental: false, rideType: "LOCAL" };
+        localRideFilter.isCarRental = false;
+        localRideFilter.rideType = "LOCAL";
+      }
 
-    // Get local rides with full details
-    const localRides = await prisma.ride.findMany({
-      where: localRideFilter,
-      include: {
-        driver: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-            email: true,
-            driverDetails: {
-              select: {
-                vehicleName: true,
-                vehicleNumber: true,
-                vehicleCategory: true,
+      // Get local rides with full details
+      const localRides = await prisma.ride.findMany({
+        where: localRideFilter,
+        include: {
+          driver: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+              email: true,
+              driverDetails: {
+                select: {
+                  vehicleName: true,
+                  vehicleNumber: true,
+                  vehicleCategory: true,
+                },
               },
-            },
-            driverStatus: {
-              select: {
-                isOnline: true,
-                locationLat: true,
-                locationLng: true,
-              },
-            },
-          },
-        },
-        transactions: {
-          select: {
-            id: true,
-            amount: true,
-            status: true,
-            type: true,
-            razorpayOrderId: true,
-            razorpayPaymentId: true,
-            createdAt: true,
-          },
-        },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
-
-    // Get long distance rides with full details
-    const longDistanceRides = await prisma.longDistanceBooking.findMany({
-      where: longDistanceFilter,
-      include: {
-        driver: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-            email: true,
-            driverDetails: {
-              select: {
-                vehicleName: true,
-                vehicleNumber: true,
-                vehicleCategory: true,
-              },
-            },
-            driverStatus: {
-              select: {
-                isOnline: true,
-                locationLat: true,
-                locationLng: true,
+              driverStatus: {
+                select: {
+                  isOnline: true,
+                  locationLat: true,
+                  locationLng: true,
+                },
               },
             },
           },
-        },
-        transactions: {
-          select: {
-            id: true,
-            amount: true,
-            status: true,
-            type: true,
-            razorpayOrderId: true,
-            razorpayPaymentId: true,
-            createdAt: true,
+          transactions: {
+            select: {
+              id: true,
+              amount: true,
+              status: true,
+              type: true,
+              razorpayOrderId: true,
+              razorpayPaymentId: true,
+              createdAt: true,
+            },
           },
         },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
-
-    // Transform and categorize rides
-    const cityRides = localRides
-      .filter((ride) => !ride.isCarRental && ride.rideType === "LOCAL")
-      .map((ride) => ({
-        ...ride,
-        serviceCategory: "LOCAL",
-        serviceType: "CITY_RIDE",
-      }));
-
-    const carRentalRides = localRides
-      .filter((ride) => ride.isCarRental)
-      .map((ride) => ({
-        ...ride,
-        serviceCategory: "LOCAL",
-        serviceType: "CAR_RENTAL",
-        rentalDetails: {
-          packageHours: ride.rentalPackageHours,
-          packageKms: ride.rentalPackageKms,
-          basePrice: ride.rentalBasePrice,
-          actualKmsTravelled: ride.actualKmsTravelled,
-          actualMinutes: ride.actualMinutes,
-          extraKmCharges: ride.extraKmCharges,
-          extraMinuteCharges: ride.extraMinuteCharges,
+        orderBy: {
+          createdAt: "desc",
         },
-      }));
-
-    const outstationRides = longDistanceRides
-      .filter((ride) => ride.serviceType === "OUTSTATION")
-      .map((ride) => ({
-        ...ride,
-        serviceCategory: "LONG_DISTANCE",
-        serviceType: "OUTSTATION",
-        tripDetails: {
-          startDate: ride.startDate,
-          endDate: ride.endDate,
-          totalDays: ride.totalDays,
-          tripType: ride.tripType,
-          advanceAmount: ride.advanceAmount,
-          remainingAmount: ride.remainingAmount,
-        },
-      }));
-
-    const hillStationRides = longDistanceRides
-      .filter((ride) => ride.serviceType === "HILL_STATION")
-      .map((ride) => ({
-        ...ride,
-        serviceCategory: "LONG_DISTANCE",
-        serviceType: "HILL_STATION",
-        tripDetails: {
-          startDate: ride.startDate,
-          endDate: ride.endDate,
-          totalDays: ride.totalDays,
-          tripType: ride.tripType,
-          advanceAmount: ride.advanceAmount,
-          remainingAmount: ride.remainingAmount,
-        },
-      }));
-
-    const chardhamRides = longDistanceRides
-      .filter((ride) => ride.serviceType === "CHARDHAM_YATRA")
-      .map((ride) => ({
-        ...ride,
-        serviceCategory: "LONG_DISTANCE",
-        serviceType: "CHARDHAM_YATRA",
-        tripDetails: {
-          startDate: ride.startDate,
-          endDate: ride.endDate,
-          totalDays: ride.totalDays,
-          tripType: ride.tripType,
-          advanceAmount: ride.advanceAmount,
-          remainingAmount: ride.remainingAmount,
-        },
-      }));
-
-    const allIndiaRides = longDistanceRides
-      .filter((ride) => ride.serviceType === "ALL_INDIA_TOUR")
-      .map((ride) => ({
-        ...ride,
-        serviceCategory: "LONG_DISTANCE",
-        serviceType: "ALL_INDIA_TOUR",
-        tripDetails: {
-          startDate: ride.startDate,
-          endDate: ride.endDate,
-          totalDays: ride.totalDays,
-          tripType: ride.tripType,
-          advanceAmount: ride.advanceAmount,
-          remainingAmount: ride.remainingAmount,
-        },
-      }));
-
-    // Combine all rides
-    const allRides = {
-      cityRides,
-      carRentalRides,
-      outstationRides,
-      hillStationRides,
-      chardhamRides,
-      allIndiaRides,
-    };
-
-    // Return filtered results based on service type
-    if (serviceFilter === "CITY_RIDE") {
-      return res.json({ rides: cityRides });
-    } else if (serviceFilter === "CAR_RENTAL") {
-      return res.json({ rides: carRentalRides });
-    } else if (serviceFilter === "OUTSTATION") {
-      return res.json({ rides: outstationRides });
-    } else if (serviceFilter === "HILL_STATION") {
-      return res.json({ rides: hillStationRides });
-    } else if (serviceFilter === "CHARDHAM_YATRA") {
-      return res.json({ rides: chardhamRides });
-    } else if (serviceFilter === "ALL_INDIA_TOUR") {
-      return res.json({ rides: allIndiaRides });
-    } else if (serviceFilter === "LONG_DISTANCE") {
-      // Return all long distance rides combined
-      return res.json({
-        rides: [
-          ...outstationRides,
-          ...hillStationRides,
-          ...chardhamRides,
-          ...allIndiaRides,
-        ],
       });
-    } else if (serviceFilter === "LOCAL") {
-      // Return all local rides combined
-      return res.json({
-        rides: [...cityRides, ...carRentalRides],
-      });
-    }
 
-    // Return all rides if no specific filter is applied
-    res.json(allRides);
-  } catch (error) {
-    console.error("Error fetching rides:", error);
-    res.status(500).json({ error: "Failed to fetch rides" });
+      // Get long distance rides with full details
+      const longDistanceRides = await prisma.longDistanceBooking.findMany({
+        where: longDistanceFilter,
+        include: {
+          driver: {
+            select: {
+              id: true,
+              name: true,
+              phone: true,
+              email: true,
+              driverDetails: {
+                select: {
+                  vehicleName: true,
+                  vehicleNumber: true,
+                  vehicleCategory: true,
+                },
+              },
+              driverStatus: {
+                select: {
+                  isOnline: true,
+                  locationLat: true,
+                  locationLng: true,
+                },
+              },
+            },
+          },
+          transactions: {
+            select: {
+              id: true,
+              amount: true,
+              status: true,
+              type: true,
+              razorpayOrderId: true,
+              razorpayPaymentId: true,
+              createdAt: true,
+            },
+          },
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+      });
+
+      // Transform and categorize rides
+      const cityRides = localRides
+        .filter((ride) => !ride.isCarRental && ride.rideType === "LOCAL")
+        .map((ride) => ({
+          ...ride,
+          serviceCategory: "LOCAL",
+          serviceType: "CITY_RIDE",
+        }));
+
+      const carRentalRides = localRides
+        .filter((ride) => ride.isCarRental)
+        .map((ride) => ({
+          ...ride,
+          serviceCategory: "LOCAL",
+          serviceType: "CAR_RENTAL",
+          rentalDetails: {
+            packageHours: ride.rentalPackageHours,
+            packageKms: ride.rentalPackageKms,
+            basePrice: ride.rentalBasePrice,
+            actualKmsTravelled: ride.actualKmsTravelled,
+            actualMinutes: ride.actualMinutes,
+            extraKmCharges: ride.extraKmCharges,
+            extraMinuteCharges: ride.extraMinuteCharges,
+          },
+        }));
+
+      const outstationRides = longDistanceRides
+        .filter((ride) => ride.serviceType === "OUTSTATION")
+        .map((ride) => ({
+          ...ride,
+          serviceCategory: "LONG_DISTANCE",
+          serviceType: "OUTSTATION",
+          tripDetails: {
+            startDate: ride.startDate,
+            endDate: ride.endDate,
+            totalDays: ride.totalDays,
+            tripType: ride.tripType,
+            advanceAmount: ride.advanceAmount,
+            remainingAmount: ride.remainingAmount,
+          },
+        }));
+
+      const hillStationRides = longDistanceRides
+        .filter((ride) => ride.serviceType === "HILL_STATION")
+        .map((ride) => ({
+          ...ride,
+          serviceCategory: "LONG_DISTANCE",
+          serviceType: "HILL_STATION",
+          tripDetails: {
+            startDate: ride.startDate,
+            endDate: ride.endDate,
+            totalDays: ride.totalDays,
+            tripType: ride.tripType,
+            advanceAmount: ride.advanceAmount,
+            remainingAmount: ride.remainingAmount,
+          },
+        }));
+
+      const chardhamRides = longDistanceRides
+        .filter((ride) => ride.serviceType === "CHARDHAM_YATRA")
+        .map((ride) => ({
+          ...ride,
+          serviceCategory: "LONG_DISTANCE",
+          serviceType: "CHARDHAM_YATRA",
+          tripDetails: {
+            startDate: ride.startDate,
+            endDate: ride.endDate,
+            totalDays: ride.totalDays,
+            tripType: ride.tripType,
+            advanceAmount: ride.advanceAmount,
+            remainingAmount: ride.remainingAmount,
+          },
+        }));
+
+      const allIndiaRides = longDistanceRides
+        .filter((ride) => ride.serviceType === "ALL_INDIA_TOUR")
+        .map((ride) => ({
+          ...ride,
+          serviceCategory: "LONG_DISTANCE",
+          serviceType: "ALL_INDIA_TOUR",
+          tripDetails: {
+            startDate: ride.startDate,
+            endDate: ride.endDate,
+            totalDays: ride.totalDays,
+            tripType: ride.tripType,
+            advanceAmount: ride.advanceAmount,
+            remainingAmount: ride.remainingAmount,
+          },
+        }));
+
+      // Combine all rides
+      const allRides = {
+        cityRides,
+        carRentalRides,
+        outstationRides,
+        hillStationRides,
+        chardhamRides,
+        allIndiaRides,
+      };
+
+      // Return filtered results based on service type
+      if (serviceFilter === "CITY_RIDE") {
+        res.json({ rides: cityRides });
+        return;
+      } else if (serviceFilter === "CAR_RENTAL") {
+        res.json({ rides: carRentalRides });
+        return;
+      } else if (serviceFilter === "OUTSTATION") {
+        res.json({ rides: outstationRides });
+        return;
+      } else if (serviceFilter === "HILL_STATION") {
+        res.json({ rides: hillStationRides });
+        return;
+      } else if (serviceFilter === "CHARDHAM_YATRA") {
+        res.json({ rides: chardhamRides });
+        return;
+      } else if (serviceFilter === "ALL_INDIA_TOUR") {
+        res.json({ rides: allIndiaRides });
+        return;
+      } else if (serviceFilter === "LONG_DISTANCE") {
+        // Return all long distance rides combined
+        res.json({
+          rides: [
+            ...outstationRides,
+            ...hillStationRides,
+            ...chardhamRides,
+            ...allIndiaRides,
+          ],
+        });
+        return;
+      } else if (serviceFilter === "LOCAL") {
+        // Return all local rides combined
+        res.json({
+          rides: [...cityRides, ...carRentalRides],
+        });
+        return;
+      }
+
+      // Return all rides if no specific filter is applied
+      res.json(allRides);
+    } catch (error) {
+      console.error("Error fetching rides:", error);
+      res.status(500).json({ error: "Failed to fetch rides" });
+    }
   }
-});
+);
 
 // Get vendor profile
 router.get(
   "/vendor/profile",
   verifyToken,
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
     try {
       if (!req.user) {
-        return res.status(401).json({ error: "Unauthorized" });
+        res.status(401).json({ error: "Unauthorized" });
+        return;
       }
       const userId = req.user.userId;
 
@@ -493,7 +520,8 @@ router.get(
       });
 
       if (!vendor) {
-        return res.status(404).json({ error: "Vendor not found" });
+        res.status(404).json({ error: "Vendor not found" });
+        return;
       }
 
       res.json(vendor);
@@ -507,10 +535,11 @@ router.get(
 router.put(
   "/vendor/profile",
   verifyToken,
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
     try {
       if (!req.user) {
-        return res.status(401).json({ error: "Unauthorized" });
+        res.status(401).json({ error: "Unauthorized" });
+        return;
       }
       const userId = req.user.userId;
 
@@ -577,10 +606,11 @@ router.put(
 router.get(
   "/:id/recent-rides",
   verifyToken,
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
     try {
       if (!req.user) {
-        return res.status(401).json({ error: "Unauthorized" });
+        res.status(401).json({ error: "Unauthorized" });
+        return;
       }
       const userId = req.user.userId;
 
@@ -679,134 +709,28 @@ router.get(
 router.delete(
   "/account/delete",
   verifyToken,
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
     try {
       if (!req.user) {
-        return res.status(401).json({ error: "Unauthorized" });
+        res.status(401).json({ error: "Unauthorized" });
+        return;
       }
 
       const userId = req.user.userId;
 
-      // Start a transaction to ensure all related data is deleted or none at all
-      await prisma.$transaction(async (tx) => {
-        // 1. First get all rides where user is driver or user
-        const userRides = await tx.ride.findMany({
-          where: {
-            OR: [{ userId: userId }, { driverId: userId }],
-          },
-          select: { id: true },
+      // Use the improved deletion function
+      const result = await deleteUserWithPrisma(prisma, userId);
+
+      if (result.success) {
+        res.status(200).json({
+          message: "Account and all associated data deleted successfully",
         });
-
-        const rideIds = userRides.map((ride) => ride.id);
-
-        // 2. Delete chat messages for these rides first
-        if (rideIds.length > 0) {
-          await tx.chatMessage.deleteMany({
-            where: {
-              rideId: { in: rideIds },
-            },
-          });
-        }
-
-        // 3. Delete chat messages sent by user (that might not be related to rides)
-        await tx.chatMessage.deleteMany({
-          where: { senderId: userId },
+      } else {
+        res.status(500).json({
+          error: result.message,
+          details: result.error,
         });
-
-        // 4. Delete transactions
-        await tx.transaction.deleteMany({
-          where: {
-            OR: [{ senderId: userId }, { receiverId: userId }],
-          },
-        });
-
-        // 5. Delete long distance transactions
-        await tx.longDistanceTransaction.deleteMany({
-          where: {
-            OR: [{ senderId: userId }, { receiverId: userId }],
-          },
-        });
-
-        // 6. Delete vendor booking transactions
-        await tx.vendorBookingTransaction.deleteMany({
-          where: {
-            OR: [{ senderId: userId }, { receiverId: userId }],
-          },
-        });
-
-        // 7. Delete ride location logs for rides
-        if (rideIds.length > 0) {
-          await tx.rideLocationLog.deleteMany({
-            where: {
-              rideId: { in: rideIds },
-            },
-          });
-        }
-
-        // 8. Now delete rides as driver
-        await tx.ride.deleteMany({
-          where: { driverId: userId },
-        });
-
-        // 9. Delete rides as user
-        await tx.ride.deleteMany({
-          where: { userId: userId },
-        });
-
-        // 10. Delete long distance bookings as driver
-        await tx.longDistanceBooking.deleteMany({
-          where: { driverId: userId },
-        });
-
-        // 11. Delete long distance bookings as user
-        await tx.longDistanceBooking.deleteMany({
-          where: { userId: userId },
-        });
-
-        // 12. Delete vendor bookings as driver
-        await tx.vendorBooking.deleteMany({
-          where: { driverId: userId },
-        });
-
-        // 13. Delete vendor bookings as vendor
-        await tx.vendorBooking.deleteMany({
-          where: { vendorId: userId },
-        });
-
-        // 14. Delete driver status
-        await tx.driverStatus.deleteMany({
-          where: { driverId: userId },
-        });
-
-        // 15. Delete wallet
-        await tx.wallet.deleteMany({
-          where: { userId: userId },
-        });
-
-        // 16. Delete user details
-        await tx.userDetails.deleteMany({
-          where: { userId: userId },
-        });
-
-        // 17. Delete driver details
-        await tx.driverDetails.deleteMany({
-          where: { userId: userId },
-        });
-
-        // 18. Delete vendor details
-        await tx.vendorDetails.deleteMany({
-          where: { userId: userId },
-        });
-
-        // 19. Finally, delete the user
-        await tx.user.delete({
-          where: { id: userId },
-        });
-      });
-
-      res.status(200).json({
-        message: "Account and all associated data deleted successfully",
-      });
+      }
     } catch (error) {
       console.error("Error deleting account:", error);
       res.status(500).json({ error: "Failed to delete account" });
@@ -815,148 +739,46 @@ router.delete(
 );
 
 // Public account deletion route for testing (PlayStore review)
-router.delete("/public/delete/:userId", async (req: Request, res: Response) => {
-  try {
-    const { userId } = req.params;
+router.delete(
+  "/public/delete/:userId",
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { userId } = req.params;
 
-    if (!userId) {
-      return res.status(400).json({ error: "User ID is required" });
-    }
-
-    // Check if user exists
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found" });
-    }
-
-    // Start a transaction to ensure all related data is deleted or none at all
-    await prisma.$transaction(async (tx) => {
-      // 1. First get all rides where user is driver or user
-      const userRides = await tx.ride.findMany({
-        where: {
-          OR: [{ userId: userId }, { driverId: userId }],
-        },
-        select: { id: true },
-      });
-
-      const rideIds = userRides.map((ride) => ride.id);
-
-      // 2. Delete chat messages for these rides first
-      if (rideIds.length > 0) {
-        await tx.chatMessage.deleteMany({
-          where: {
-            rideId: { in: rideIds },
-          },
-        });
+      if (!userId) {
+        res.status(400).json({ error: "User ID is required" });
+        return;
       }
 
-      // 3. Delete chat messages sent by user (that might not be related to rides)
-      await tx.chatMessage.deleteMany({
-        where: { senderId: userId },
-      });
-
-      // 4. Delete transactions
-      await tx.transaction.deleteMany({
-        where: {
-          OR: [{ senderId: userId }, { receiverId: userId }],
-        },
-      });
-
-      // 5. Delete long distance transactions
-      await tx.longDistanceTransaction.deleteMany({
-        where: {
-          OR: [{ senderId: userId }, { receiverId: userId }],
-        },
-      });
-
-      // 6. Delete vendor booking transactions
-      await tx.vendorBookingTransaction.deleteMany({
-        where: {
-          OR: [{ senderId: userId }, { receiverId: userId }],
-        },
-      });
-
-      // 7. Delete ride location logs for rides
-      if (rideIds.length > 0) {
-        await tx.rideLocationLog.deleteMany({
-          where: {
-            rideId: { in: rideIds },
-          },
-        });
-      }
-
-      // 8. Now delete rides as driver
-      await tx.ride.deleteMany({
-        where: { driverId: userId },
-      });
-
-      // 9. Delete rides as user
-      await tx.ride.deleteMany({
-        where: { userId: userId },
-      });
-
-      // 10. Delete long distance bookings as driver
-      await tx.longDistanceBooking.deleteMany({
-        where: { driverId: userId },
-      });
-
-      // 11. Delete long distance bookings as user
-      await tx.longDistanceBooking.deleteMany({
-        where: { userId: userId },
-      });
-
-      // 12. Delete vendor bookings as driver
-      await tx.vendorBooking.deleteMany({
-        where: { driverId: userId },
-      });
-
-      // 13. Delete vendor bookings as vendor
-      await tx.vendorBooking.deleteMany({
-        where: { vendorId: userId },
-      });
-
-      // 14. Delete driver status
-      await tx.driverStatus.deleteMany({
-        where: { driverId: userId },
-      });
-
-      // 15. Delete wallet
-      await tx.wallet.deleteMany({
-        where: { userId: userId },
-      });
-
-      // 16. Delete user details
-      await tx.userDetails.deleteMany({
-        where: { userId: userId },
-      });
-
-      // 17. Delete driver details
-      await tx.driverDetails.deleteMany({
-        where: { userId: userId },
-      });
-
-      // 18. Delete vendor details
-      await tx.vendorDetails.deleteMany({
-        where: { userId: userId },
-      });
-
-      // 19. Finally, delete the user
-      await tx.user.delete({
+      // Check if user exists
+      const user = await prisma.user.findUnique({
         where: { id: userId },
       });
-    });
 
-    res.status(200).json({
-      message: "Account and all associated data deleted successfully",
-    });
-  } catch (error) {
-    console.error("Error deleting account:", error);
-    res.status(500).json({ error: "Failed to delete account" });
+      if (!user) {
+        res.status(404).json({ error: "User not found" });
+        return;
+      }
+
+      // Use the improved deletion function
+      const result = await deleteUserWithPrisma(prisma, userId);
+
+      if (result.success) {
+        res.status(200).json({
+          message: "Account and all associated data deleted successfully",
+        });
+      } else {
+        res.status(500).json({
+          error: result.message,
+          details: result.error,
+        });
+      }
+    } catch (error) {
+      console.error("Error deleting account:", error);
+      res.status(500).json({ error: "Failed to delete account" });
+    }
   }
-});
+);
 
 // FCM Token Management Routes
 
