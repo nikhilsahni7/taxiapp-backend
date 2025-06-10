@@ -413,7 +413,10 @@ export async function sendTaxiSureRegularNotification(
     type: notificationType,
 
     // System fields
-    priority: "normal",
+    priority:
+      notificationType === "general" && additionalData?.status === "cancelled"
+        ? "high"
+        : "normal",
     timestamp: Date.now().toString(),
   };
 
@@ -426,7 +429,111 @@ export async function sendTaxiSureRegularNotification(
     });
   }
 
-  return sendFcmNotification(fcmToken, title, body, completeRegularData);
+  console.log(
+    `🔔 [FCM-Regular] Sending ${notificationType} notification: ${title}`
+  );
+  console.log(`📋 [FCM-Regular] Data payload:`, completeRegularData);
+
+  try {
+    const result = await sendFcmNotification(
+      fcmToken,
+      title,
+      body,
+      completeRegularData
+    );
+    console.log(
+      `✅ [FCM-Regular] Successfully sent ${notificationType} notification`
+    );
+    return result;
+  } catch (error) {
+    console.error(
+      `❌ [FCM-Regular] Failed to send ${notificationType} notification:`,
+      error
+    );
+    throw error;
+  }
+}
+
+// Enhanced cancellation notification function
+export async function sendTaxiSureCancellationNotification(
+  fcmToken: string,
+  title: string,
+  body: string,
+  cancellationData: {
+    rideId: string;
+    cancelledBy: "user" | "driver";
+    reason?: string;
+    cancellationFee?: string;
+    feeApplied?: string;
+    customerName?: string;
+    driverName?: string;
+    [key: string]: string | undefined;
+  }
+): Promise<string> {
+  const completeCancellationData: Record<string, string> = {
+    // CRITICAL: Cancellation notification identification
+    isCalling: "false",
+    type: "ride_cancelled",
+    notificationCategory: "cancellation",
+
+    // Cancellation specific data
+    rideId: cancellationData.rideId,
+    cancelledBy: cancellationData.cancelledBy,
+    reason: cancellationData.reason || "",
+    status: "cancelled",
+
+    // Fee information
+    cancellationFee: cancellationData.cancellationFee || "0",
+    feeApplied: cancellationData.feeApplied || "false",
+
+    // Names
+    customerName: cancellationData.customerName || "Customer",
+    driverName: cancellationData.driverName || "Driver",
+
+    // System fields
+    priority: "high",
+    timestamp: Date.now().toString(),
+    urgentAction: "true",
+    showInApp: "true",
+  };
+
+  // Add any additional custom data
+  Object.entries(cancellationData).forEach(([key, value]) => {
+    if (
+      value !== undefined &&
+      value !== null &&
+      !completeCancellationData[key]
+    ) {
+      completeCancellationData[key] = String(value);
+    }
+  });
+
+  console.log(
+    `🚫 [FCM-Cancellation] Sending cancellation notification: ${title}`
+  );
+  console.log(
+    `📋 [FCM-Cancellation] Full data payload:`,
+    completeCancellationData
+  );
+
+  try {
+    const result = await sendFcmNotification(
+      fcmToken,
+      title,
+      body,
+      completeCancellationData
+    );
+    console.log(
+      `✅ [FCM-Cancellation] Successfully sent cancellation notification`
+    );
+    return result;
+  } catch (error) {
+    console.error(
+      `❌ [FCM-Cancellation] Failed to send cancellation notification:`,
+      error
+    );
+    throw error;
+  }
 }
 
 // Validation functions

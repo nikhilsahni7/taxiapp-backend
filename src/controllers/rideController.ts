@@ -14,6 +14,7 @@ import { searchAvailableDrivers } from "../lib/driverService";
 
 import {
   sendTaxiSureBookingNotification,
+  sendTaxiSureCancellationNotification,
   sendTaxiSureRegularNotification,
   validateFcmToken,
 } from "../utils/sendFcmNotification";
@@ -1794,7 +1795,14 @@ async function sendNotificationToUser(
 ): Promise<void> {
   try {
     console.log(
-      `[FCM] 📤 Attempting to send notification to user ${userId}: ${title}`
+      `[FCM-Cancellation] 📤 Starting notification process for user ${userId}`
+    );
+    console.log(`[FCM-Cancellation] 📋 Title: "${title}"`);
+    console.log(`[FCM-Cancellation] 📝 Body: "${body}"`);
+    console.log(`[FCM-Cancellation] 🏷️ Type: ${notificationType}`);
+    console.log(
+      `[FCM-Cancellation] 📦 Additional data:`,
+      additionalData || "None"
     );
 
     const user = await prisma.user.findUnique({
@@ -1803,20 +1811,41 @@ async function sendNotificationToUser(
     });
 
     console.log(
-      `[FCM] 🔍 User found: ${user?.name || "Unknown"} (${user?.userType}), Has FCM token: ${!!user?.fcmToken}`
+      `[FCM-Cancellation] 🔍 Database query result - User: ${user?.name || "Unknown"} (${user?.userType}), Has FCM token: ${!!user?.fcmToken}`
     );
 
-    if (!user?.fcmToken) {
-      console.warn(`[FCM] ❌ No FCM token found for user ${userId}`);
+    if (!user) {
+      console.error(
+        `[FCM-Cancellation] ❌ User not found in database: ${userId}`
+      );
       return;
     }
+
+    if (!user.fcmToken) {
+      console.warn(
+        `[FCM-Cancellation] ❌ No FCM token found for user ${userId} (${user.name})`
+      );
+      return;
+    }
+
+    console.log(
+      `[FCM-Cancellation] 🔐 FCM token preview: ${user.fcmToken.substring(0, 30)}...`
+    );
 
     if (!validateFcmToken(user.fcmToken)) {
-      console.warn(`[FCM] ❌ Invalid FCM token for user ${userId}`);
+      console.warn(
+        `[FCM-Cancellation] ❌ Invalid FCM token format for user ${userId} (${user.name})`
+      );
       return;
     }
 
-    console.log(`[FCM] 📤 Sending notification via FCM to ${user.name}...`);
+    console.log(
+      `[FCM-Cancellation] ✅ Token validation passed for ${user.name}`
+    );
+    console.log(
+      `[FCM-Cancellation] 📤 Calling sendTaxiSureRegularNotification...`
+    );
+
     await sendTaxiSureRegularNotification(
       user.fcmToken,
       title,
@@ -1826,13 +1855,19 @@ async function sendNotificationToUser(
     );
 
     console.log(
-      `[FCM] ✅ Notification sent successfully to user ${user.name || userId}: ${title}`
+      `[FCM-Cancellation] ✅ Notification sent successfully to user ${user.name || userId}: ${title}`
     );
   } catch (error) {
     console.error(
-      `[FCM] ❌ Failed to send notification to user ${userId}:`,
+      `[FCM-Cancellation] ❌ Error in sendNotificationToUser for ${userId}:`,
       error
     );
+    if (error instanceof Error) {
+      console.error(`[FCM-Cancellation] ❌ Error name: ${error.name}`);
+      console.error(`[FCM-Cancellation] ❌ Error message: ${error.message}`);
+      console.error(`[FCM-Cancellation] ❌ Error stack: ${error.stack}`);
+    }
+    throw error; // Re-throw to be caught by the caller
   }
 }
 
@@ -2150,51 +2185,102 @@ const handleRideCancellation = async (
         });
       }
 
-      // Send FCM notifications for cancellation
+      // Send FCM notifications for cancellation with enhanced logging
+      console.log(
+        `[handleRideCancellation] Starting FCM notification process for ride ${ride.id}`
+      );
+      console.log(
+        `[handleRideCancellation] Cancelled by: ${cancellingUserType}, Driver ID: ${updatedRideData.driverId}, User ID: ${updatedRideData.userId}`
+      );
+
       try {
         const cancelledByUser = cancellingUserType === UserType.USER;
         const cancelledByDriver = cancellingUserType === UserType.DRIVER;
 
         if (cancelledByUser && updatedRideData.driverId) {
-          // User cancelled - notify driver
-          await sendNotificationToUser(
-            updatedRideData.driverId,
-            "Ride Cancelled 😞",
-            `The ride has been cancelled by the customer.${cancellationReason ? ` Reason: ${cancellationReason}` : ""}${feeApplies ? ` A cancellation fee of ₹${cancellationFee} has been applied.` : ""}`,
-            "general",
-            {
-              rideId: updatedRideData.id,
-              cancelledBy: "user",
-              reason: cancellationReason || "",
-              status: "cancelled",
-              cancellationFee: cancellationFee.toString(),
-              feeApplied: feeApplies.toString(),
-            }
+          console.log(
+            `[handleRideCancellation] User cancelled - sending FCM notification to driver ${updatedRideData.driverId}`
           );
+          // User cancelled - notify driver using dedicated cancellation function
+          const driverUser = await prisma.user.findUnique({
+            where: { id: updatedRideData.driverId },
+            select: { fcmToken: true, name: true, userType: true },
+          });
+
+          if (driverUser?.fcmToken && validateFcmToken(driverUser.fcmToken)) {
+            await sendTaxiSureCancellationNotification(
+              driverUser.fcmToken,
+              "🚫 Ride Cancelled by Customer",
+              `The ride has been cancelled by ${updatedRideData.user?.name || "the customer"}.${cancellationReason ? ` Reason: ${cancellationReason}` : ""}${feeApplies ? ` A cancellation fee of ₹${cancellationFee} has been applied.` : ""} You can now accept new rides.`,
+              {
+                rideId: updatedRideData.id,
+                cancelledBy: "user",
+                reason: cancellationReason || "",
+                cancellationFee: cancellationFee.toString(),
+                feeApplied: feeApplies.toString(),
+                customerName: updatedRideData.user?.name || "Customer",
+                showBackToOnline: "true",
+                allowNewBookings: "true",
+              }
+            );
+            console.log(
+              `[handleRideCancellation] FCM cancellation notification sent successfully to driver ${updatedRideData.driverId}`
+            );
+          } else {
+            console.warn(
+              `[handleRideCancellation] Driver ${updatedRideData.driverId} has no valid FCM token for cancellation notification`
+            );
+          }
         } else if (cancelledByDriver) {
-          // Driver cancelled - notify user
-          await sendNotificationToUser(
-            updatedRideData.userId,
-            "Ride Cancelled 😞",
-            `Your ride has been cancelled by the driver.${cancellationReason ? ` Reason: ${cancellationReason}` : ""}${feeApplies ? ` A cancellation fee of ₹${cancellationFee} may apply.` : ""}`,
-            "general",
-            {
-              rideId: updatedRideData.id,
-              cancelledBy: "driver",
-              reason: cancellationReason || "",
-              status: "cancelled",
-              cancellationFee: cancellationFee.toString(),
-              feeApplied: feeApplies.toString(),
-            }
+          console.log(
+            `[handleRideCancellation] Driver cancelled - sending FCM notification to user ${updatedRideData.userId}`
+          );
+          // Driver cancelled - notify user using dedicated cancellation function
+          const user = await prisma.user.findUnique({
+            where: { id: updatedRideData.userId },
+            select: { fcmToken: true, name: true, userType: true },
+          });
+
+          if (user?.fcmToken && validateFcmToken(user.fcmToken)) {
+            await sendTaxiSureCancellationNotification(
+              user.fcmToken,
+              "🚫 Ride Cancelled by Driver",
+              `Your ride has been cancelled by ${updatedRideData.driver?.name || "the driver"}.${cancellationReason ? ` Reason: ${cancellationReason}` : ""}${feeApplies ? ` A cancellation fee of ₹${cancellationFee} may apply.` : ""} We'll help you find another driver.`,
+              {
+                rideId: updatedRideData.id,
+                cancelledBy: "driver",
+                reason: cancellationReason || "",
+                cancellationFee: cancellationFee.toString(),
+                feeApplied: feeApplies.toString(),
+                driverName: updatedRideData.driver?.name || "Driver",
+                showRebookOption: "true",
+                findNewDriver: "true",
+              }
+            );
+            console.log(
+              `[handleRideCancellation] FCM cancellation notification sent successfully to user ${updatedRideData.userId}`
+            );
+          } else {
+            console.warn(
+              `[handleRideCancellation] User ${updatedRideData.userId} has no valid FCM token for cancellation notification`
+            );
+          }
+        } else {
+          console.log(
+            `[handleRideCancellation] No FCM notification needed. CancelledByUser: ${cancelledByUser}, DriverId: ${updatedRideData.driverId}, CancelledByDriver: ${cancelledByDriver}`
           );
         }
       } catch (notificationError) {
         console.error(
-          "Failed to send cancellation FCM notification:",
+          `[handleRideCancellation] Failed to send cancellation FCM notification for ride ${ride.id}:`,
           notificationError
         );
         // Don't fail the cancellation due to notification error
       }
+
+      console.log(
+        `[handleRideCancellation] FCM notification process completed for ride ${ride.id}`
+      );
 
       // Broadcast generic cancellation (optional, maybe remove if specific updates are enough)
       io.emit("ride_cancelled", {
