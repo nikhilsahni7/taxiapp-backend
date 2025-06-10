@@ -335,6 +335,14 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
       },
     });
 
+    // Create wallet for the user
+    await prisma.wallet.create({
+      data: {
+        userId: user.id,
+        balance: 0,
+      },
+    });
+
     const token = jwt.sign(
       { userId: user.id, userType: user.userType },
       process.env.JWT_SECRET!,
@@ -431,6 +439,14 @@ router.post("/verify-driver-otp", async (req: Request, res: Response) => {
       },
     });
 
+    // Create wallet for the driver
+    await prisma.wallet.create({
+      data: {
+        userId: driver.id,
+        balance: 0,
+      },
+    });
+
     const token = jwt.sign(
       { userId: driver.id, userType: driver.userType },
       process.env.JWT_SECRET!,
@@ -487,6 +503,14 @@ router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
         userType: "VENDOR",
         verified: true,
         password: hashedPassword,
+      },
+    });
+
+    // Create wallet for the vendor
+    await prisma.wallet.create({
+      data: {
+        userId: vendor.id,
+        balance: 0,
       },
     });
 
@@ -889,6 +913,14 @@ router.post("/admin-register", async (req: Request, res: Response) => {
         userType: "ADMIN",
         verified: true,
         name: "Admin",
+      },
+    });
+
+    // Create wallet for the admin
+    await prisma.wallet.create({
+      data: {
+        userId: admin.id,
+        balance: 0,
       },
     });
 
