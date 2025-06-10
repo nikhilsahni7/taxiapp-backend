@@ -57,7 +57,7 @@ const sendSMSViaPRP = async (
       smsReciever: [
         {
           mobileNo: formattedPhone,
-          templateParams: otp.toString(),
+          templateParams: `${otp}`,
         },
       ],
     };
