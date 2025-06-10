@@ -48,6 +48,8 @@ const sendSMSViaPRP = async (
         : `91${phoneNumber}`;
 
     console.log(`📱 Sending SMS to: ${formattedPhone}, OTP: ${otp}`);
+    console.log(`🔧 Template Name: ${PRP_SMS_CONFIG.templateName}`);
+    console.log(`👤 Sender: ${PRP_SMS_CONFIG.sender}`);
 
     const payload = {
       sender: PRP_SMS_CONFIG.sender,
@@ -55,12 +57,13 @@ const sendSMSViaPRP = async (
       smsReciever: [
         {
           mobileNo: formattedPhone,
-          templateParams: otp,
+          templateParams: otp.toString(),
         },
       ],
     };
 
     console.log("📤 SMS Payload:", JSON.stringify(payload, null, 2));
+    console.log(`🎯 OTP Value being sent: "${otp}"`);
 
     const response = await axios.post(
       `${PRP_SMS_CONFIG.baseUrl}/SendSmsTemplateName`,
