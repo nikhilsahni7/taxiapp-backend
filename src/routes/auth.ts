@@ -107,6 +107,35 @@ const sendSMSViaPRP = async (
     console.log("✅ PRP SMS Response Status:", response.status);
     console.log("📋 PRP SMS Response Data:", response.data);
 
+    // If SMS was sent successfully, check delivery report after a short delay
+    if (response.data.isSuccess && response.data.data) {
+      setTimeout(async () => {
+        try {
+          console.log("🔍 Checking SMS delivery status...");
+          const deliveryResponse = await axios.get(
+            `${PRP_SMS_CONFIG.baseUrl}/APIDeliveryReport`,
+            {
+              headers: {
+                Apikey: PRP_SMS_CONFIG.apiKey,
+              },
+              params: {
+                searchMobile: formattedPhone,
+                Fromdate: new Date().toISOString().split("T")[0],
+                Todate: new Date().toISOString().split("T")[0],
+              },
+              timeout: 10000,
+            }
+          );
+          console.log("📊 Delivery Report:", deliveryResponse.data);
+        } catch (deliveryError: any) {
+          console.error(
+            "❌ Delivery Report Error:",
+            deliveryError.response?.data || deliveryError.message
+          );
+        }
+      }, 5000); // Check after 5 seconds
+    }
+
     // Check for specific error responses
     if (response.data && response.data.returnMessage) {
       if (response.data.returnMessage.includes("TempName does not exists")) {
