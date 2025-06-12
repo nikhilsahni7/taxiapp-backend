@@ -71,31 +71,47 @@ export const updateServiceRates = async (req: Request, res: Response) => {
         continue; // Skip invalid entries
       }
 
-      const updatedRate = await prisma.fareConfiguration.upsert({
+      // Properly handle packageHours - convert undefined to null explicitly
+      const normalizedPackageHours =
+        packageHours !== undefined ? packageHours : null;
+
+      // First try to find existing rate
+      const existingRate = await prisma.fareConfiguration.findFirst({
         where: {
-          serviceType_vehicleCategory_rateType_packageHours: {
-            serviceType: serviceType as ServiceType,
-            vehicleCategory: vehicleCategory.toLowerCase(),
-            rateType: rateType as RateType,
-            packageHours: packageHours || null,
-          },
-        },
-        create: {
           serviceType: serviceType as ServiceType,
           vehicleCategory: vehicleCategory.toLowerCase(),
           rateType: rateType as RateType,
-          packageHours: packageHours || null,
-          amount,
-          lastEditedBy: req.user.userId,
-          lastEditedAt: new Date(),
-        },
-        update: {
-          amount,
-          lastEditedBy: req.user.userId,
-          lastEditedAt: new Date(),
+          packageHours: normalizedPackageHours,
           isActive: true,
         },
       });
+
+      let updatedRate;
+      if (existingRate) {
+        // Update existing rate
+        updatedRate = await prisma.fareConfiguration.update({
+          where: { id: existingRate.id },
+          data: {
+            amount,
+            lastEditedBy: req.user.userId,
+            lastEditedAt: new Date(),
+            isActive: true,
+          },
+        });
+      } else {
+        // Create new rate
+        updatedRate = await prisma.fareConfiguration.create({
+          data: {
+            serviceType: serviceType as ServiceType,
+            vehicleCategory: vehicleCategory.toLowerCase(),
+            rateType: rateType as RateType,
+            packageHours: normalizedPackageHours,
+            amount,
+            lastEditedBy: req.user.userId,
+            lastEditedAt: new Date(),
+          },
+        });
+      }
 
       updatedRates.push(updatedRate);
     }
@@ -221,13 +237,18 @@ export const initializeServiceRates = async (req: Request, res: Response) => {
     const createdRates = [];
 
     for (const rate of defaultRates) {
+      // Ensure packageHours is properly handled
+      const rateData = {
+        ...rate,
+        packageHours:
+          rate.packageHours !== undefined ? rate.packageHours : null,
+        serviceType: serviceType as ServiceType,
+        lastEditedBy: req.user.userId,
+        lastEditedAt: new Date(),
+      };
+
       const createdRate = await prisma.fareConfiguration.create({
-        data: {
-          ...rate,
-          serviceType: serviceType as ServiceType,
-          lastEditedBy: req.user.userId,
-          lastEditedAt: new Date(),
-        },
+        data: rateData,
       });
       createdRates.push(createdRate);
     }

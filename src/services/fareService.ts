@@ -1,4 +1,4 @@
-import  type { RateType, ServiceType } from "@prisma/client";
+import type { RateType, ServiceType } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 
 class FareService {
@@ -128,14 +128,20 @@ class FareService {
     }
 
     try {
+      // Properly handle packageHours in query - include null explicitly when packageHours is undefined
+      const whereClause: any = {
+        serviceType,
+        vehicleCategory,
+        rateType,
+        isActive: true,
+      };
+
+      // Always include packageHours in the query, either as the value or null
+      whereClause.packageHours =
+        packageHours !== undefined ? packageHours : null;
+
       const dbRate = await prisma.fareConfiguration.findFirst({
-        where: {
-          serviceType,
-          vehicleCategory,
-          rateType,
-          ...(packageHours && { packageHours }),
-          isActive: true,
-        },
+        where: whereClause,
       });
 
       if (dbRate) {
@@ -173,8 +179,9 @@ class FareService {
     const serviceRates = this.fallbackRates[serviceType];
     if (!serviceRates) return 0;
 
-    const vehicleRates =
-      serviceRates[vehicleCategory as keyof typeof serviceRates];
+    const vehicleRates = serviceRates[
+      vehicleCategory as keyof typeof serviceRates
+    ] as any;
     if (!vehicleRates) return 0;
 
     switch (serviceType) {
@@ -190,8 +197,7 @@ class FareService {
           return vehicleRates[packageHours]?.km || 0;
         }
         return 0;
-        case "OUTSTATION":
-            
+      case "OUTSTATION":
       case "HILL_STATION":
         if (vehicleCategory.startsWith("tempo_")) {
           return rateType === "FIXED_RATE"

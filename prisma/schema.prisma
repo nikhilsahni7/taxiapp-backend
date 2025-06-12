@@ -614,7 +614,7 @@ model FareConfiguration {
   lastEditedBy    String?     // Admin user ID who last edited
   lastEditedAt    DateTime?   // When it was last edited
 
-  @@unique([serviceType, vehicleCategory, rateType, packageHours])
+  @@unique([serviceType, vehicleCategory, rateType, packageHours], name: "serviceType_vehicleCategory_rateType_packageHours")
   @@index([serviceType, vehicleCategory, rateType, isActive])
   @@index([serviceType, lastEditedAt])
 }

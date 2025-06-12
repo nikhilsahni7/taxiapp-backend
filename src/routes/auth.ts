@@ -29,7 +29,7 @@ const PRP_SMS_CONFIG = {
   apiKey: process.env.PRP_SMS_API_KEY,
   baseUrl: "https://api.bulksmsadmin.com/BulkSMSapi/keyApiSendSMS",
   sender: process.env.PRP_SMS_SENDER || "TXISRE",
-  templateName: process.env.PRP_SMS_TEMPLATE_NAME || "OTP",
+  templateName: process.env.PRP_SMS_TEMPLATE_NAME || "otp2",
   peId: process.env.PRP_SMS_PE_ID,
   templateId: process.env.PRP_SMS_TEMPLATE_ID,
   useTemplateId: process.env.PRP_SMS_USE_TEMPLATE_ID === "true" || false, // Default to false for Template Name approach
