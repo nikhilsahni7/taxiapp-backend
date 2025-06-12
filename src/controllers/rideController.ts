@@ -84,6 +84,7 @@ const CHARGES = {
       suv: 300, // 200 (UP to Delhi) + 100 (Delhi to Haryana)
     } as StateTaxStructure,
   },
+
   // Add reference for major airports
   MAJOR_AIRPORTS: [
     "Indira Gandhi International Airport",
@@ -222,34 +223,55 @@ export const calculateFare = async (
   const baseFare = 50;
   let perKmRate = 0;
 
-  // Calculate per km rate based on distance and category
-  if (distance > 8) {
-    switch (category.toLowerCase()) {
-      case "mini":
-        perKmRate = 14;
-        break;
-      case "sedan":
-        perKmRate = 17;
-        break;
-      case "suv":
-        perKmRate = 27;
-        break;
-      default:
-        perKmRate = 15;
+  // Import fare service dynamically to avoid circular dependencies
+  const { fareService } = await import("../services/fareService");
+
+  try {
+    // Get dynamic rates from database
+    if (distance > 8) {
+      perKmRate = await fareService.getRate(
+        "LOCAL",
+        category.toLowerCase(),
+        "PER_KM_LONG"
+      );
+    } else {
+      perKmRate = await fareService.getRate(
+        "LOCAL",
+        category.toLowerCase(),
+        "PER_KM_SHORT"
+      );
     }
-  } else {
-    switch (category.toLowerCase()) {
-      case "mini":
-        perKmRate = 17;
-        break;
-      case "sedan":
-        perKmRate = 23;
-        break;
-      case "suv":
-        perKmRate = 35;
-        break;
-      default:
-        perKmRate = 20;
+  } catch (error) {
+    console.error("Error getting dynamic rates, using fallback:", error);
+    // Fallback to hardcoded rates
+    if (distance > 8) {
+      switch (category.toLowerCase()) {
+        case "mini":
+          perKmRate = 14;
+          break;
+        case "sedan":
+          perKmRate = 17;
+          break;
+        case "suv":
+          perKmRate = 27;
+          break;
+        default:
+          perKmRate = 15;
+      }
+    } else {
+      switch (category.toLowerCase()) {
+        case "mini":
+          perKmRate = 17;
+          break;
+        case "sedan":
+          perKmRate = 23;
+          break;
+        case "suv":
+          perKmRate = 35;
+          break;
+        default:
+          perKmRate = 20;
+      }
     }
   }
 

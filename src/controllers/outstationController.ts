@@ -38,29 +38,82 @@ type OutstationCarRate = {
 };
 
 // Define the rate objects with proper typing
-const VEHICLE_RATES: Record<string, OutstationCarRate | TempoRate> = {
-  mini: { base: 11, short: 14 },
-  sedan: { base: 13, short: 19 },
-  ertiga: { base: 18, short: 24 },
-  innova: { base: 21, short: 27 },
-  tempo_12: { fixed: 16000, extra: 23 },
-  tempo_16: { fixed: 18000, extra: 26 },
-  tempo_20: { fixed: 20000, extra: 30 },
-  tempo_26: { fixed: 22000, extra: 35 },
-};
+// Import fare service
+import { fareService } from "../services/fareService";
 
-const HILL_STATION_RATES: Record<string, CarRate | TempoRate> = {
-  // Tempo rates
-  tempo_12: { fixed: 16000, extra: 23 },
-  tempo_16: { fixed: 18000, extra: 26 },
-  tempo_20: { fixed: 20000, extra: 30 },
-  tempo_26: { fixed: 22000, extra: 35 },
-  // Car rates
-  mini: { base: 15 },
-  sedan: { base: 17 },
-  ertiga: { base: 22 },
-  innova: { base: 28 },
-};
+// Helper function to get outstation rates
+async function getOutstationRate(
+  vehicleType: string,
+  rateType: "base" | "short" | "fixed" | "extra"
+): Promise<number> {
+  try {
+    const serviceType = "OUTSTATION";
+    let fareRateType: any;
+
+    if (vehicleType.startsWith("tempo_")) {
+      fareRateType = rateType === "fixed" ? "FIXED_RATE" : "EXTRA_KM";
+    } else {
+      fareRateType = rateType === "base" ? "BASE_RATE" : "SHORT_RATE";
+    }
+
+    return await fareService.getRate(serviceType, vehicleType, fareRateType);
+  } catch (error) {
+    console.error(
+      "Error getting dynamic outstation rates, using fallback:",
+      error
+    );
+    // Fallback rates
+    const fallbackRates: Record<string, any> = {
+      mini: { base: 11, short: 14 },
+      sedan: { base: 13, short: 19 },
+      ertiga: { base: 18, short: 24 },
+      innova: { base: 21, short: 27 },
+      tempo_12: { fixed: 16000, extra: 23 },
+      tempo_16: { fixed: 18000, extra: 26 },
+      tempo_20: { fixed: 20000, extra: 30 },
+      tempo_26: { fixed: 22000, extra: 35 },
+    };
+
+    return fallbackRates[vehicleType]?.[rateType] || 0;
+  }
+}
+
+// Helper function to get hill station rates
+async function getHillStationRate(
+  vehicleType: string,
+  rateType: "base" | "fixed" | "extra"
+): Promise<number> {
+  try {
+    const serviceType = "HILL_STATION";
+    let fareRateType: any;
+
+    if (vehicleType.startsWith("tempo_")) {
+      fareRateType = rateType === "fixed" ? "FIXED_RATE" : "EXTRA_KM";
+    } else {
+      fareRateType = "BASE_RATE";
+    }
+
+    return await fareService.getRate(serviceType, vehicleType, fareRateType);
+  } catch (error) {
+    console.error(
+      "Error getting dynamic hill station rates, using fallback:",
+      error
+    );
+    // Fallback rates
+    const fallbackRates: Record<string, any> = {
+      mini: { base: 15 },
+      sedan: { base: 17 },
+      ertiga: { base: 22 },
+      innova: { base: 28 },
+      tempo_12: { fixed: 16000, extra: 23 },
+      tempo_16: { fixed: 18000, extra: 26 },
+      tempo_20: { fixed: 20000, extra: 30 },
+      tempo_26: { fixed: 22000, extra: 35 },
+    };
+
+    return fallbackRates[vehicleType]?.[rateType] || 0;
+  }
+}
 
 export const getOutstationFareEstimate = async (
   req: Request,
@@ -94,7 +147,7 @@ export const getOutstationFareEstimate = async (
       return;
     }
 
-    let fare = calculateOutstationFare(
+    let fare = await calculateOutstationFare(
       distance,
       vehicleType,
       tripType,
@@ -118,50 +171,56 @@ export const getOutstationFareEstimate = async (
   }
 };
 
-function calculateOutstationFare(
+async function calculateOutstationFare(
   distance: number,
   vehicleType: string,
   tripType: string,
   serviceType: LongDistanceServiceType = "OUTSTATION"
-): number {
-  let fare = 0;
-  const rates =
-    serviceType === "HILL_STATION"
-      ? HILL_STATION_RATES[vehicleType]
-      : VEHICLE_RATES[vehicleType];
+): Promise<number> {
+  try {
+    let fare = 0;
 
-  if (!rates) {
-    throw new Error("Invalid vehicle type");
-  }
+    if (vehicleType.startsWith("tempo_")) {
+      // For tempo vehicles (round trip only)
+      if (tripType === "ROUND_TRIP") {
+        const fixedRate =
+          serviceType === "HILL_STATION"
+            ? await getHillStationRate(vehicleType, "fixed")
+            : await getOutstationRate(vehicleType, "fixed");
 
-  if (vehicleType.startsWith("tempo_")) {
-    // For tempo vehicles (round trip only)
-    if (tripType === "ROUND_TRIP") {
-      const tempoRates = rates as TempoRate;
-      fare = tempoRates.fixed;
-      if (distance > 250) {
-        const extraKm = distance - 250;
-        fare += extraKm * tempoRates.extra;
+        const extraRate =
+          serviceType === "HILL_STATION"
+            ? await getHillStationRate(vehicleType, "extra")
+            : await getOutstationRate(vehicleType, "extra");
+
+        fare = fixedRate;
+        if (distance > 250) {
+          const extraKm = distance - 250;
+          fare += extraKm * extraRate;
+        }
+      }
+    } else {
+      // For cars
+      if (serviceType === "HILL_STATION") {
+        const baseRate = await getHillStationRate(vehicleType, "base");
+        fare = distance * baseRate;
+      } else {
+        const baseRate = await getOutstationRate(vehicleType, "base");
+        const shortRate = await getOutstationRate(vehicleType, "short");
+        const ratePerKm = distance <= 150 ? shortRate : baseRate;
+        fare = distance * ratePerKm;
+      }
+
+      if (tripType === "ROUND_TRIP") {
+        fare *= 2;
       }
     }
-  } else {
-    // For cars
-    if (serviceType === "HILL_STATION") {
-      const hillRates = rates as CarRate;
-      fare = distance * hillRates.base;
-    } else {
-      const outstationRates = rates as OutstationCarRate;
-      const ratePerKm =
-        distance <= 150 ? outstationRates.short : outstationRates.base;
-      fare = distance * ratePerKm;
-    }
 
-    if (tripType === "ROUND_TRIP") {
-      fare *= 2;
-    }
+    return Math.round(fare);
+  } catch (error) {
+    console.error("Error calculating outstation fare:", error);
+    throw new Error("Failed to calculate fare");
   }
-
-  return Math.round(fare);
 }
 
 export const searchOutstationDrivers = async (
@@ -200,7 +259,7 @@ export const searchOutstationDrivers = async (
       { lat: dropLocation.lat, lng: dropLocation.lng }
     );
 
-    const fare = calculateOutstationFare(
+    const fare = await calculateOutstationFare(
       distance,
       vehicleType,
       tripType,

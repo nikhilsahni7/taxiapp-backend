@@ -90,6 +90,27 @@ enum CancelledBy {
   SYSTEM
 }
 
+enum ServiceType {
+  LOCAL
+  CAR_RENTAL
+  OUTSTATION
+  HILL_STATION
+  ALL_INDIA_TOUR
+  CHARDHAM_YATRA
+}
+
+enum RateType {
+  PER_KM_SHORT     // Local rides <=8km
+  PER_KM_LONG      // Local rides >8km
+  PER_DAY          // Per day rates
+  BASE_RATE        // Outstation/Hill station base rates
+  SHORT_RATE       // Outstation short distance rates
+  PACKAGE_PRICE    // Car rental package prices
+  PACKAGE_KM       // Car rental package kilometers
+  EXTRA_KM         // Extra km charges
+  FIXED_RATE       // Tempo fixed rates
+}
+
 model User {
   id            String          @id @default(uuid())
   phone         String          @unique
@@ -571,4 +592,41 @@ model RideLocationLog {
 
   ride        Ride     @relation(fields: [rideId], references: [id])
   @@index([rideId, timestamp])
+}
+
+// Main fare configuration table
+model FareConfiguration {
+  id              String      @id @default(uuid())
+  serviceType     ServiceType
+  vehicleCategory String      // mini, sedan, ertiga, innova, suv, tempo_12, tempo_16, tempo_20, tempo_26
+  rateType        RateType
+
+  // For package-based rates (car rental)
+  packageHours    Int?        // 1-8 for car rental
+
+  // Rate amount
+  amount          Float
+
+  // Audit fields
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  lastEditedBy    String?     // Admin user ID who last edited
+  lastEditedAt    DateTime?   // When it was last edited
+
+  @@unique([serviceType, vehicleCategory, rateType, packageHours])
+  @@index([serviceType, vehicleCategory, rateType, isActive])
+  @@index([serviceType, lastEditedAt])
+}
+
+// Service-level edit tracking
+model ServiceEditLog {
+  id              String      @id @default(uuid())
+  serviceType     ServiceType
+  editedBy        String      // Admin user ID
+  editedAt        DateTime    @default(now())
+  changesCount    Int         // Number of rates changed in this edit session
+  editSummary     Json?       // Summary of what was changed
+
+  @@index([serviceType, editedAt])
 }

@@ -1,5 +1,4 @@
-import { Response } from "express";
-import { AuthenticatedRequest } from "../middlewares/auth.middleware"; // Assuming you have this for driver authentication
+import type { Request, Response } from "express";
 import {
   checkInsufficientBalance,
   updateInsufficientBalanceStatus,
@@ -10,11 +9,8 @@ import {
  * @desc Check if the authenticated driver has an insufficient balance.
  * @access Private (Driver only)
  */
-export const getDriverWalletStatus = async (
-  req: AuthenticatedRequest,
-  res: Response
-) => {
-  const driverId = req.user?.id; // Assuming driver ID is available on req.user after authentication
+export const getDriverWalletStatus = async (req: Request, res: Response) => {
+  const driverId = req.user?.userId; // Using userId from the token payload
 
   if (!driverId) {
     return res
@@ -54,10 +50,10 @@ export const getDriverWalletStatus = async (
  * @access Private (Driver or Admin)
  */
 export const triggerUpdateDriverWalletStatus = async (
-  req: AuthenticatedRequest,
+  req: Request,
   res: Response
 ) => {
-  const driverId = req.user?.id; // Or get from req.params if an admin is updating for a specific driver
+  const driverId = req.user?.userId; // Using userId from the token payload
 
   if (!driverId) {
     return res

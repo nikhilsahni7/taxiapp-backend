@@ -41,45 +41,98 @@ interface RentalPackages {
   suv: CarCategory;
 }
 
-// Package configurations
-const RENTAL_PACKAGES: RentalPackages = {
-  mini: {
-    1: { km: 15, price: 380 },
-    2: { km: 25, price: 550 },
-    3: { km: 35, price: 700 },
-    4: { km: 45, price: 950 },
-    5: { km: 60, price: 1250 },
-    6: { km: 70, price: 1550 },
-    7: { km: 80, price: 1850 },
-    8: { km: 90, price: 2100 },
-  },
-  sedan: {
-    1: { km: 15, price: 450 },
-    2: { km: 25, price: 600 },
-    3: { km: 40, price: 850 },
-    4: { km: 50, price: 1100 },
-    5: { km: 65, price: 1400 },
-    6: { km: 75, price: 1650 },
-    7: { km: 85, price: 2000 },
-    8: { km: 90, price: 2300 },
-  },
-  suv: {
-    1: { km: 15, price: 580 },
-    2: { km: 25, price: 750 },
-    3: { km: 40, price: 950 },
-    4: { km: 50, price: 1200 },
-    5: { km: 65, price: 1500 },
-    6: { km: 75, price: 1850 },
-    7: { km: 85, price: 2100 },
-    8: { km: 90, price: 2450 },
-  },
-};
+// Import fare service
+import { fareService } from "../services/fareService";
 
-const EXTRA_KM_RATES: Record<keyof RentalPackages, number> = {
-  mini: 14,
-  sedan: 16,
-  suv: 18,
-};
+// Helper function to get package details
+async function getPackageDetails(
+  carCategory: string,
+  packageHours: number
+): Promise<{ km: number; price: number } | null> {
+  try {
+    const [km, price] = await Promise.all([
+      fareService.getRate(
+        "CAR_RENTAL",
+        carCategory.toLowerCase(),
+        "PACKAGE_KM",
+        packageHours
+      ),
+      fareService.getRate(
+        "CAR_RENTAL",
+        carCategory.toLowerCase(),
+        "PACKAGE_PRICE",
+        packageHours
+      ),
+    ]);
+
+    return { km, price };
+  } catch (error) {
+    console.error(
+      "Error getting dynamic package rates, using fallback:",
+      error
+    );
+    // Fallback to hardcoded rates
+    const RENTAL_PACKAGES: RentalPackages = {
+      mini: {
+        1: { km: 15, price: 380 },
+        2: { km: 25, price: 550 },
+        3: { km: 35, price: 700 },
+        4: { km: 45, price: 950 },
+        5: { km: 60, price: 1250 },
+        6: { km: 70, price: 1550 },
+        7: { km: 80, price: 1850 },
+        8: { km: 90, price: 2100 },
+      },
+      sedan: {
+        1: { km: 15, price: 450 },
+        2: { km: 25, price: 600 },
+        3: { km: 40, price: 850 },
+        4: { km: 50, price: 1100 },
+        5: { km: 65, price: 1400 },
+        6: { km: 75, price: 1650 },
+        7: { km: 85, price: 2000 },
+        8: { km: 90, price: 2300 },
+      },
+      suv: {
+        1: { km: 15, price: 580 },
+        2: { km: 25, price: 750 },
+        3: { km: 40, price: 950 },
+        4: { km: 50, price: 1200 },
+        5: { km: 65, price: 1500 },
+        6: { km: 75, price: 1850 },
+        7: { km: 85, price: 2100 },
+        8: { km: 90, price: 2450 },
+      },
+    };
+
+    return (
+      RENTAL_PACKAGES[carCategory as keyof RentalPackages]?.[packageHours] ||
+      null
+    );
+  }
+}
+
+// Helper function to get extra km rate
+async function getExtraKmRate(carCategory: string): Promise<number> {
+  try {
+    return await fareService.getRate(
+      "CAR_RENTAL",
+      carCategory.toLowerCase(),
+      "EXTRA_KM"
+    );
+  } catch (error) {
+    console.error(
+      "Error getting dynamic extra km rate, using fallback:",
+      error
+    );
+    const fallbackRates: Record<string, number> = {
+      mini: 14,
+      sedan: 16,
+      suv: 18,
+    };
+    return fallbackRates[carCategory.toLowerCase()] || 15;
+  }
+}
 
 const EXTRA_MINUTE_RATE = 2;
 
@@ -268,8 +321,7 @@ export const createCarRental = async (req: Request, res: Response) => {
       pickupLocation = locationData.formattedAddress;
     }
 
-    const packageDetails =
-      RENTAL_PACKAGES[carCategory as keyof RentalPackages]?.[packageHours];
+    const packageDetails = await getPackageDetails(carCategory, packageHours);
     if (!packageDetails) {
       return res.status(400).json({ error: "Invalid package selected" });
     }
@@ -1127,10 +1179,8 @@ export const requestEndRental = async (req: Request, res: Response) => {
       actualMinutes - (rental.rentalPackageHours || 0) * 60
     );
 
-    const extraKmCharges = Math.round(
-      extraKms *
-        EXTRA_KM_RATES[rental.carCategory as keyof typeof EXTRA_KM_RATES]
-    );
+    const extraKmRate = await getExtraKmRate(rental.carCategory!);
+    const extraKmCharges = Math.round(extraKms * extraKmRate);
     const extraMinuteCharges = Math.round(extraMinutes * EXTRA_MINUTE_RATE);
 
     // Include waiting charges

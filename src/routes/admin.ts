@@ -205,27 +205,24 @@ router.post(
 );
 
 // Debug endpoint to check specific booking
-router.get(
-  "/debug-booking/:bookingId",
-  async (req: Request, res: Response) => {
-    try {
-      const { bookingId } = req.params;
-      console.log(`[Admin] Debug booking request for: ${bookingId}`);
-      await AutoCancellationService.debugBooking(bookingId);
-      res.json({
-        success: true,
-        message: `Debug information for booking ${bookingId} logged to console`,
-      });
-    } catch (error) {
-      console.error("[Admin] Error debugging booking:", error);
-      res.status(500).json({
-        success: false,
-        message: "Failed to debug booking",
-        error: error instanceof Error ? error.message : "Unknown error",
-      });
-    }
+router.get("/debug-booking/:bookingId", async (req: Request, res: Response) => {
+  try {
+    const { bookingId } = req.params;
+    console.log(`[Admin] Debug booking request for: ${bookingId}`);
+    await AutoCancellationService.debugBooking(bookingId);
+    res.json({
+      success: true,
+      message: `Debug information for booking ${bookingId} logged to console`,
+    });
+  } catch (error) {
+    console.error("[Admin] Error debugging booking:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to debug booking",
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
   }
-);
+});
 
 // Manual cancellation check with results
 router.post(

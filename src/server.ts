@@ -12,6 +12,7 @@ import {
 } from "./controllers/rideController";
 import { prisma } from "./lib/prisma";
 import { adminRouter } from "./routes/admin";
+import { adminFareRoutes } from "./routes/adminFareRoutes";
 import { allIndiaRoutes } from "./routes/allIndiaRoutes";
 import { authRouter } from "./routes/auth";
 import { chardhamRoutes } from "./routes/chardhamRoutes";
@@ -65,6 +66,7 @@ app.use("/api/payments", paymentRouter);
 app.use("/api/wallets", walletRouter);
 app.use("/api/user-wallet", userWalletRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/admin/fares", adminFareRoutes);
 app.use("/api/driver-earnings", driverEarningsRoutes);
 app.use("/api/outstation", outstationRouter);
 app.use("/api/hill-station", hillStationRouter);
