@@ -694,6 +694,7 @@ async function findAndRequestDrivers(ride: any) {
               userId: ride.userId,
               userName: ride.user?.name,
               userPhone: ride.user?.phone,
+              pickupTime: ride.createdAt || new Date().toISOString(), // Use ride creation time
             });
 
             // Send FCM notification alongside socket emission
