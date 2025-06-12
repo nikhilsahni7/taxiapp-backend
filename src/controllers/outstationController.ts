@@ -6,8 +6,10 @@ import {
 import crypto from "crypto";
 import type { Request, Response } from "express";
 import Razorpay from "razorpay";
+// Import fare service
 import { prisma } from "../lib/prisma";
 import { io } from "../server";
+import { fareService } from "../services/fareService";
 import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
 
 const razorpay = new Razorpay({
@@ -36,10 +38,6 @@ type OutstationCarRate = {
   base: number;
   short: number;
 };
-
-// Define the rate objects with proper typing
-// Import fare service
-import { fareService } from "../services/fareService";
 
 // Helper function to get outstation rates
 async function getOutstationRate(

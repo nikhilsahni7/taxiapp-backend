@@ -11,6 +11,7 @@ import {
 } from "@prisma/client";
 import type { Request, Response } from "express";
 import { searchAvailableDrivers } from "../lib/driverService";
+import { fareService } from "../services/fareService";
 
 import {
   sendTaxiSureBookingNotification,
@@ -222,9 +223,6 @@ export const calculateFare = async (
 }> => {
   const baseFare = 50;
   let perKmRate = 0;
-
-  // Import fare service dynamically to avoid circular dependencies
-  const { fareService } = await import("../services/fareService");
 
   try {
     // Get dynamic rates from database

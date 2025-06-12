@@ -13,6 +13,7 @@ import type { Request, Response } from "express";
 import Razorpay from "razorpay";
 import { searchAvailableDrivers } from "../lib/driverService";
 import { getCoordinatesAndAddress } from "../lib/locationService";
+import { fareService } from "../services/fareService";
 import {
   sendTaxiSureBookingNotification,
   sendTaxiSureRegularNotification,
@@ -40,9 +41,6 @@ interface RentalPackages {
   sedan: CarCategory;
   suv: CarCategory;
 }
-
-// Import fare service
-import { fareService } from "../services/fareService";
 
 // Helper function to get package details
 async function getPackageDetails(
