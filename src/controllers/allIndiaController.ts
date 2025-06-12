@@ -3,6 +3,7 @@ import crypto from "crypto";
 import type { Request, Response } from "express";
 import Razorpay from "razorpay";
 import { io } from "../server";
+import { fareService } from "../services/fareService";
 import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
 
 const prisma = new PrismaClient();
@@ -18,18 +19,36 @@ interface Location {
   lng: number;
 }
 
-// Updated base rates including tempo travellers
-const ALL_INDIA_RATES = {
-  mini: { baseFare: 2800, extraKm: 14 },
-  sedan: { baseFare: 3500, extraKm: 16 },
-  ertiga: { baseFare: 5200, extraKm: 16 },
-  innova: { baseFare: 6000, extraKm: 18 },
-  // Adding tempo traveller categories
-  tempo_12: { baseFare: 8000, extraKm: 20 },
-  tempo_16: { baseFare: 9000, extraKm: 22 },
-  tempo_20: { baseFare: 10000, extraKm: 24 },
-  tempo_26: { baseFare: 11000, extraKm: 26 },
-};
+// Helper function to get All India rates dynamically
+async function getAllIndiaRate(
+  vehicleType: string,
+  rateType: "perDay" | "extraKm"
+): Promise<number> {
+  try {
+    const serviceType = "ALL_INDIA_TOUR";
+    const fareRateType = rateType === "perDay" ? "PER_DAY" : "EXTRA_KM";
+
+    return await fareService.getRate(serviceType, vehicleType, fareRateType);
+  } catch (error) {
+    console.error(
+      "Error getting dynamic All India rates, using fallback:",
+      error
+    );
+    // Fallback rates
+    const fallbackRates: Record<string, any> = {
+      mini: { perDay: 2800, extraKm: 14 },
+      sedan: { perDay: 3500, extraKm: 16 },
+      ertiga: { perDay: 5200, extraKm: 16 },
+      innova: { perDay: 6000, extraKm: 18 },
+      tempo_12: { perDay: 8000, extraKm: 20 },
+      tempo_16: { perDay: 9000, extraKm: 22 },
+      tempo_20: { perDay: 10000, extraKm: 24 },
+      tempo_26: { perDay: 11000, extraKm: 26 },
+    };
+
+    return fallbackRates[vehicleType]?.[rateType] || 0;
+  }
+}
 
 // Helper function to get vehicle capacity
 const getVehicleCapacity = (vehicleType: string): string => {
@@ -75,10 +94,11 @@ export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
           1
       ) || 1;
 
-    // Get rates for vehicle type
-    //@ts-ignore
-    const rates = ALL_INDIA_RATES[vehicleType];
-    if (!rates) {
+    // Get dynamic rates for vehicle type
+    const perDayRate = await getAllIndiaRate(vehicleType, "perDay");
+    const extraKmRate = await getAllIndiaRate(vehicleType, "extraKm");
+
+    if (!perDayRate) {
       return res.status(400).json({ error: "Invalid vehicle type" });
     }
 
@@ -89,11 +109,11 @@ export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
     const allowedDistance = 250 * numberOfDays;
 
     // Calculate base fare
-    let baseFare = rates.baseFare * numberOfDays;
+    let baseFare = perDayRate * numberOfDays;
 
     // Calculate extra distance fare if applicable
     const extraDistance = Math.max(0, roundTripDistance - allowedDistance);
-    const extraDistanceFare = extraDistance * rates.extraKm;
+    const extraDistanceFare = extraDistance * extraKmRate;
 
     // Calculate total fare
     const totalFare = baseFare + extraDistanceFare;
@@ -119,8 +139,8 @@ export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
         numberOfDays,
         allowedDistance,
         extraDistance,
-        perDayRate: rates.baseFare,
-        extraKmRate: rates.extraKm,
+        perDayRate: perDayRate,
+        extraKmRate: extraKmRate,
         currency: "INR",
         vehicleType,
         vehicleCapacity: getVehicleCapacity(vehicleType),
@@ -147,7 +167,7 @@ export const getAllIndiaFareEstimate = async (req: Request, res: Response) => {
             "Parking charges",
             "Driver allowance",
             "Night charges",
-            `Extra km charges (₹${rates.extraKm}/km after ${allowedDistance} kms)`,
+            `Extra km charges (₹${extraKmRate}/km after ${allowedDistance} kms)`,
             vehicleType.includes("tempo")
               ? "Driver's food and accommodation"
               : null,
@@ -224,13 +244,18 @@ export const createAllIndiaBooking = async (req: Request, res: Response) => {
     // Calculate round trip distance
     const roundTripDistance = distance * 2;
 
-    // Calculate fare
-    //@ts-ignore
-    const rates = ALL_INDIA_RATES[vehicleType];
-    const baseFare = rates.baseFare * numberOfDays;
+    // Calculate fare using dynamic rates
+    const perDayRate = await getAllIndiaRate(vehicleType, "perDay");
+    const extraKmRate = await getAllIndiaRate(vehicleType, "extraKm");
+
+    if (!perDayRate) {
+      return res.status(400).json({ error: "Invalid vehicle type" });
+    }
+
+    const baseFare = perDayRate * numberOfDays;
     const allowedDistance = 250 * numberOfDays;
     const extraDistance = Math.max(0, roundTripDistance - allowedDistance);
-    const extraDistanceFare = extraDistance * rates.extraKm;
+    const extraDistanceFare = extraDistance * extraKmRate;
     const totalFare = baseFare + extraDistanceFare;
     const advanceAmount = totalFare * 0.12;
     const remainingAmount = totalFare * 0.88;

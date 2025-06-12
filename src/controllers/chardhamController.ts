@@ -3,6 +3,7 @@ import crypto from "crypto";
 import type { Request, Response } from "express";
 import { scheduleJob } from "node-schedule";
 import Razorpay from "razorpay";
+import { fareService } from "../services/fareService";
 import { getCachedDistanceAndDuration } from "../utils/distanceCalculator";
 
 const prisma = new PrismaClient();
@@ -86,15 +87,14 @@ const calculateExtraDays = (distance: number): number => {
 };
 
 // Helper function to calculate extra km charges
-const calculateExtraKmCharges = (
+const calculateExtraKmCharges = async (
   distance: number,
   vehicleType: string
-): number => {
+): Promise<number> => {
   if (distance <= 0) return 0;
 
-  // Get per km rate for vehicle type
-  //@ts-ignore
-  const { perKmRate } = CHARDHAM_RATES[vehicleType];
+  // Get per km rate for vehicle type using dynamic rates
+  const perKmRate = await getChardhamRate(vehicleType, "extraKm");
 
   // Calculate the remaining km after last complete 250km chunk
   const remainingKm = Math.floor(distance % 250); // Floor to ensure exact calculation
@@ -169,6 +169,36 @@ const scheduleBookingExpiry = (bookingId: string) => {
   });
 };
 
+// Helper function to get Chardham Yatra rates dynamically
+async function getChardhamRate(
+  vehicleType: string,
+  rateType: "perDay" | "extraKm"
+): Promise<number> {
+  try {
+    const serviceType = "CHARDHAM_YATRA";
+    const fareRateType = rateType === "perDay" ? "PER_DAY" : "EXTRA_KM";
+
+    return await fareService.getRate(serviceType, vehicleType, fareRateType);
+  } catch (error) {
+    console.error(
+      `Error getting dynamic Chardham rate for ${vehicleType} ${rateType}, using fallback:`,
+      error
+    );
+    // Fallback rates
+    const fallbackRates: Record<string, { perDay: number; extraKm: number }> = {
+      mini: { perDay: 2800, extraKm: 11 },
+      sedan: { perDay: 3500, extraKm: 14 },
+      ertiga: { perDay: 5200, extraKm: 18 },
+      innova: { perDay: 6000, extraKm: 24 },
+      tempo_12: { perDay: 8000, extraKm: 23 },
+      tempo_16: { perDay: 9000, extraKm: 26 },
+      tempo_20: { perDay: 10000, extraKm: 30 },
+      tempo_26: { perDay: 11000, extraKm: 35 },
+    };
+    return fallbackRates[vehicleType]?.[rateType] || 0;
+  }
+}
+
 export const getChardhamFareEstimate = async (req: Request, res: Response) => {
   const {
     pickupLocation,
@@ -214,10 +244,11 @@ export const getChardhamFareEstimate = async (req: Request, res: Response) => {
       }
     }
 
-    // Get rates for vehicle type
-    //@ts-ignore
-    const rates = CHARDHAM_RATES[vehicleType];
-    if (!rates) {
+    // Get dynamic rates for vehicle type
+    const perDayRate = await getChardhamRate(vehicleType, "perDay");
+    const extraKmRate = await getChardhamRate(vehicleType, "extraKm");
+
+    if (!perDayRate) {
       return res.status(400).json({ error: "Invalid vehicle type" });
     }
 
@@ -248,7 +279,7 @@ export const getChardhamFareEstimate = async (req: Request, res: Response) => {
       numberOfDays += calculateExtraDays(distanceToHaridwar.distance);
 
       // Calculate extra km charges
-      extraKmCharges = calculateExtraKmCharges(
+      extraKmCharges = await calculateExtraKmCharges(
         distanceToHaridwar.distance,
         vehicleType
       );
@@ -258,7 +289,7 @@ export const getChardhamFareEstimate = async (req: Request, res: Response) => {
     numberOfDays += extraDays;
 
     // Calculate base fare
-    const baseFare = rates.perDayRate * numberOfDays;
+    const baseFare = perDayRate * numberOfDays;
 
     // Calculate total fare
     const totalFare = baseFare + extraKmCharges;
@@ -305,8 +336,8 @@ export const getChardhamFareEstimate = async (req: Request, res: Response) => {
         appCommission,
         driverPayout,
         numberOfDays,
-        perDayRate: rates.perDayRate,
-        perKmRate: rates.perKmRate,
+        perDayRate: perDayRate,
+        perKmRate: extraKmRate,
         currency: "INR",
         vehicleType,
         vehicleCapacity: getVehicleCapacity(vehicleType),
@@ -338,7 +369,7 @@ export const getChardhamFareEstimate = async (req: Request, res: Response) => {
             "Driver allowance",
             "Night charges",
             startingPointType === "other"
-              ? `Extra km charges (₹${rates.perKmRate}/km up to 200km)`
+              ? `Extra km charges (₹${extraKmRate}/km up to 200km)`
               : null,
             vehicleType.includes("tempo")
               ? "Driver's food and accommodation"
@@ -432,10 +463,11 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
       }
     }
 
-    // Get rates for vehicle type
-    //@ts-ignore
-    const rates = CHARDHAM_RATES[vehicleType];
-    if (!rates) {
+    // Get dynamic rates for vehicle type
+    const perDayRate = await getChardhamRate(vehicleType, "perDay");
+    const extraKmRate = await getChardhamRate(vehicleType, "extraKm");
+
+    if (!perDayRate) {
       return res.status(400).json({ error: "Invalid vehicle type" });
     }
 
@@ -468,7 +500,7 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
         numberOfDays += calculateExtraDays(distanceToHaridwar.distance);
 
         // Calculate extra charges for distance up to 200km
-        extraKmCharges = calculateExtraKmCharges(
+        extraKmCharges = await calculateExtraKmCharges(
           distanceToHaridwar.distance,
           vehicleType
         );
@@ -494,7 +526,7 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
     }
 
     // Calculate base fare and total fare
-    const baseFare = rates.perDayRate * numberOfDays;
+    const baseFare = perDayRate * numberOfDays;
     const totalFare = baseFare + extraKmCharges;
 
     // Calculate advance amount (12%) and remaining amount (88%)
@@ -536,7 +568,7 @@ export const createChardhamBooking = async (req: Request, res: Response) => {
           numberOfDhams,
           startingPointType,
           extraDays,
-          perDayRate: rates.perDayRate,
+          perDayRate: perDayRate,
           driverPayout: totalFare - commission,
           isVisibleToDrivers: isImmediatePickup,
           bookingExpiresAt: null, // Will be set after payment

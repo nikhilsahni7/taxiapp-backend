@@ -44,26 +44,9 @@ export const updateServiceRates = async (req: Request, res: Response) => {
   try {
     const updatedRates = [];
     const changesCount = rates.length;
+    const changesSummary = [];
 
-    // Create edit log entry
-    const editLog = await prisma.serviceEditLog.create({
-      data: {
-        serviceType: serviceType as ServiceType,
-        editedBy: req.user.userId,
-        changesCount,
-        editSummary: {
-          changes: rates.map((rate) => ({
-            vehicleCategory: rate.vehicleCategory,
-            rateType: rate.rateType,
-            oldAmount: "unknown", // Could be fetched if needed
-            newAmount: rate.amount,
-            packageHours: rate.packageHours,
-          })),
-        },
-      },
-    });
-
-    // Update each rate
+    // Update each rate and collect change information
     for (const rateUpdate of rates) {
       const { vehicleCategory, rateType, amount, packageHours } = rateUpdate;
 
@@ -75,7 +58,7 @@ export const updateServiceRates = async (req: Request, res: Response) => {
       const normalizedPackageHours =
         packageHours !== undefined ? packageHours : null;
 
-      // First try to find existing rate
+      // First try to find existing rate to capture old value
       const existingRate = await prisma.fareConfiguration.findFirst({
         where: {
           serviceType: serviceType as ServiceType,
@@ -85,6 +68,9 @@ export const updateServiceRates = async (req: Request, res: Response) => {
           isActive: true,
         },
       });
+
+      // Capture the old amount for edit history
+      const oldAmount = existingRate ? existingRate.amount : null;
 
       let updatedRate;
       if (existingRate) {
@@ -113,8 +99,30 @@ export const updateServiceRates = async (req: Request, res: Response) => {
         });
       }
 
+      // Add change information to summary
+      changesSummary.push({
+        vehicleCategory: vehicleCategory,
+        rateType: rateType,
+        oldAmount: oldAmount,
+        newAmount: amount,
+        packageHours: packageHours,
+        action: existingRate ? "updated" : "created",
+      });
+
       updatedRates.push(updatedRate);
     }
+
+    // Create edit log entry with actual old values
+    const editLog = await prisma.serviceEditLog.create({
+      data: {
+        serviceType: serviceType as ServiceType,
+        editedBy: req.user.userId,
+        changesCount: changesSummary.length,
+        editSummary: {
+          changes: changesSummary,
+        },
+      },
+    });
 
     // Clear cache to ensure new rates are used
     fareService.clearCache();
@@ -124,6 +132,7 @@ export const updateServiceRates = async (req: Request, res: Response) => {
       message: `Updated ${updatedRates.length} rates for ${serviceType}`,
       updatedRates,
       editLogId: editLog.id,
+      changesSummary, // Include the detailed changes in response
     });
   } catch (error) {
     console.error("Error updating service rates:", error);

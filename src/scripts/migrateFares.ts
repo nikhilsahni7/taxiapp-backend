@@ -86,7 +86,6 @@ async function migrateFares() {
         rateType: "PACKAGE_PRICE",
         packageHours: 2,
         amount: 550,
-
       },
       {
         serviceType: "CAR_RENTAL",
@@ -135,7 +134,6 @@ async function migrateFares() {
         packageHours: 8,
         amount: 2100,
       },
-
 
       // CAR_RENTAL - Sedan
       {
@@ -202,7 +200,6 @@ async function migrateFares() {
         amount: 2300,
       },
 
-
       // CAR_RENTAL - SUV
       {
         serviceType: "CAR_RENTAL",
@@ -267,7 +264,6 @@ async function migrateFares() {
         packageHours: 8,
         amount: 2450,
       },
-  
 
       // OUTSTATION rates
       {
@@ -538,6 +534,104 @@ async function migrateFares() {
         rateType: "EXTRA_KM",
         amount: 26,
       },
+
+      // CHARDHAM_YATRA rates
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "mini",
+        rateType: "PER_DAY",
+        amount: 2800,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "mini",
+        rateType: "EXTRA_KM",
+        amount: 11,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "sedan",
+        rateType: "PER_DAY",
+        amount: 3500,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "sedan",
+        rateType: "EXTRA_KM",
+        amount: 14,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "ertiga",
+        rateType: "PER_DAY",
+        amount: 5200,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "ertiga",
+        rateType: "EXTRA_KM",
+        amount: 18,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "innova",
+        rateType: "PER_DAY",
+        amount: 6000,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "innova",
+        rateType: "EXTRA_KM",
+        amount: 24,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "tempo_12",
+        rateType: "PER_DAY",
+        amount: 8000,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "tempo_12",
+        rateType: "EXTRA_KM",
+        amount: 23,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "tempo_16",
+        rateType: "PER_DAY",
+        amount: 9000,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "tempo_16",
+        rateType: "EXTRA_KM",
+        amount: 26,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "tempo_20",
+        rateType: "PER_DAY",
+        amount: 10000,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "tempo_20",
+        rateType: "EXTRA_KM",
+        amount: 30,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "tempo_26",
+        rateType: "PER_DAY",
+        amount: 11000,
+      },
+      {
+        serviceType: "CHARDHAM_YATRA",
+        vehicleCategory: "tempo_26",
+        rateType: "EXTRA_KM",
+        amount: 35,
+      },
     ];
 
     console.log(`📊 Migrating ${allFares.length} fare configurations...`);
@@ -620,6 +714,7 @@ async function migrateFares() {
       "OUTSTATION",
       "HILL_STATION",
       "ALL_INDIA_TOUR",
+      "CHARDHAM_YATRA",
     ];
 
     for (const service of services) {
