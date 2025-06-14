@@ -5,13 +5,13 @@ import type { Request, Response } from "express";
 import express from "express";
 import jwt from "jsonwebtoken";
 import {
-  checkRegistrationStatus,
-  createRegistrationOrder,
-  verifyRegistrationPayment,
+    checkRegistrationStatus,
+    createRegistrationOrder,
+    verifyRegistrationPayment,
 } from "../controllers/driverRegistrationController";
 
 interface AuthRequest extends Request {
-  user: {
+  user?: {
     userId: string;
     userType: string;
     selfieUrl: string;
@@ -19,7 +19,7 @@ interface AuthRequest extends Request {
 }
 
 import multer from "multer";
-import { uploadImage } from "../config/cloudinary";
+import { uploadImage, uploadMultipleImages, validateFile } from "../config/cloudinary";
 import { verifyToken } from "../middlewares/auth";
 
 const router = express.Router();
@@ -249,8 +249,23 @@ const verifyOTPFromDB = async (
   }
 };
 
+// Enhanced multer configuration with file validation
 const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
+const upload = multer({
+  storage: storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+    files: 20, // Maximum number of files
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf'];
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Invalid file type: ${file.mimetype}. Allowed types: ${allowedTypes.join(', ')}`));
+    }
+  }
+});
 
 const uploadFields = upload.fields([
   { name: "selfiePath", maxCount: 1 },
@@ -264,7 +279,31 @@ const uploadFields = upload.fields([
   { name: "insuranceDocument", maxCount: 1 },
 ]);
 
-router.post("/send-otp", async (req: Request, res: Response) => {
+// Helper function to handle file uploads with validation
+const handleFileUpload = async (file: Express.Multer.File | undefined): Promise<string | null> => {
+  if (!file) return null;
+
+  try {
+    validateFile(file);
+    return await uploadImage(file.buffer);
+  } catch (error: any) {
+    console.error(`❌ File upload failed for ${file.originalname}:`, error.message);
+    throw new Error(`Failed to upload ${file.originalname}: ${error.message}`);
+  }
+};
+
+// Helper function to check for duplicate users
+const checkDuplicateUser = async (phone: string, userType: string): Promise<boolean> => {
+  const existingUser = await prisma.user.findFirst({
+    where: {
+      phone,
+      userType: userType as any,
+    },
+  });
+  return !!existingUser;
+};
+
+router.post("/send-otp", async (req: Request, res: Response): Promise<void> => {
   try {
     const { phone } = req.body;
 
@@ -275,11 +314,12 @@ router.post("/send-otp", async (req: Request, res: Response) => {
     });
 
     if (existingUser) {
-      return res.json({
+      res.json({
         message: "User already exists",
         existingUser: true,
         userType: existingUser.userType,
       });
+      return;
     }
 
     const otp = generateOTP();
@@ -287,7 +327,8 @@ router.post("/send-otp", async (req: Request, res: Response) => {
     const smsSuccess = await sendSMSViaPRP(phone, otp);
 
     if (!smsSuccess) {
-      return res.status(500).json({ error: "Failed to send OTP via SMS" });
+      res.status(500).json({ error: "Failed to send OTP via SMS" });
+      return;
     }
 
     await storeOTP(phone, otp);
@@ -302,23 +343,26 @@ router.post("/send-otp", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/verify-otp", async (req: Request, res: Response) => {
+router.post("/verify-otp", async (req: Request, res: Response): Promise<void> => {
   try {
     const { phone, otp, password } = req.body;
 
     if (!phone || !otp) {
-      return res.status(400).json({ error: "Missing required fields" });
+      res.status(400).json({ error: "Missing required fields" });
+      return;
     }
 
     const existingUser = await prisma.user.findUnique({ where: { phone } });
     if (existingUser) {
-      return res.status(400).json({ error: "User already exists" });
+      res.status(400).json({ error: "User already exists" });
+      return;
     }
 
     const isOTPValid = await verifyOTPFromDB(phone, otp);
 
     if (!isOTPValid) {
-      return res.status(400).json({ error: "Invalid or expired OTP" });
+      res.status(400).json({ error: "Invalid or expired OTP" });
+      return;
     }
 
     let hashedPassword = null;
@@ -362,23 +406,19 @@ router.post("/verify-otp", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/send-driver-otp", async (req: Request, res: Response) => {
+router.post("/send-driver-otp", async (req: Request, res: Response): Promise<void> => {
   try {
     const { phone } = req.body;
 
     if (!phone) {
-      return res.status(400).json({ error: "Phone number is required" });
+      res.status(400).json({ error: "Phone number is required" });
+      return;
     }
 
-    const existingDriver = await prisma.user.findFirst({
-      where: {
-        phone,
-        userType: "DRIVER",
-      },
-    });
-
-    if (existingDriver) {
-      return res.status(400).json({ error: "Driver already exists" });
+    const isDuplicate = await checkDuplicateUser(phone, "DRIVER");
+    if (isDuplicate) {
+      res.status(400).json({ error: "Driver already exists" });
+      return;
     }
 
     const otp = generateOTP();
@@ -386,7 +426,8 @@ router.post("/send-driver-otp", async (req: Request, res: Response) => {
     const smsSuccess = await sendSMSViaPRP(phone, otp);
 
     if (!smsSuccess) {
-      return res.status(500).json({ error: "Failed to send OTP via SMS" });
+      res.status(500).json({ error: "Failed to send OTP via SMS" });
+      return;
     }
 
     await storeOTP(phone, otp);
@@ -398,31 +439,29 @@ router.post("/send-driver-otp", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/verify-driver-otp", async (req: Request, res: Response) => {
+router.post("/verify-driver-otp", async (req: Request, res: Response): Promise<void> => {
   try {
     const { phone, otp, password } = req.body;
 
     if (!phone || !otp) {
-      return res.status(400).json({ error: "Missing required fields" });
+      res.status(400).json({ error: "Missing required fields" });
+      return;
     }
 
     const formattedPhone = phone.startsWith("+") ? phone : `+${phone}`;
 
-    const existingDriver = await prisma.user.findFirst({
-      where: {
-        phone: formattedPhone,
-        userType: "DRIVER",
-      },
-    });
-
-    if (existingDriver) {
-      return res.status(400).json({ error: "Driver already exists" });
+    // Check for duplicate with transaction
+    const isDuplicate = await checkDuplicateUser(formattedPhone, "DRIVER");
+    if (isDuplicate) {
+      res.status(400).json({ error: "Driver already exists" });
+      return;
     }
 
     const isOTPValid = await verifyOTPFromDB(phone, otp);
 
     if (!isOTPValid) {
-      return res.status(400).json({ error: "Invalid or expired OTP" });
+      res.status(400).json({ error: "Invalid or expired OTP" });
+      return;
     }
 
     let hashedPassword = null;
@@ -430,32 +469,37 @@ router.post("/verify-driver-otp", async (req: Request, res: Response) => {
       hashedPassword = await bcryptjs.hash(password, 10);
     }
 
-    const driver = await prisma.user.create({
-      data: {
-        phone: formattedPhone,
-        userType: "DRIVER",
-        verified: true,
-        password: hashedPassword,
-      },
-    });
+    // Use transaction to ensure atomicity
+    const result = await prisma.$transaction(async (tx) => {
+      const driver = await tx.user.create({
+        data: {
+          phone: formattedPhone,
+          userType: "DRIVER",
+          verified: true,
+          password: hashedPassword,
+        },
+      });
 
-    // Create wallet for the driver
-    await prisma.wallet.create({
-      data: {
-        userId: driver.id,
-        balance: 0,
-      },
+      // Create wallet for the driver
+      await tx.wallet.create({
+        data: {
+          userId: driver.id,
+          balance: 0,
+        },
+      });
+
+      return driver;
     });
 
     const token = jwt.sign(
-      { userId: driver.id, userType: driver.userType },
+      { userId: result.id, userType: result.userType },
       process.env.JWT_SECRET!,
       { expiresIn: "7d" }
     );
 
     res.json({
       token,
-      userId: driver.id,
+      userId: result.id,
       message: "Driver verified and created successfully",
     });
   } catch (error: any) {
@@ -467,29 +511,26 @@ router.post("/verify-driver-otp", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
+router.post("/verify-vendor-otp", async (req: Request, res: Response): Promise<void> => {
   try {
     const { phone, otp, password } = req.body;
 
     if (!phone || !otp) {
-      return res.status(400).json({ error: "Missing required fields" });
+      res.status(400).json({ error: "Missing required fields" });
+      return;
     }
 
-    const existingVendor = await prisma.user.findUnique({
-      where: {
-        phone,
-        userType: "VENDOR",
-      },
-    });
-
-    if (existingVendor) {
-      return res.status(400).json({ error: "Vendor already exists" });
+    const isDuplicate = await checkDuplicateUser(phone, "VENDOR");
+    if (isDuplicate) {
+      res.status(400).json({ error: "Vendor already exists" });
+      return;
     }
 
     const isOTPValid = await verifyOTPFromDB(phone, otp);
 
     if (!isOTPValid) {
-      return res.status(400).json({ error: "Invalid or expired OTP" });
+      res.status(400).json({ error: "Invalid or expired OTP" });
+      return;
     }
 
     let hashedPassword = null;
@@ -497,32 +538,37 @@ router.post("/verify-vendor-otp", async (req: Request, res: Response) => {
       hashedPassword = await bcryptjs.hash(password, 10);
     }
 
-    const vendor = await prisma.user.create({
-      data: {
-        phone,
-        userType: "VENDOR",
-        verified: true,
-        password: hashedPassword,
-      },
-    });
+    // Use transaction
+    const result = await prisma.$transaction(async (tx) => {
+      const vendor = await tx.user.create({
+        data: {
+          phone,
+          userType: "VENDOR",
+          verified: true,
+          password: hashedPassword,
+        },
+      });
 
-    // Create wallet for the vendor
-    await prisma.wallet.create({
-      data: {
-        userId: vendor.id,
-        balance: 0,
-      },
+      // Create wallet for the vendor
+      await tx.wallet.create({
+        data: {
+          userId: vendor.id,
+          balance: 0,
+        },
+      });
+
+      return vendor;
     });
 
     const token = jwt.sign(
-      { userId: vendor.id, userType: vendor.userType },
+      { userId: result.id, userType: result.userType },
       process.env.JWT_SECRET!,
       { expiresIn: "7d" }
     );
 
     res.json({
       token,
-      userId: vendor.id,
+      userId: result.id,
       message: "Vendor verified and created successfully",
     });
   } catch (error: any) {
@@ -541,8 +587,12 @@ router.post(
     { name: "aadharBack", maxCount: 1 },
     { name: "panCard", maxCount: 1 },
   ]),
-  async (req: AuthRequest, res: Response) => {
+  async (req: AuthRequest, res: Response): Promise<void> => {
     try {
+      if (!req.user) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
       const userId = req.user.userId;
       const files = req.files as
         | { [fieldname: string]: Express.Multer.File[] }
@@ -569,78 +619,81 @@ router.post(
         !aadharNumber ||
         !panNumber
       ) {
-        return res.status(400).json({ error: "Missing required fields" });
+        res.status(400).json({ error: "Missing required fields" });
+        return;
       }
 
-      const aadharFrontUrl = files?.["aadharFront"]?.[0]
-        ? await uploadImage(files["aadharFront"][0].buffer)
-        : null;
-      const aadharBackUrl = files?.["aadharBack"]?.[0]
-        ? await uploadImage(files["aadharBack"][0].buffer)
-        : null;
-      const panUrl = files?.["panCard"]?.[0]
-        ? await uploadImage(files["panCard"][0].buffer)
-        : null;
+      // Upload files with proper error handling
+      const aadharFrontUrl = await handleFileUpload(files?.["aadharFront"]?.[0]);
+      const aadharBackUrl = await handleFileUpload(files?.["aadharBack"]?.[0]);
+      const panUrl = await handleFileUpload(files?.["panCard"]?.[0]);
 
       if (!aadharFrontUrl || !aadharBackUrl || !panUrl) {
-        return res.status(400).json({ error: "All documents are required" });
+        res.status(400).json({ error: "All documents are required" });
+        return;
       }
 
-      await prisma.user.update({
-        where: { id: userId },
-        data: {
-          name,
-          email,
-          state,
-          city,
-          userType: "VENDOR",
-        },
-      });
+      // Use transaction for vendor registration
+      const result = await prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            name,
+            email,
+            state,
+            city,
+            userType: "VENDOR",
+          },
+        });
 
-      const existingVendorDetails = await prisma.vendorDetails.findUnique({
-        where: { userId },
-      });
-
-      let vendorDetails;
-      if (existingVendorDetails) {
-        vendorDetails = await prisma.vendorDetails.update({
+        const existingVendorDetails = await tx.vendorDetails.findUnique({
           where: { userId },
-          data: {
-            businessName,
-            address,
-            experience,
-            gstNumber,
-            aadharNumber,
-            panNumber,
-            aadharFrontUrl,
-            aadharBackUrl,
-            panUrl,
-          },
         });
-      } else {
-        vendorDetails = await prisma.vendorDetails.create({
-          data: {
-            userId,
-            businessName,
-            address,
-            experience,
-            gstNumber,
-            aadharNumber,
-            panNumber,
-            aadharFrontUrl,
-            aadharBackUrl,
-            panUrl,
-          },
-        });
-      }
 
-      const updatedUser = await prisma.user.findUnique({
-        where: { id: userId },
-        include: { vendorDetails: true },
+        let vendorDetails;
+        if (existingVendorDetails) {
+          vendorDetails = await tx.vendorDetails.update({
+            where: { userId },
+            data: {
+              businessName,
+              address,
+              experience,
+              gstNumber,
+              aadharNumber,
+              panNumber,
+              aadharFrontUrl,
+              aadharBackUrl,
+              panUrl,
+            },
+          });
+        } else {
+          vendorDetails = await tx.vendorDetails.create({
+            data: {
+              userId,
+              businessName,
+              address,
+              experience,
+              gstNumber,
+              aadharNumber,
+              panNumber,
+              aadharFrontUrl,
+              aadharBackUrl,
+              panUrl,
+            },
+          });
+        }
+
+        const updatedUser = await tx.user.findUnique({
+          where: { id: userId },
+          include: { vendorDetails: true },
+        });
+
+        return updatedUser;
       });
 
-      if (!updatedUser) {
-        return res.status(404).json({ error: "User not found" });
+      if (!result) {
+        res.status(404).json({ error: "User not found" });
+        return;
       }
 
       const token = jwt.sign(
@@ -653,12 +706,12 @@ router.post(
         message: "Vendor registration completed successfully",
         token,
         userId,
-        name: updatedUser.name,
-        email: updatedUser.email,
-        phone: updatedUser.phone,
-        state: updatedUser.state,
-        city: updatedUser.city,
-        vendorDetails: updatedUser.vendorDetails,
+        name: result.name,
+        email: result.email,
+        phone: result.phone,
+        state: result.state,
+        city: result.city,
+        vendorDetails: result.vendorDetails,
       });
     } catch (error) {
       console.error("Vendor registration error:", error);
@@ -670,12 +723,13 @@ router.post(
   }
 );
 
-router.post("/vendor-sign-in", async (req: Request, res: Response) => {
+router.post("/vendor-sign-in", async (req: Request, res: Response): Promise<void> => {
   try {
     const { phone, password } = req.body;
 
     if (!phone) {
-      return res.status(400).json({ error: "Phone number is required" });
+      res.status(400).json({ error: "Phone number is required" });
+      return;
     }
 
     const vendor = await prisma.user.findFirst({
@@ -689,20 +743,23 @@ router.post("/vendor-sign-in", async (req: Request, res: Response) => {
     });
 
     if (!vendor || !vendor.verified) {
-      return res.status(401).json({
+      res.status(401).json({
         error: "Invalid phone number or vendor not verified",
         vendor: vendor,
         vendorDetails: vendor?.vendorDetails,
       });
+      return;
     }
 
     if (vendor.password && password) {
       const isPasswordValid = await bcryptjs.compare(password, vendor.password);
       if (!isPasswordValid) {
-        return res.status(401).json({ error: "Invalid password" });
+        res.status(401).json({ error: "Invalid password" });
+        return;
       }
     } else if (vendor.password && !password) {
-      return res.status(400).json({ error: "Password is required" });
+      res.status(400).json({ error: "Password is required" });
+      return;
     }
 
     const token = jwt.sign(
@@ -728,24 +785,27 @@ router.post("/vendor-sign-in", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/sign-in", async (req: Request, res: Response) => {
+router.post("/sign-in", async (req: Request, res: Response): Promise<void> => {
   try {
     const { phone, password } = req.body;
 
     const user = await prisma.user.findUnique({ where: { phone } });
     if (!user || !user.verified) {
-      return res
+      res
         .status(400)
         .json({ error: "Invalid phone number or user not verified" });
+      return;
     }
 
     if (user.password && password) {
       const isPasswordValid = await bcryptjs.compare(password, user.password);
       if (!isPasswordValid) {
-        return res.status(401).json({ error: "Invalid password" });
+        res.status(401).json({ error: "Invalid password" });
+        return;
       }
     } else if (user.password && !password) {
-      return res.status(400).json({ error: "Password is required" });
+      res.status(400).json({ error: "Password is required" });
+      return;
     }
 
     const token = jwt.sign(
@@ -771,100 +831,124 @@ router.post(
   "/register/:type",
   verifyToken,
   uploadFields,
-  async (req: AuthRequest, res) => {
+  async (req: AuthRequest, res: Response): Promise<void> => {
     try {
+      if (!req.user) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
       const { type } = req.params;
       const userId = req.user.userId;
       const files = req.files as
         | { [fieldname: string]: Express.Multer.File[] }
         | undefined;
 
+      console.log(`🚀 Starting ${type} registration for user ${userId}`);
+
       const { name, email, state, city } = req.body;
 
-      const selfieUrl = files?.["selfiePath"]?.[0]
-        ? await uploadImage(files["selfiePath"][0].buffer)
-        : null;
+      // Validate required fields
+      if (!name || !state || !city) {
+        res.status(400).json({ error: "Name, state, and city are required" });
+        return;
+      }
 
-      await prisma.user.update({
-        where: { id: userId },
-        data: {
-          name,
-          email,
-          state,
-          city,
-          selfieUrl,
-          userType: type.toUpperCase() as "USER" | "DRIVER" | "ADMIN",
-        },
-      });
+      // Upload selfie with validation
+      const selfieUrl = await handleFileUpload(files?.["selfiePath"]?.[0]);
 
-      if (type.toUpperCase() === "DRIVER") {
-        const {
-          aadharNumber,
-          panNumber,
-          dlNumber,
-          vehicleNumber,
-          vehicleName,
-          vehicleCategory,
-        } = req.body;
-
-        const dlUrl = files?.["dlPath"]?.[0]
-          ? await uploadImage(files["dlPath"][0].buffer)
-          : null;
-        const carFrontUrl = files?.["carFront"]?.[0]
-          ? await uploadImage(files["carFront"][0].buffer)
-          : null;
-        const carBackUrl = files?.["carBack"]?.[0]
-          ? await uploadImage(files["carBack"][0].buffer)
-          : null;
-
-        const permitUrls = files?.["permitImages"]
-          ? await Promise.all(
-              files["permitImages"].map((file) => uploadImage(file.buffer))
-            )
-          : [];
-
-        const rcUrl = files?.["rcDocument"]?.[0]
-          ? await uploadImage(files["rcDocument"][0].buffer)
-          : null;
-        const fitnessUrl = files?.["fitnessDocument"]?.[0]
-          ? await uploadImage(files["fitnessDocument"][0].buffer)
-          : null;
-        const pollutionUrl = files?.["pollutionDocument"]?.[0]
-          ? await uploadImage(files["pollutionDocument"][0].buffer)
-          : null;
-        const insuranceUrl = files?.["insuranceDocument"]?.[0]
-          ? await uploadImage(files["insuranceDocument"][0].buffer)
-          : null;
-
-        await prisma.driverDetails.create({
+      // Start transaction for registration
+      const result = await prisma.$transaction(async (tx) => {
+        // Update user details
+        await tx.user.update({
+          where: { id: userId },
           data: {
-            userId,
+            name,
+            email,
+            state,
+            city,
+            selfieUrl,
+            userType: type.toUpperCase() as "USER" | "DRIVER" | "ADMIN",
+          },
+        });
+
+        if (type.toUpperCase() === "DRIVER") {
+          const {
             aadharNumber,
             panNumber,
             dlNumber,
             vehicleNumber,
             vehicleName,
             vehicleCategory,
-            carCategory: vehicleCategory,
-            dlUrl,
-            permitUrls,
-            carFrontUrl,
-            carBackUrl,
-            rcUrl,
-            fitnessUrl,
-            pollutionUrl,
-            insuranceUrl,
-          },
-        });
-      } else if (type.toUpperCase() === "USER") {
-        await prisma.userDetails.create({
-          data: {
-            userId,
-          },
-        });
-      } else {
-        return res.status(400).json({ error: "Invalid user type" });
-      }
+            hasCarrier,
+          } = req.body;
+
+          // Validate required driver fields
+          if (!aadharNumber || !panNumber || !dlNumber || !vehicleNumber || !vehicleName || !vehicleCategory) {
+            throw new Error("Missing required driver fields");
+          }
+
+          console.log("📄 Processing driver documents...");
+
+          // Upload individual documents with proper error handling
+          const dlUrl = await handleFileUpload(files?.["dlPath"]?.[0]);
+          const carFrontUrl = await handleFileUpload(files?.["carFront"]?.[0]);
+          const carBackUrl = await handleFileUpload(files?.["carBack"]?.[0]);
+          const rcUrl = await handleFileUpload(files?.["rcDocument"]?.[0]);
+          const fitnessUrl = await handleFileUpload(files?.["fitnessDocument"]?.[0]);
+          const pollutionUrl = await handleFileUpload(files?.["pollutionDocument"]?.[0]);
+          const insuranceUrl = await handleFileUpload(files?.["insuranceDocument"]?.[0]);
+
+          // Upload permit images (multiple files)
+          let permitUrls: string[] = [];
+          if (files?.["permitImages"]) {
+            try {
+              permitUrls = await uploadMultipleImages(files["permitImages"]);
+              console.log(`✅ Uploaded ${permitUrls.length} permit images`);
+            } catch (error: any) {
+              console.error("❌ Failed to upload permit images:", error.message);
+              throw new Error(`Failed to upload permit images: ${error.message}`);
+            }
+          }
+
+          // Create driver details
+          await tx.driverDetails.create({
+            data: {
+              userId,
+              aadharNumber,
+              panNumber,
+              dlNumber,
+              vehicleNumber,
+              vehicleName,
+              vehicleCategory,
+              carCategory: vehicleCategory,
+              hasCarrier: hasCarrier === "true" || hasCarrier === true,
+              dlUrl,
+              permitUrls,
+              carFrontUrl,
+              carBackUrl,
+              rcUrl,
+              fitnessUrl,
+              pollutionUrl,
+              insuranceUrl,
+            },
+          });
+
+          console.log("✅ Driver details created successfully");
+
+        } else if (type.toUpperCase() === "USER") {
+          await tx.userDetails.create({
+            data: {
+              userId,
+            },
+          });
+        } else {
+          throw new Error("Invalid user type");
+        }
+
+        return { userId, userType: type.toUpperCase(), name, email, state, city };
+      }, {
+        timeout: 60000, // 60 second timeout for transaction
+      });
 
       const token = jwt.sign(
         { userId, userType: type.toUpperCase() },
@@ -872,15 +956,17 @@ router.post(
         { expiresIn: "7d" }
       );
 
+      console.log(`🎉 ${type} registration completed successfully for user ${userId}`);
+
       res.json({
         message: `${type} registration completed successfully`,
         token,
         userId: userId,
         userType: type.toUpperCase(),
-        name: name,
-        email: email,
-        state: state,
-        city: city,
+        name: result.name,
+        email: result.email,
+        state: result.state,
+        city: result.city,
       });
     } catch (error) {
       console.error("Registration error:", error);
@@ -892,7 +978,7 @@ router.post(
   }
 );
 
-router.post("/admin-register", async (req: Request, res: Response) => {
+router.post("/admin-register", async (req: Request, res: Response): Promise<void> => {
   try {
     const ADMIN_PHONE = "9999999999";
 
@@ -904,28 +990,33 @@ router.post("/admin-register", async (req: Request, res: Response) => {
     });
 
     if (existingAdmin) {
-      return res.status(400).json({ error: "Admin already exists" });
+      res.status(400).json({ error: "Admin already exists" });
+      return;
     }
 
-    const admin = await prisma.user.create({
-      data: {
-        phone: ADMIN_PHONE,
-        userType: "ADMIN",
-        verified: true,
-        name: "Admin",
-      },
-    });
+    const result = await prisma.$transaction(async (tx) => {
+      const admin = await tx.user.create({
+        data: {
+          phone: ADMIN_PHONE,
+          userType: "ADMIN",
+          verified: true,
+          name: "Admin",
+        },
+      });
 
-    // Create wallet for the admin
-    await prisma.wallet.create({
-      data: {
-        userId: admin.id,
-        balance: 0,
-      },
+      // Create wallet for the admin
+      await tx.wallet.create({
+        data: {
+          userId: admin.id,
+          balance: 0,
+        },
+      });
+
+      return admin;
     });
 
     const token = jwt.sign(
-      { userId: admin.id, userType: admin.userType },
+      { userId: result.id, userType: result.userType },
       process.env.JWT_SECRET!,
       { expiresIn: "7d" }
     );
@@ -933,14 +1024,14 @@ router.post("/admin-register", async (req: Request, res: Response) => {
     res.json({
       message: "Admin registered successfully",
       token,
-      adminId: admin.id,
+      adminId: result.id,
     });
   } catch (error) {
     res.status(500).json({ error: "Failed to register admin" });
   }
 });
 
-router.post("/admin-sign-in", async (req: Request, res: Response) => {
+router.post("/admin-sign-in", async (req: Request, res: Response): Promise<void> => {
   try {
     const ADMIN_PHONE = "9999999999";
 
@@ -952,7 +1043,8 @@ router.post("/admin-sign-in", async (req: Request, res: Response) => {
     });
 
     if (!admin) {
-      return res.status(401).json({ error: "Admin not found" });
+      res.status(401).json({ error: "Admin not found" });
+      return;
     }
 
     const token = jwt.sign(
@@ -971,12 +1063,13 @@ router.post("/admin-sign-in", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/driver-sign-in", async (req, res) => {
+router.post("/driver-sign-in", async (req: Request, res: Response): Promise<void> => {
   try {
     const { phone, password } = req.body;
 
     if (!phone) {
-      return res.status(400).json({ error: "Phone number is required" });
+      res.status(400).json({ error: "Phone number is required" });
+      return;
     }
 
     const driver = await prisma.user.findFirst({
@@ -990,18 +1083,21 @@ router.post("/driver-sign-in", async (req, res) => {
     });
 
     if (!driver || !driver.verified) {
-      return res
+      res
         .status(401)
         .json({ error: "Invalid phone number or driver not verified" });
+      return;
     }
 
     if (driver.password && password) {
       const isPasswordValid = await bcryptjs.compare(password, driver.password);
       if (!isPasswordValid) {
-        return res.status(401).json({ error: "Invalid password" });
+        res.status(401).json({ error: "Invalid password" });
+        return;
       }
     } else if (driver.password && !password) {
-      return res.status(400).json({ error: "Password is required" });
+      res.status(400).json({ error: "Password is required" });
+      return;
     }
 
     const token = jwt.sign(
@@ -1027,7 +1123,7 @@ router.post("/driver-sign-in", async (req, res) => {
   }
 });
 
-router.post("/logout", verifyToken, (req, res) => {
+router.post("/logout", verifyToken, (req: Request, res: Response): void => {
   res.json({ message: "Logged out successfully" });
 });
 
@@ -1049,17 +1145,19 @@ router.get(
 
 router.post(
   "/forgot-password/send-otp",
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
     try {
       const { phone } = req.body;
 
       if (!phone) {
-        return res.status(400).json({ error: "Phone number is required" });
+        res.status(400).json({ error: "Phone number is required" });
+        return;
       }
 
       const user = await prisma.user.findUnique({ where: { phone } });
       if (!user) {
-        return res.status(404).json({ error: "User not found" });
+        res.status(404).json({ error: "User not found" });
+        return;
       }
 
       const otp = generateOTP();
@@ -1067,7 +1165,8 @@ router.post(
       const smsSuccess = await sendSMSViaPRP(phone, otp);
 
       if (!smsSuccess) {
-        return res.status(500).json({ error: "Failed to send OTP via SMS" });
+        res.status(500).json({ error: "Failed to send OTP via SMS" });
+        return;
       }
 
       await storeOTP(phone, otp);
@@ -1082,23 +1181,26 @@ router.post(
 
 router.post(
   "/forgot-password/verify-otp",
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<void> => {
     try {
       const { phone, otp, newPassword } = req.body;
 
       if (!phone || !otp || !newPassword) {
-        return res.status(400).json({ error: "Missing required fields" });
+        res.status(400).json({ error: "Missing required fields" });
+        return;
       }
 
       const user = await prisma.user.findUnique({ where: { phone } });
       if (!user) {
-        return res.status(404).json({ error: "User not found" });
+        res.status(404).json({ error: "User not found" });
+        return;
       }
 
       const isOTPValid = await verifyOTPFromDB(phone, otp);
 
       if (!isOTPValid) {
-        return res.status(400).json({ error: "Invalid or expired OTP" });
+        res.status(400).json({ error: "Invalid or expired OTP" });
+        return;
       }
 
       const hashedPassword = await bcryptjs.hash(newPassword, 10);
@@ -1116,23 +1218,19 @@ router.post(
   }
 );
 
-router.post("/send-vendor-otp", async (req: Request, res: Response) => {
+router.post("/send-vendor-otp", async (req: Request, res: Response): Promise<void> => {
   try {
     const { phone } = req.body;
 
     if (!phone) {
-      return res.status(400).json({ error: "Phone number is required" });
+      res.status(400).json({ error: "Phone number is required" });
+      return;
     }
 
-    const existingVendor = await prisma.user.findFirst({
-      where: {
-        phone,
-        userType: "VENDOR",
-      },
-    });
-
-    if (existingVendor) {
-      return res.status(400).json({ error: "Vendor already exists" });
+    const isDuplicate = await checkDuplicateUser(phone, "VENDOR");
+    if (isDuplicate) {
+      res.status(400).json({ error: "Vendor already exists" });
+      return;
     }
 
     const otp = generateOTP();
@@ -1140,7 +1238,8 @@ router.post("/send-vendor-otp", async (req: Request, res: Response) => {
     const smsSuccess = await sendSMSViaPRP(phone, otp);
 
     if (!smsSuccess) {
-      return res.status(500).json({ error: "Failed to send OTP via SMS" });
+      res.status(500).json({ error: "Failed to send OTP via SMS" });
+      return;
     }
 
     await storeOTP(phone, otp);
