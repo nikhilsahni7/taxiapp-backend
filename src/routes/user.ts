@@ -510,11 +510,45 @@ router.get(
           id: userId,
           userType: "VENDOR",
         },
-        include: {
-          vendorDetails: true,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          state: true,
+          city: true,
+          selfieUrl: true, // Include selfie URL
+          userType: true,
+          verified: true,
+          createdAt: true,
+          updatedAt: true,
+          vendorDetails: {
+            select: {
+              id: true,
+              businessName: true,
+              address: true,
+              experience: true,
+              gstNumber: true,
+              aadharNumber: true,
+              panNumber: true,
+              aadharFrontUrl: true, // Include Aadhar front URL
+              aadharBackUrl: true,  // Include Aadhar back URL
+              panUrl: true,         // Include PAN card URL
+              createdAt: true,
+              updatedAt: true,
+            },
+          },
           vendorBookings: {
             orderBy: { createdAt: "desc" },
             take: 10, // Optional: limit recent bookings
+            select: {
+              id: true,
+              serviceType: true,
+              status: true,
+              totalDays: true,
+              vendorPrice: true,
+              createdAt: true,
+            },
           },
         },
       });
@@ -535,6 +569,12 @@ router.get(
 router.put(
   "/vendor/profile",
   verifyToken,
+  upload.fields([
+    { name: "selfiePath", maxCount: 1 },
+    { name: "aadharFront", maxCount: 1 },
+    { name: "aadharBack", maxCount: 1 },
+    { name: "panCard", maxCount: 1 },
+  ]),
   async (req: Request, res: Response): Promise<void> => {
     try {
       if (!req.user) {
@@ -542,6 +582,9 @@ router.put(
         return;
       }
       const userId = req.user.userId;
+      const files = req.files as
+        | { [fieldname: string]: Express.Multer.File[] }
+        | undefined;
 
       const {
         name,
@@ -558,6 +601,61 @@ router.put(
         },
       } = req.body;
 
+      // Get current vendor details to preserve existing URLs if no new files are uploaded
+      const currentVendor = await prisma.user.findUnique({
+        where: { id: userId, userType: "VENDOR" },
+        select: {
+          selfieUrl: true,
+          vendorDetails: {
+            select: {
+              aadharFrontUrl: true,
+              aadharBackUrl: true,
+              panUrl: true,
+            },
+          },
+        },
+      });
+
+      if (!currentVendor) {
+        res.status(404).json({ error: "Vendor not found" });
+        return;
+      }
+
+      // Handle file uploads - only upload if new files are provided
+      let selfieUrl = currentVendor.selfieUrl;
+      let aadharFrontUrl = currentVendor.vendorDetails?.aadharFrontUrl;
+      let aadharBackUrl = currentVendor.vendorDetails?.aadharBackUrl;
+      let panUrl = currentVendor.vendorDetails?.panUrl;
+
+      try {
+        if (files?.["selfiePath"]?.[0]) {
+          console.log("📸 Uploading new selfie...");
+          selfieUrl = await uploadImage(files["selfiePath"][0].buffer);
+        }
+
+        if (files?.["aadharFront"]?.[0]) {
+          console.log("📄 Uploading new Aadhar front...");
+          aadharFrontUrl = await uploadImage(files["aadharFront"][0].buffer);
+        }
+
+        if (files?.["aadharBack"]?.[0]) {
+          console.log("📄 Uploading new Aadhar back...");
+          aadharBackUrl = await uploadImage(files["aadharBack"][0].buffer);
+        }
+
+        if (files?.["panCard"]?.[0]) {
+          console.log("📄 Uploading new PAN card...");
+          panUrl = await uploadImage(files["panCard"][0].buffer);
+        }
+      } catch (uploadError: any) {
+        console.error("❌ Document upload failed:", uploadError.message);
+        res.status(500).json({
+          error: "Failed to upload documents",
+          details: uploadError.message
+        });
+        return;
+      }
+
       const updatedVendor = await prisma.user.update({
         where: {
           id: userId,
@@ -568,6 +666,7 @@ router.put(
           email,
           state,
           city,
+          selfieUrl, // Update selfie URL
           vendorDetails: {
             upsert: {
               create: {
@@ -577,6 +676,9 @@ router.put(
                 gstNumber,
                 aadharNumber,
                 panNumber,
+                aadharFrontUrl,
+                aadharBackUrl,
+                panUrl,
               },
               update: {
                 businessName,
@@ -585,12 +687,39 @@ router.put(
                 gstNumber,
                 aadharNumber,
                 panNumber,
+                aadharFrontUrl,
+                aadharBackUrl,
+                panUrl,
               },
             },
           },
         },
-        include: {
-          vendorDetails: true,
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          phone: true,
+          state: true,
+          city: true,
+          selfieUrl: true,
+          userType: true,
+          verified: true,
+          updatedAt: true,
+          vendorDetails: {
+            select: {
+              id: true,
+              businessName: true,
+              address: true,
+              experience: true,
+              gstNumber: true,
+              aadharNumber: true,
+              panNumber: true,
+              aadharFrontUrl: true,
+              aadharBackUrl: true,
+              panUrl: true,
+              updatedAt: true,
+            },
+          },
         },
       });
 
