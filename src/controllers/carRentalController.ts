@@ -27,6 +27,34 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_SECRET!,
 });
 
+// Commission Configuration - Easy to modify
+const COMPANY_COMMISSION_RATE = 0.10; // 10% commission rate
+
+/**
+ * Helper function to ensure driver wallet exists
+ */
+async function ensureDriverWallet(driverId: string): Promise<void> {
+  try {
+    console.log(`[Rental Wallet] Checking/creating wallet for driver ${driverId}`);
+    await prisma.wallet.upsert({
+      where: { userId: driverId },
+      update: {}, // Don't update if exists
+      create: {
+        userId: driverId,
+        balance: 0,
+        currency: "INR",
+      },
+    });
+    console.log(`[Rental Wallet] Driver wallet ensured for ${driverId}`);
+  } catch (error) {
+    console.error(
+      `[Rental Wallet] Failed to ensure driver wallet for ${driverId}:`,
+      error
+    );
+    throw error;
+  }
+}
+
 interface RentalPackage {
   km: number;
   price: number;
@@ -1339,21 +1367,31 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // --- Main Transaction: Update Ride and Create Transaction (NO Wallet Update for Cash) --- START
-    const [updatedRental, transaction] = await prisma.$transaction([
+    // Calculate commission for cash payment
+    const totalAmount = rental.totalAmount!;
+    const commissionAmount = Math.round(totalAmount * COMPANY_COMMISSION_RATE);
+
+    console.log(`[Rental Cash Payment] Total=${totalAmount}, Commission=${commissionAmount}`);
+
+    // Ensure driver wallet exists
+    await ensureDriverWallet(rental.driverId!);
+
+    // --- Main Transaction: Update Ride, Create Transaction, Handle Commission --- START
+    const [updatedRental, transaction] = await prisma.$transaction(async (tx) => {
       // 1. Update Ride Status
-      prisma.ride.update({
+      const updatedRental = await tx.ride.update({
         where: { id },
         data: {
           status: RideStatus.PAYMENT_COMPLETED,
           rideEndedAt: new Date(),
           paymentStatus: TransactionStatus.COMPLETED,
         },
-      }),
-      // 2. Create Transaction Record (for tracking only, no wallet update for cash)
-      prisma.transaction.create({
+      });
+
+      // 2. Create Transaction Record (cash goes direct to driver)
+      const transaction = await tx.transaction.create({
         data: {
-          amount: rental.totalAmount!,
+          amount: totalAmount,
           type: TransactionType.RENTAL_PAYMENT,
           status: TransactionStatus.COMPLETED,
           senderId: rental.userId,
@@ -1361,8 +1399,37 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
           rideId: rental.id,
           description: "Cash payment for car rental (direct to driver)",
         },
-      }),
-    ]);
+      });
+
+      // 3. Only deduct commission from driver wallet (allow negative balance)
+      const finalWallet = await tx.wallet.update({
+        where: { userId: rental.driverId! },
+        data: { balance: { decrement: commissionAmount } },
+      });
+
+      // 4. Create commission transaction record
+      await tx.transaction.create({
+        data: {
+          amount: commissionAmount,
+          type: TransactionType.COMPANY_COMMISSION,
+          status: TransactionStatus.COMPLETED,
+          senderId: rental.driverId!,
+          receiverId: null, // Company receives commission
+          rideId: rental.id,
+          description: `Company commission (${COMPANY_COMMISSION_RATE * 100}%) deducted for cash rental ${rental.id}`,
+        },
+      });
+
+      // 5. Update driver's insufficient balance flag if needed
+      await tx.driverDetails.update({
+        where: { userId: rental.driverId! },
+        data: { hasInsufficientBalance: finalWallet.balance < 0 },
+      });
+
+      console.log(`[Rental Cash Payment] Driver ${rental.driverId} wallet after commission: ${finalWallet.balance}`);
+
+      return [updatedRental, transaction];
+    });
     // --- Main Transaction --- END
 
     // --- Separate Step: Reset User Fee if Applicable --- START
@@ -1489,8 +1556,17 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
     console.log("Fee was applied flag:", feeWasApplied);
     const userIdToResetFee = feeWasApplied ? rental.userId : null;
 
-    // Perform main transaction: Update Ride, Transaction, Wallet
-    // Destructure results directly, type inference should work here for these 3 operations
+    // Calculate commission for online payment
+    const totalAmount = rental.totalAmount!;
+    const commissionAmount = Math.round(totalAmount * COMPANY_COMMISSION_RATE);
+    const driverAmount = totalAmount - commissionAmount; // 90% to driver
+
+    console.log(`[Rental Online Payment] Total=${totalAmount}, Commission=${commissionAmount}, Driver=${driverAmount}`);
+
+    // Ensure driver wallet exists
+    await ensureDriverWallet(rental.driverId!);
+
+    // Perform main transaction: Update Ride, Transaction, Wallet with commission
     const [updatedRental, paymentUpdateResult, walletUpdateResult] =
       await prisma.$transaction([
         prisma.ride.update({
@@ -1513,20 +1589,35 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
             description: "Online payment for car rental",
           },
         }),
-        // Update driver's wallet for digital payment (correct for Razorpay)
+        // Add only 90% to driver's wallet (company keeps 10%)
         prisma.wallet.upsert({
           where: { userId: rental.driverId! },
           create: {
             userId: rental.driverId!,
-            balance: rental.totalAmount!,
+            balance: driverAmount,
           },
           update: {
             balance: {
-              increment: rental.totalAmount!,
+              increment: driverAmount,
             },
           },
         }),
       ]);
+
+    // Create commission transaction record (separate from main transaction for clarity)
+    await prisma.transaction.create({
+      data: {
+        amount: commissionAmount,
+        type: TransactionType.COMPANY_COMMISSION,
+        status: TransactionStatus.COMPLETED,
+        senderId: rental.userId,
+        receiverId: null, // Company receives commission
+        rideId: rental.id,
+        description: `Company commission (${COMPANY_COMMISSION_RATE * 100}%) for online rental ${rental.id}`,
+      },
+    });
+
+    console.log(`[Rental Online Payment] Driver ${rental.driverId} received ${driverAmount} (90% of ${totalAmount})`);
 
     // If the main transaction succeeded AND a fee was applied, reset the user's fee
     if (userIdToResetFee) {
