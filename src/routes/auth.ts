@@ -5,9 +5,9 @@ import type { Request, Response } from "express";
 import express from "express";
 import jwt from "jsonwebtoken";
 import {
-    checkRegistrationStatus,
-    createRegistrationOrder,
-    verifyRegistrationPayment,
+  checkRegistrationStatus,
+  createRegistrationOrder,
+  verifyRegistrationPayment,
 } from "../controllers/driverRegistrationController";
 
 interface AuthRequest extends Request {
@@ -586,6 +586,7 @@ router.post(
     { name: "aadharFront", maxCount: 1 },
     { name: "aadharBack", maxCount: 1 },
     { name: "panCard", maxCount: 1 },
+    { name: "selfiePath", maxCount: 1 },
   ]),
   async (req: AuthRequest, res: Response): Promise<void> => {
     try {
@@ -627,9 +628,10 @@ router.post(
       const aadharFrontUrl = await handleFileUpload(files?.["aadharFront"]?.[0]);
       const aadharBackUrl = await handleFileUpload(files?.["aadharBack"]?.[0]);
       const panUrl = await handleFileUpload(files?.["panCard"]?.[0]);
+      const selfieUrl = await handleFileUpload(files?.["selfiePath"]?.[0]);
 
-      if (!aadharFrontUrl || !aadharBackUrl || !panUrl) {
-        res.status(400).json({ error: "All documents are required" });
+      if (!aadharFrontUrl || !aadharBackUrl || !panUrl || !selfieUrl) {
+        res.status(400).json({ error: "All documents including selfie are required" });
         return;
       }
 
@@ -642,6 +644,7 @@ router.post(
             email,
             state,
             city,
+            selfieUrl,
             userType: "VENDOR",
           },
         });
