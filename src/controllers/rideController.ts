@@ -433,6 +433,7 @@ async function findAndRequestDrivers(ride: any) {
   const searchDeadline = Date.now() + RIDE_SEARCH_TOTAL_TIMEOUT_MS;
   let currentRadius = INITIAL_SEARCH_RADIUS;
   const attemptedDrivers = new Set<string>(); // Tracks driverIds to whom request has been sent for this ride
+  const notifiedDrivers = new Set<string>(); // Track drivers who have been sent FCM notifications
   let rideAccepted = false;
   let winningRideDetails: any = null; // Store the successfully updated ride object
 
@@ -444,12 +445,16 @@ async function findAndRequestDrivers(ride: any) {
   const driverIndividualTimeouts: Array<ReturnType<typeof setTimeout>> = []; // Use ReturnType for correct timeout type
 
   const cleanupSystem = () => {
+    console.log(
+      `[findAndRequestDrivers] Cleanup for ride ${ride.id} starting. Total FCM notifications sent: ${notifiedDrivers.size}`
+    );
     activeListeners.forEach(({ eventName, listener }) =>
       io.off(eventName, listener)
     );
     driverIndividualTimeouts.forEach(clearTimeout);
     activeListeners.length = 0;
     driverIndividualTimeouts.length = 0;
+    notifiedDrivers.clear(); // Clear the notification tracking set
     console.log(
       `[findAndRequestDrivers] Cleanup for ride ${ride.id} completed.`
     );
@@ -502,6 +507,58 @@ async function findAndRequestDrivers(ride: any) {
         console.log(
           `[findAndRequestDrivers] Ride ${ride.id}: Found ${newDriversToRequest.length} new drivers. Sending requests concurrently.`
         );
+
+        // Send FCM notifications to new drivers (only once per driver)
+        const driversToNotify = newDriversToRequest.filter(
+          (driver) => !notifiedDrivers.has(driver.driverId)
+        );
+
+        if (driversToNotify.length > 0) {
+          try {
+            console.log(
+              `[findAndRequestDrivers] Sending FCM notifications to ${driversToNotify.length} new drivers for ride ${ride.id}`
+            );
+            console.log(
+              `[findAndRequestDrivers] Driver IDs to notify: ${driversToNotify.map((d) => d.driverId).join(", ")}`
+            );
+            await sendRideRequestNotificationsToDrivers(
+              driversToNotify.map((d) => d.driverId),
+              {
+                rideId: ride.id,
+                pickupLocation: ride.pickupLocation,
+                dropLocation: ride.dropLocation,
+                fare: `₹${ride.fare}`,
+                distance: `${ride.distance || 0}km`,
+                duration: `${ride.duration || 0}min`,
+                carCategory: ride.carCategory || "CAR",
+                carrierRequested: ride.carrierRequested,
+                paymentMode:
+                  ride.paymentMode === PaymentMode.CASH ? "CASH" : "ONLINE",
+                userInfo: {
+                  name: ride.user?.name,
+                  phone: ride.user?.phone,
+                },
+              }
+            );
+            // Mark these drivers as notified
+            driversToNotify.forEach((driver) => {
+              notifiedDrivers.add(driver.driverId);
+              console.log(`[findAndRequestDrivers] Marked driver ${driver.driverId} as notified for ride ${ride.id}`);
+            });
+            console.log(
+              `[findAndRequestDrivers] FCM notifications sent successfully to ${driversToNotify.length} drivers for ride ${ride.id}`
+            );
+          } catch (fcmError) {
+            console.error(
+              `Failed to send FCM notifications to drivers for ride ${ride.id}:`,
+              fcmError
+            );
+          }
+        } else {
+          console.log(
+            `[findAndRequestDrivers] No new drivers to notify for ride ${ride.id} (${newDriversToRequest.length} total, ${notifiedDrivers.size} already notified)`
+          );
+        }
 
         const acceptancePromises = newDriversToRequest.map((driver) => {
           attemptedDrivers.add(driver.driverId);
@@ -696,31 +753,6 @@ async function findAndRequestDrivers(ride: any) {
               userPhone: ride.user?.phone,
               pickupTime: ride.createdAt || new Date().toISOString(), // Use ride creation time
             });
-
-            // Send FCM notification alongside socket emission
-            try {
-              await sendRideRequestNotificationsToDrivers([driver.driverId], {
-                rideId: ride.id,
-                pickupLocation: ride.pickupLocation,
-                dropLocation: ride.dropLocation,
-                fare: `₹${ride.fare}`,
-                distance: `${ride.distance || 0}km`,
-                duration: `${ride.duration || 0}min`,
-                carCategory: ride.carCategory || "CAR",
-                carrierRequested: ride.carrierRequested,
-                paymentMode:
-                  ride.paymentMode === PaymentMode.CASH ? "CASH" : "ONLINE",
-                userInfo: {
-                  name: ride.user?.name,
-                  phone: ride.user?.phone,
-                },
-              });
-            } catch (fcmError) {
-              console.error(
-                `Failed to send FCM notification to driver ${driver.driverId}:`,
-                fcmError
-              );
-            }
           });
         });
 
@@ -1722,10 +1754,11 @@ async function sendRideRequestNotificationsToDrivers(
   try {
     console.log(`🔍 Looking for FCM tokens for driver IDs:`, driverIds);
 
-    // Fetch drivers' FCM tokens from database
+    // Fetch drivers' FCM tokens from database (only DRIVER user types)
     const drivers = await prisma.user.findMany({
       where: {
         id: { in: driverIds },
+        userType: "DRIVER", // Ensure only drivers receive ride request notifications
         fcmToken: { not: null },
       },
       select: { id: true, fcmToken: true, name: true },
@@ -1827,7 +1860,10 @@ async function sendNotificationToUser(
     );
 
     const user = await prisma.user.findUnique({
-      where: { id: userId },
+      where: {
+        id: userId,
+        userType: "USER" // Ensure only USER type users receive user notifications
+      },
       select: { fcmToken: true, name: true, userType: true },
     });
 
