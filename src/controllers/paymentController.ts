@@ -9,7 +9,6 @@ import {
 import type { Request, Response } from "express";
 import Razorpay from "razorpay";
 import { io } from "../server";
-
 const prisma = new PrismaClient();
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID!,
@@ -268,7 +267,7 @@ export const handleCashPayment = async (ride: any) => {
     await ensureDriverWallet(ride.driverId);
 
     const result = await prisma.$transaction(async (tx) => {
-      // 1. Create ride payment transaction
+      // 1. Create ride payment transaction (cash goes directly to driver)
       const rideTransaction = await tx.transaction.create({
         data: {
           amount: totalAmount,
@@ -277,23 +276,17 @@ export const handleCashPayment = async (ride: any) => {
           senderId: ride.userId,
           receiverId: ride.driverId,
           rideId: ride.id,
-          description: `Cash payment for ride ${ride.id}`,
+          description: `Cash payment for ride ${ride.id} (direct to driver)`,
         },
       });
 
-      // 2. Add full amount to driver wallet (driver receives cash from user)
-      const updatedWallet = await tx.wallet.update({
-        where: { userId: ride.driverId },
-        data: { balance: { increment: totalAmount } },
-      });
-
-      // 3. Deduct commission from driver wallet (allow negative balance)
+      // 2. Only deduct commission from driver wallet (allow negative balance)
       const finalWallet = await tx.wallet.update({
         where: { userId: ride.driverId },
         data: { balance: { decrement: commissionAmount } },
       });
 
-      // 4. Create commission transaction record
+      // 3. Create commission transaction record
       await tx.transaction.create({
         data: {
           amount: commissionAmount,
@@ -302,17 +295,17 @@ export const handleCashPayment = async (ride: any) => {
           senderId: ride.driverId,
           receiverId: null, // Company receives commission
           rideId: ride.id,
-          description: `Company commission (${COMPANY_COMMISSION_RATE * 100}%) for cash ride ${ride.id}`,
+          description: `Company commission (${COMPANY_COMMISSION_RATE * 100}%) deducted for cash ride ${ride.id}`,
         },
       });
 
-      // 5. Update driver's insufficient balance flag if needed
+      // 4. Update driver's insufficient balance flag if needed
       await tx.driverDetails.update({
         where: { userId: ride.driverId },
         data: { hasInsufficientBalance: finalWallet.balance < 0 },
       });
 
-      console.log(`[Cash Payment] Driver ${ride.driverId} wallet: ${finalWallet.balance}`);
+      console.log(`[Cash Payment] Driver ${ride.driverId} wallet after commission deduction: ${finalWallet.balance}`);
       return { rideTransaction, finalWallet };
     });
 
@@ -348,6 +341,8 @@ export const handleCashPayment = async (ride: any) => {
       extraCharges: ride.extraCharges || 0,
       totalAmount: totalAmount,
       commissionDeducted: commissionAmount,
+      cashReceived: totalAmount, // Driver receives full cash amount
+      walletDeduction: commissionAmount, // Only commission deducted from wallet
     };
 
     io.to(ride.userId).emit("ride_completed", {
