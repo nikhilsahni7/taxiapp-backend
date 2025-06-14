@@ -61,6 +61,7 @@ enum TransactionType {
   RENTAL_CANCELLATION
   DRIVER_CANCELLATION_FEE
   USER_CANCELLATION_FEE_APPLIED
+  COMPANY_COMMISSION
 }
 
 // New enums for long distance services

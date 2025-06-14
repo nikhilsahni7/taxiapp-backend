@@ -16,6 +16,9 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_SECRET!,
 });
 
+// Commission Configuration - Easy to modify
+const COMPANY_COMMISSION_RATE = 0.10; // 10% commission rate
+
 import {
   sendTaxiSureRegularNotification,
   validateFcmToken,
@@ -250,36 +253,80 @@ export const handleRideEnd = async (req: Request, res: Response) => {
   }
 };
 
-// Handle cash payment
+// Handle cash payment with commission
 export const handleCashPayment = async (ride: any) => {
+  if (!ride.driverId) {
+    throw new Error("Driver ID is required for cash payment processing");
+  }
+
+  const totalAmount = ride.totalAmount;
+  const commissionAmount = Math.round(totalAmount * COMPANY_COMMISSION_RATE);
+
+  console.log(`[Cash Payment] Processing: Total=${totalAmount}, Commission=${commissionAmount}`);
+
   try {
-    // Create transaction record (for tracking only, no wallet update for cash)
-    const transaction = await prisma.transaction.create({
-      data: {
-        amount: ride.totalAmount,
-        type: TransactionType.RIDE_PAYMENT,
-        status: TransactionStatus.COMPLETED,
-        senderId: ride.userId,
-        receiverId: ride.driverId,
-        rideId: ride.id,
-        description: `Cash payment for ride ${ride.id} (direct to driver)`,
-      },
+    await ensureDriverWallet(ride.driverId);
+
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Create ride payment transaction
+      const rideTransaction = await tx.transaction.create({
+        data: {
+          amount: totalAmount,
+          type: TransactionType.RIDE_PAYMENT,
+          status: TransactionStatus.COMPLETED,
+          senderId: ride.userId,
+          receiverId: ride.driverId,
+          rideId: ride.id,
+          description: `Cash payment for ride ${ride.id}`,
+        },
+      });
+
+      // 2. Add full amount to driver wallet (driver receives cash from user)
+      const updatedWallet = await tx.wallet.update({
+        where: { userId: ride.driverId },
+        data: { balance: { increment: totalAmount } },
+      });
+
+      // 3. Deduct commission from driver wallet (allow negative balance)
+      const finalWallet = await tx.wallet.update({
+        where: { userId: ride.driverId },
+        data: { balance: { decrement: commissionAmount } },
+      });
+
+      // 4. Create commission transaction record
+      await tx.transaction.create({
+        data: {
+          amount: commissionAmount,
+          type: TransactionType.COMPANY_COMMISSION,
+          status: TransactionStatus.COMPLETED,
+          senderId: ride.driverId,
+          receiverId: null, // Company receives commission
+          rideId: ride.id,
+          description: `Company commission (${COMPANY_COMMISSION_RATE * 100}%) for cash ride ${ride.id}`,
+        },
+      });
+
+      // 5. Update driver's insufficient balance flag if needed
+      await tx.driverDetails.update({
+        where: { userId: ride.driverId },
+        data: { hasInsufficientBalance: finalWallet.balance < 0 },
+      });
+
+      console.log(`[Cash Payment] Driver ${ride.driverId} wallet: ${finalWallet.balance}`);
+      return { rideTransaction, finalWallet };
     });
 
-    // Send FCM notifications for cash payment completion - Fixed async call
+    // Send FCM notification
     setTimeout(async () => {
       try {
-        console.log(
-          `[FCM] Sending cash payment completion notification to user ${ride.userId}`
-        );
         await sendNotificationToUser(
           ride.userId,
           "🎉 Payment Completed - Trip Successful!",
-          `Your ride payment of ₹${ride.totalAmount} has been completed successfully via cash! Thank you for choosing TaxiSure! ⭐ Please rate your experience!`,
+          `Your ride payment of ₹${totalAmount} has been completed successfully via cash! Thank you for choosing TaxiSure! ⭐ Please rate your experience!`,
           "payment_success",
           {
             rideId: ride.id,
-            amount: ride.totalAmount.toString(),
+            amount: totalAmount.toString(),
             paymentMethod: "cash",
             status: "completed",
             enableRating: "true",
@@ -288,32 +335,24 @@ export const handleCashPayment = async (ride: any) => {
             thankYouMessage: "true",
           }
         );
-        console.log(
-          `[FCM] Cash payment completion notification sent successfully to user ${ride.userId}`
-        );
       } catch (fcmError) {
-        console.error(
-          `[FCM] Failed to send cash payment completion FCM notification to user ${ride.userId}:`,
-          fcmError
-        );
+        console.error(`[FCM] Failed to send cash payment FCM notification:`, fcmError);
       }
-    }, 1000); // Delay by 1 second to ensure transaction is complete
+    }, 1000);
 
-    // Note: No wallet update for cash payments as money goes directly to driver
-
-    // Create fare breakdown for detailed billing
+    // Emit completion events
     const fareBreakdown = {
       baseFare: ride.fare || 0,
       waitingCharges: ride.waitingCharges || 0,
       carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
       extraCharges: ride.extraCharges || 0,
-      totalAmount: ride.totalAmount,
+      totalAmount: totalAmount,
+      commissionDeducted: commissionAmount,
     };
 
-    // Emit completion events with fare breakdown
     io.to(ride.userId).emit("ride_completed", {
       rideId: ride.id,
-      amount: ride.totalAmount,
+      amount: totalAmount,
       status: "COMPLETED",
       distance: ride.distance || 0,
       duration: ride.duration || 0,
@@ -322,14 +361,15 @@ export const handleCashPayment = async (ride: any) => {
 
     io.to(ride.driverId).emit("ride_completed", {
       rideId: ride.id,
-      amount: ride.totalAmount,
+      amount: totalAmount,
       status: "COMPLETED",
       fareBreakdown: fareBreakdown,
+      walletBalance: result.finalWallet.balance,
     });
 
-    return transaction;
+    return result.rideTransaction;
   } catch (error) {
-    console.error("Error in cash payment:", error);
+    console.error(`[Cash Payment] Error processing ride ${ride.id}:`, error);
     throw error;
   }
 };
@@ -424,10 +464,16 @@ export const verifyPayment = async (req: Request, res: Response) => {
       await ensureDriverWallet(ride.driverId);
     }
 
-    // Process payment in transaction
-    const result = await prisma.$transaction(async (prisma) => {
+    // Process payment in transaction with commission
+    const totalAmount = ride.totalAmount || 0;
+    const commissionAmount = Math.round(totalAmount * COMPANY_COMMISSION_RATE);
+    const driverAmount = totalAmount - commissionAmount; // 90% to driver
+
+    console.log(`[Online Payment] Total=${totalAmount}, Commission=${commissionAmount}, Driver=${driverAmount}`);
+
+    const result = await prisma.$transaction(async (tx) => {
       // Update ride status
-      const updatedRide = await prisma.ride.update({
+      const updatedRide = await tx.ride.update({
         where: { id: ride.id },
         data: {
           status: RideStatus.RIDE_ENDED,
@@ -437,7 +483,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
       });
 
       // Update transaction
-      const updatedTransaction = await prisma.transaction.update({
+      const updatedTransaction = await tx.transaction.update({
         where: { razorpayOrderId: razorpay_order_id },
         data: {
           status: TransactionStatus.COMPLETED,
@@ -445,19 +491,26 @@ export const verifyPayment = async (req: Request, res: Response) => {
         },
       });
 
-      // Update driver's wallet for digital payment (wallet should exist now)
-      const updatedWallet = await prisma.wallet.update({
+      // Add only 90% to driver's wallet (company keeps 10%)
+      const updatedWallet = await tx.wallet.update({
         where: { userId: ride.driverId! },
+        data: { balance: { increment: driverAmount } },
+      });
+
+      // Create commission transaction record
+      await tx.transaction.create({
         data: {
-          balance: {
-            increment: ride.totalAmount!,
-          },
+          amount: commissionAmount,
+          type: TransactionType.COMPANY_COMMISSION,
+          status: TransactionStatus.COMPLETED,
+          senderId: ride.userId,
+          receiverId: null, // Company receives commission
+          rideId: ride.id,
+          description: `Company commission (${COMPANY_COMMISSION_RATE * 100}%) for online ride ${ride.id}`,
         },
       });
 
-      console.log(
-        `[Payment] Driver wallet updated successfully. Driver: ${ride.driverId}, New Balance: ${updatedWallet.balance}`
-      );
+      console.log(`[Online Payment] Driver ${ride.driverId} wallet: ${updatedWallet.balance}`);
 
       return {
         ride: updatedRide,
@@ -469,13 +522,13 @@ export const verifyPayment = async (req: Request, res: Response) => {
     // Emit completion events
     io.to(result.ride.userId).emit("payment_completed", {
       rideId: result.ride.id,
-      amount: result.ride.totalAmount,
+      amount: totalAmount,
       paymentId: razorpay_payment_id,
     });
 
     io.to(result.ride.driverId!).emit("payment_completed", {
       rideId: result.ride.id,
-      amount: result.ride.totalAmount,
+      amount: totalAmount,
       paymentId: razorpay_payment_id,
       walletBalance: result.wallet.balance,
     });
@@ -489,11 +542,11 @@ export const verifyPayment = async (req: Request, res: Response) => {
         await sendNotificationToUser(
           result.ride.userId,
           "🎉 Payment Successful - Journey Complete!",
-          `Your ride payment of ₹${result.ride.totalAmount} has been processed successfully via online payment! Thank you for choosing TaxiSure! ⭐ Please rate your experience!`,
+          `Your ride payment of ₹${totalAmount} has been processed successfully via online payment! Thank you for choosing TaxiSure! ⭐ Please rate your experience!`,
           "payment_success",
           {
             rideId: result.ride.id,
-            amount: result.ride.totalAmount!.toString(),
+            amount: totalAmount.toString(),
             paymentMethod: "online",
             razorpayPaymentId: razorpay_payment_id,
             status: "completed",
