@@ -8,8 +8,8 @@ import Razorpay from "razorpay";
 
 const prisma = new PrismaClient();
 const razorpay = new Razorpay({
-  key_id: "rzp_test_3e3y5c5TI1K7Lz",
-  key_secret: "2XzYAvwfuR1V6JXFK6ts6kU2", // test keys
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
 // Driver initiates wallet top-up
