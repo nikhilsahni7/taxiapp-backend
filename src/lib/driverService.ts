@@ -55,14 +55,13 @@ export const searchAvailableDrivers = async (
   // Construct driverDetails filter to ensure clarity and avoid key overwrites
   const driverDetailsFilter: any = {
     approved: true,
-    hasInsufficientBalance: false, // Exclude drivers whose balance is <= -200
   };
 
   if (filterOptions?.hasCarrier) {
     driverDetailsFilter.hasCarrier = true;
   }
 
-  // Find online drivers within the radius, including details needed for filtering
+  // Find online drivers within the radius, excluding those whose wallet balance is <= -200 (or missing wallet), and applying other filters.
   const drivers = await prisma.driverStatus.findMany({
     where: {
       isOnline: true,
@@ -75,7 +74,7 @@ export const searchAvailableDrivers = async (
         lte: lng + radius / (111 * Math.cos((lat * Math.PI) / 180)),
       },
       driver: {
-        // Exclude drivers whose wallet balance is <= -200. Drivers without a wallet record are allowed.
+        // Wallet balance filter: allow drivers with no wallet record or balance greater than -200.
         OR: [
           {
             wallet: {
