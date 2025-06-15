@@ -1035,6 +1035,35 @@ export const cancelRental = async (req: Request, res: Response) => {
               },
             },
           });
+
+          // Compensation logic: Give driver ₹50 when customer cancels late
+          if (rental.driverId) {
+            // Ensure driver wallet exists
+            await ensureDriverWallet(rental.driverId);
+
+            // Add compensation to driver's wallet
+            await tx.wallet.update({
+              where: { userId: rental.driverId },
+              data: {
+                balance: {
+                  increment: cancellationFeeAmount, // +₹50 compensation
+                },
+              },
+            });
+
+            // Create transaction record for driver compensation
+            await tx.transaction.create({
+              data: {
+                amount: cancellationFeeAmount, // Positive amount for compensation
+                type: TransactionType.REFUND, // Use REFUND type for compensation
+                status: TransactionStatus.COMPLETED,
+                senderId: null, // Company gives compensation
+                receiverId: rental.driverId,
+                rideId: rental.id,
+                description: `Driver compensation for user cancellation (rental ${rental.id})`,
+              },
+            });
+          }
         } else if (cancelledByDriver && rental.driverId) {
           // Driver cancels late: Deduct fee from their wallet
 
@@ -1367,11 +1396,15 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // Calculate commission for cash payment
+                // Calculate commission for cash payment (exclude outstanding fee from commission calculation)
     const totalAmount = rental.totalAmount!;
-    const commissionAmount = Math.round(totalAmount * COMPANY_COMMISSION_RATE);
+    const appliedOutstandingFee = (metadata?.appliedOutstandingFee as number) || 0;
 
-    console.log(`[Rental Cash Payment] Total=${totalAmount}, Commission=${commissionAmount}`);
+    // Commission should only apply to the base rental amount, not the outstanding fee
+    const baseRentalAmount = totalAmount - appliedOutstandingFee;
+    const commissionAmount = Math.round(baseRentalAmount * COMPANY_COMMISSION_RATE);
+
+    console.log(`[Rental Cash Payment] Total=${totalAmount}, Base=${baseRentalAmount}, OutstandingFee=${appliedOutstandingFee}, Commission=${commissionAmount}`);
 
     // Ensure driver wallet exists
     await ensureDriverWallet(rental.driverId!);
@@ -1401,10 +1434,11 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
         },
       });
 
-      // 3. Only deduct commission from driver wallet (allow negative balance)
+            // 3. Deduct both commission and outstanding fee from driver wallet
+      const totalDeduction = commissionAmount + appliedOutstandingFee;
       const finalWallet = await tx.wallet.update({
         where: { userId: rental.driverId! },
-        data: { balance: { decrement: commissionAmount } },
+        data: { balance: { decrement: totalDeduction } },
       });
 
       // 4. Create commission transaction record
@@ -1420,13 +1454,28 @@ export const confirmCashPayment = async (req: Request, res: Response) => {
         },
       });
 
-      // 5. Update driver's insufficient balance flag if needed
+      // 5. Create outstanding fee transaction record (if applicable)
+      if (appliedOutstandingFee > 0) {
+        await tx.transaction.create({
+          data: {
+            amount: appliedOutstandingFee,
+            type: TransactionType.USER_CANCELLATION_FEE_APPLIED,
+            status: TransactionStatus.COMPLETED,
+            senderId: rental.driverId!,
+            receiverId: null, // Company receives the fee
+            rideId: rental.id,
+            description: `Outstanding cancellation fee (₹${appliedOutstandingFee}) collected and deducted for cash rental ${rental.id}`,
+          },
+        });
+      }
+
+      // 6. Update driver's insufficient balance flag if needed
       await tx.driverDetails.update({
         where: { userId: rental.driverId! },
         data: { hasInsufficientBalance: finalWallet.balance < 0 },
       });
 
-      console.log(`[Rental Cash Payment] Driver ${rental.driverId} wallet after commission: ${finalWallet.balance}`);
+      console.log(`[Rental Cash Payment] Driver ${rental.driverId} wallet deductions: -₹${commissionAmount} (commission) -₹${appliedOutstandingFee} (outstanding fee) = -₹${totalDeduction} total. Final balance: ₹${finalWallet.balance}`);
 
       return [updatedRental, transaction];
     });
@@ -1556,12 +1605,16 @@ export const verifyRazorpayPayment = async (req: Request, res: Response) => {
     console.log("Fee was applied flag:", feeWasApplied);
     const userIdToResetFee = feeWasApplied ? rental.userId : null;
 
-    // Calculate commission for online payment
+        // Calculate commission for online payment (exclude outstanding fee from commission calculation)
     const totalAmount = rental.totalAmount!;
-    const commissionAmount = Math.round(totalAmount * COMPANY_COMMISSION_RATE);
-    const driverAmount = totalAmount - commissionAmount; // 90% to driver
+    const appliedOutstandingFee = (metadata?.appliedOutstandingFee as number) || 0;
 
-    console.log(`[Rental Online Payment] Total=${totalAmount}, Commission=${commissionAmount}, Driver=${driverAmount}`);
+    // Commission should only apply to the base rental amount, not the outstanding fee
+    const baseRentalAmount = totalAmount - appliedOutstandingFee;
+    const commissionAmount = Math.round(baseRentalAmount * COMPANY_COMMISSION_RATE);
+    const driverAmount = totalAmount - commissionAmount; // Driver gets total minus commission (but commission only on base amount)
+
+    console.log(`[Rental Online Payment] Total=${totalAmount}, Base=${baseRentalAmount}, OutstandingFee=${appliedOutstandingFee}, Commission=${commissionAmount}, Driver=${driverAmount}`);
 
     // Ensure driver wallet exists
     await ensureDriverWallet(rental.driverId!);
