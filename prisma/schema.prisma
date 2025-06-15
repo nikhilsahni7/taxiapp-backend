@@ -130,6 +130,7 @@ model User {
 
   // New field to track pending cancellation fees for users
   outstandingCancellationFee Float @default(0)
+  localOutstandingFee Float @default(0)  // Separate from rental fees
 
   // Relations
   userDetails    UserDetails?

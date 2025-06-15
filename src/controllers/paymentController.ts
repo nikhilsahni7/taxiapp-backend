@@ -1,10 +1,10 @@
 // paymentController.ts
 import {
-  PaymentMode,
-  PrismaClient,
-  RideStatus,
-  TransactionStatus,
-  TransactionType,
+    PaymentMode,
+    PrismaClient,
+    RideStatus,
+    TransactionStatus,
+    TransactionType,
 } from "@prisma/client";
 import type { Request, Response } from "express";
 import Razorpay from "razorpay";
@@ -19,8 +19,8 @@ const razorpay = new Razorpay({
 const COMPANY_COMMISSION_RATE = 0.10; // 10% commission rate
 
 import {
-  sendTaxiSureRegularNotification,
-  validateFcmToken,
+    sendTaxiSureRegularNotification,
+    validateFcmToken,
 } from "../utils/sendFcmNotification";
 
 if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_SECRET) {
@@ -252,16 +252,23 @@ export const handleRideEnd = async (req: Request, res: Response) => {
   }
 };
 
-// Handle cash payment with commission
+// Handle cash payment with commission and outstanding fee collection
 export const handleCashPayment = async (ride: any) => {
   if (!ride.driverId) {
     throw new Error("Driver ID is required for cash payment processing");
   }
 
   const totalAmount = ride.totalAmount;
-  const commissionAmount = Math.round(totalAmount * COMPANY_COMMISSION_RATE);
 
-  console.log(`[Cash Payment] Processing: Total=${totalAmount}, Commission=${commissionAmount}`);
+  // Check if an outstanding fee was applied (from metadata)
+  const metadata = ride.metadata as any;
+  const appliedLocalOutstandingFee = (metadata?.appliedLocalOutstandingFee as number) || 0;
+
+  // Calculate commission only on base amount (excluding outstanding fee)
+  const baseRideAmount = metadata?.baseRideAmount || (totalAmount - appliedLocalOutstandingFee);
+  const commissionAmount = Math.round(baseRideAmount * COMPANY_COMMISSION_RATE);
+
+  console.log(`[Cash Payment] Processing: Total=${totalAmount}, Base=${baseRideAmount}, Outstanding Fee=${appliedLocalOutstandingFee}, Commission=${commissionAmount}`);
 
   try {
     await ensureDriverWallet(ride.driverId);
@@ -280,10 +287,11 @@ export const handleCashPayment = async (ride: any) => {
         },
       });
 
-      // 2. Only deduct commission from driver wallet (allow negative balance)
+      // 2. Calculate total deductions from driver wallet
+      const totalDeduction = commissionAmount + appliedLocalOutstandingFee;
       const finalWallet = await tx.wallet.update({
         where: { userId: ride.driverId },
-        data: { balance: { decrement: commissionAmount } },
+        data: { balance: { decrement: totalDeduction } },
       });
 
       // 3. Create commission transaction record
@@ -299,13 +307,35 @@ export const handleCashPayment = async (ride: any) => {
         },
       });
 
-      // 4. Update driver's insufficient balance flag if needed
+      // 4. Create outstanding fee collection transaction record (if applicable)
+      if (appliedLocalOutstandingFee > 0) {
+        await tx.transaction.create({
+          data: {
+            amount: appliedLocalOutstandingFee,
+            type: TransactionType.USER_CANCELLATION_FEE_APPLIED,
+            status: TransactionStatus.COMPLETED,
+            senderId: ride.driverId,
+            receiverId: null, // Company receives the fee
+            rideId: ride.id,
+            description: `Local outstanding fee (₹${appliedLocalOutstandingFee}) collected and deducted for cash ride ${ride.id}`,
+          },
+        });
+
+        // 5. Reset user's localOutstandingFee
+        await tx.user.update({
+          where: { id: ride.userId },
+          data: { localOutstandingFee: 0 },
+        });
+        console.log(`[Cash Payment] User ${ride.userId} localOutstandingFee reset to 0`);
+      }
+
+      // 6. Update driver's insufficient balance flag if needed
       await tx.driverDetails.update({
         where: { userId: ride.driverId },
         data: { hasInsufficientBalance: finalWallet.balance < 0 },
       });
 
-      console.log(`[Cash Payment] Driver ${ride.driverId} wallet after commission deduction: ${finalWallet.balance}`);
+      console.log(`[Cash Payment] Driver ${ride.driverId} wallet deductions: -₹${commissionAmount} (commission) -₹${appliedLocalOutstandingFee} (outstanding fee) = -₹${totalDeduction} total. Final balance: ₹${finalWallet.balance}`);
       return { rideTransaction, finalWallet };
     });
 
@@ -315,7 +345,7 @@ export const handleCashPayment = async (ride: any) => {
         await sendNotificationToUser(
           ride.userId,
           "🎉 Payment Completed - Trip Successful!",
-          `Your ride payment of ₹${totalAmount} has been completed successfully via cash! Thank you for choosing TaxiSure! ⭐ Please rate your experience!`,
+          `Your ride payment of ₹${totalAmount} has been completed successfully via cash! ${appliedLocalOutstandingFee > 0 ? ' Outstanding fee cleared.' : ''} Thank you for choosing TaxiSure! ⭐ Please rate your experience!`,
           "payment_success",
           {
             rideId: ride.id,
@@ -335,14 +365,16 @@ export const handleCashPayment = async (ride: any) => {
 
     // Emit completion events
     const fareBreakdown = {
-      baseFare: ride.fare || 0,
+      baseFare: baseRideAmount,
       waitingCharges: ride.waitingCharges || 0,
       carrierCharge: ride.carrierRequested ? ride.carrierCharge || 0 : 0,
       extraCharges: ride.extraCharges || 0,
+      outstandingFee: appliedLocalOutstandingFee,
       totalAmount: totalAmount,
       commissionDeducted: commissionAmount,
+      outstandingFeeCollected: appliedLocalOutstandingFee,
       cashReceived: totalAmount, // Driver receives full cash amount
-      walletDeduction: commissionAmount, // Only commission deducted from wallet
+      walletDeduction: commissionAmount + appliedLocalOutstandingFee, // Total deducted from wallet
     };
 
     io.to(ride.userId).emit("ride_completed", {
@@ -459,12 +491,19 @@ export const verifyPayment = async (req: Request, res: Response) => {
       await ensureDriverWallet(ride.driverId);
     }
 
-    // Process payment in transaction with commission
+    // Process payment in transaction with commission and outstanding fee handling
     const totalAmount = ride.totalAmount || 0;
-    const commissionAmount = Math.round(totalAmount * COMPANY_COMMISSION_RATE);
-    const driverAmount = totalAmount - commissionAmount; // 90% to driver
 
-    console.log(`[Online Payment] Total=${totalAmount}, Commission=${commissionAmount}, Driver=${driverAmount}`);
+    // Check if an outstanding fee was applied (from metadata)
+    const metadata = ride.metadata as any;
+    const appliedLocalOutstandingFee = (metadata?.appliedLocalOutstandingFee as number) || 0;
+
+    // Calculate commission only on base amount (excluding outstanding fee)
+    const baseRideAmount = metadata?.baseRideAmount || (totalAmount - appliedLocalOutstandingFee);
+    const commissionAmount = Math.round(baseRideAmount * COMPANY_COMMISSION_RATE);
+    const driverAmount = baseRideAmount - commissionAmount; // Driver gets 90% of base only
+
+    console.log(`[Online Payment] Total=${totalAmount}, Base=${baseRideAmount}, Outstanding Fee=${appliedLocalOutstandingFee}, Commission=${commissionAmount}, Driver=${driverAmount}`);
 
     const result = await prisma.$transaction(async (tx) => {
       // Update ride status
@@ -486,7 +525,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
         },
       });
 
-      // Add only 90% to driver's wallet (company keeps 10%)
+      // Add only 90% of base amount to driver's wallet (company keeps commission + outstanding fee)
       const updatedWallet = await tx.wallet.update({
         where: { userId: ride.driverId! },
         data: { balance: { increment: driverAmount } },
@@ -505,7 +544,16 @@ export const verifyPayment = async (req: Request, res: Response) => {
         },
       });
 
-      console.log(`[Online Payment] Driver ${ride.driverId} wallet: ${updatedWallet.balance}`);
+      // Reset user's localOutstandingFee if applicable
+      if (appliedLocalOutstandingFee > 0) {
+        await tx.user.update({
+          where: { id: ride.userId },
+          data: { localOutstandingFee: 0 },
+        });
+        console.log(`[Online Payment] User ${ride.userId} localOutstandingFee reset to 0`);
+      }
+
+      console.log(`[Online Payment] Driver ${ride.driverId} received ${driverAmount} (90% of base ${baseRideAmount}). Wallet balance: ${updatedWallet.balance}`);
 
       return {
         ride: updatedRide,
@@ -537,7 +585,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
         await sendNotificationToUser(
           result.ride.userId,
           "🎉 Payment Successful - Journey Complete!",
-          `Your ride payment of ₹${totalAmount} has been processed successfully via online payment! Thank you for choosing TaxiSure! ⭐ Please rate your experience!`,
+          `Your ride payment of ₹${totalAmount} has been processed successfully via online payment! ${appliedLocalOutstandingFee > 0 ? ' Outstanding fee cleared.' : ''} Thank you for choosing TaxiSure! ⭐ Please rate your experience!`,
           "payment_success",
           {
             rideId: result.ride.id,

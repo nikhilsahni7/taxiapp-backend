@@ -1,27 +1,27 @@
 // ride-controller.ts
 import {
-  CancelledBy,
-  PaymentMode,
-  PrismaClient,
-  RideStatus,
-  RideType,
-  TransactionStatus,
-  TransactionType,
-  UserType,
+    CancelledBy,
+    PaymentMode,
+    PrismaClient,
+    RideStatus,
+    RideType,
+    TransactionStatus,
+    TransactionType,
+    UserType
 } from "@prisma/client";
 import type { Request, Response } from "express";
 import { searchAvailableDrivers } from "../lib/driverService";
 import { fareService } from "../services/fareService";
 
 import {
-  sendTaxiSureBookingNotification,
-  sendTaxiSureCancellationNotification,
-  sendTaxiSureRegularNotification,
-  validateFcmToken,
+    sendTaxiSureBookingNotification,
+    sendTaxiSureCancellationNotification,
+    sendTaxiSureRegularNotification,
+    validateFcmToken,
 } from "../utils/sendFcmNotification";
 import {
-  calculateFinalAmount,
-  initiateRazorpayPayment,
+    calculateFinalAmount,
+    initiateRazorpayPayment,
 } from "./paymentController";
 
 import axios from "axios";
@@ -1050,6 +1050,20 @@ export const createRide = async (req: Request, res: Response) => {
   console.log(`[createRide] Received request from user: ${userId}`);
 
   try {
+    // 2.5. Fetch user details including outstanding fees for local rides
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { localOutstandingFee: true },
+    });
+
+    if (!user) {
+      console.error(`[createRide] User not found: ${userId}`);
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const localOutstandingFee = user.localOutstandingFee || 0;
+    console.log(`[createRide] User ${userId} has local outstanding fee: ₹${localOutstandingFee}`);
+
     // 3. Prepare common ride data
     console.log(`[createRide] Preparing ride data for user ${userId}`);
     let rideData: any = {
@@ -1142,17 +1156,37 @@ export const createRide = async (req: Request, res: Response) => {
         carCategory,
         carrierRequested
       );
-      calculatedBaseFare = fareDetails.totalFare; // Store calculated fare
+
+      const baseFare = fareDetails.totalFare;
+      calculatedBaseFare = baseFare; // Store calculated fare
+
+      // Apply local outstanding fee if exists
+      let totalAmountWithFee = baseFare;
+      let appliedLocalOutstandingFee = 0;
+      const rideMetadata: any = {};
+
+      if (localOutstandingFee > 0) {
+        appliedLocalOutstandingFee = localOutstandingFee;
+        totalAmountWithFee += appliedLocalOutstandingFee;
+        rideMetadata.appliedLocalOutstandingFee = appliedLocalOutstandingFee;
+        rideMetadata.baseRideAmount = baseFare;
+        console.log(`[createRide] Applied local outstanding fee ₹${appliedLocalOutstandingFee} to ride. Total: ₹${totalAmountWithFee}`);
+      }
 
       rideData = {
         ...rideData,
         distance,
         duration,
-        fare: fareDetails.totalFare,
-        totalAmount: fareDetails.totalFare, // Set total amount directly
-        dropLocation: dropLocation, // Add drop location back
+        fare: baseFare, // Keep original fare
+        totalAmount: totalAmountWithFee, // Include outstanding fee
+        dropLocation: dropLocation,
+        metadata: Object.keys(rideMetadata).length > 0 ? rideMetadata : null,
       };
-      console.log(`[createRide] Local ride data prepared:`, rideData);
+      console.log(`[createRide] Local ride data prepared with outstanding fee:`, {
+        baseFare,
+        appliedLocalOutstandingFee,
+        totalAmount: totalAmountWithFee
+      });
     }
 
     // 5. Create the Ride record (Removed fee reset logic)
@@ -1731,6 +1765,31 @@ export const getRide = async (req: Request, res: Response) => {
 const CANCELLATION_FEE_AMOUNT = 25; // Define the fee amount
 
 /**
+ * Helper function to ensure driver wallet exists
+ */
+async function ensureDriverWallet(driverId: string): Promise<void> {
+  try {
+    console.log(`[Local Ride Wallet] Checking/creating wallet for driver ${driverId}`);
+    await prisma.wallet.upsert({
+      where: { userId: driverId },
+      update: {}, // Don't update if exists
+      create: {
+        userId: driverId,
+        balance: 0,
+        currency: "INR",
+      },
+    });
+    console.log(`[Local Ride Wallet] Driver wallet ensured for ${driverId}`);
+  } catch (error) {
+    console.error(
+      `[Local Ride Wallet] Failed to ensure driver wallet for ${driverId}:`,
+      error
+    );
+    throw error;
+  }
+}
+
+/**
  * Helper function to send ride request notifications to multiple drivers
  */
 async function sendRideRequestNotificationsToDrivers(
@@ -2004,42 +2063,58 @@ const handleRideCancellation = async (
         `[handleRideCancellation] User cancellation for ride ${ride.id}.`
       );
       if (feeApplies) {
-        // User cancels after driver arrived - Deduct fee from user's wallet
+        // User cancels after driver arrived - Add fee to outstanding and compensate driver
         console.log(
-          `[handleRideCancellation] Fee applies. Deducting from user ${ride.userId}'s wallet.`
+          `[handleRideCancellation] Fee applies. Adding fee to user ${ride.userId}'s localOutstandingFee and compensating driver.`
         );
         try {
-          // --- Start: Transaction for User Fee Deduction ---
+          // --- Start: Transaction for User Fee and Driver Compensation ---
           const transactionResult = await prisma.$transaction(async (tx) => {
-            // 1. Deduct from user wallet
-            const wallet = await tx.wallet.update({
-              where: { userId: ride.userId }, // Use user ID
+            // 1. Add fee to user's localOutstandingFee
+            await tx.user.update({
+              where: { id: ride.userId },
               data: {
-                balance: {
-                  decrement: cancellationFee, // Deduct the fee
+                localOutstandingFee: {
+                  increment: cancellationFee,
                 },
               },
             });
             console.log(
-              `[handleRideCancellation] User ${ride.userId}'s wallet updated. New balance: ${wallet.balance}`
+              `[handleRideCancellation] User ${ride.userId}'s localOutstandingFee increased by ${cancellationFee}`
             );
 
-            // 2. Create Transaction record using existing type
-            await tx.transaction.create({
-              data: {
-                amount: cancellationFee,
-                currency: "INR",
-                type: TransactionType.USER_CANCELLATION_FEE_APPLIED,
-                status: TransactionStatus.COMPLETED,
-                senderId: ride.userId, // User is the 'sender' of the fee
-                receiverId: null, // Or system/admin ID
-                rideId: ride.id,
-                description: `Cancellation fee (user) deducted from wallet for ride ${ride.id}`,
-              },
-            });
-            console.log(
-              `[handleRideCancellation] User cancellation fee transaction created (using USER_CANCELLATION_FEE_APPLIED type) for ride ${ride.id}.`
-            );
+            // 2. Compensate driver if driver exists
+            if (ride.driverId) {
+              // Ensure driver wallet exists
+              await ensureDriverWallet(ride.driverId);
+
+              // Add compensation to driver's wallet
+              await tx.wallet.update({
+                where: { userId: ride.driverId },
+                data: {
+                  balance: {
+                    increment: cancellationFee, // +₹25 compensation
+                  },
+                },
+              });
+
+              // Create transaction record for driver compensation
+              await tx.transaction.create({
+                data: {
+                  amount: cancellationFee, // Positive amount for compensation
+                  currency: "INR",
+                  type: TransactionType.REFUND, // Use REFUND type for compensation
+                  status: TransactionStatus.COMPLETED,
+                  senderId: null, // Company gives compensation
+                  receiverId: ride.driverId,
+                  rideId: ride.id,
+                  description: `Driver compensation for user cancellation (ride ${ride.id})`,
+                },
+              });
+              console.log(
+                `[handleRideCancellation] Driver ${ride.driverId} compensated with ${cancellationFee}`
+              );
+            }
 
             // 3. Update Ride status
             const updatedRide = await tx.ride.update({
@@ -2059,18 +2134,18 @@ const handleRideCancellation = async (
 
           updatedRideData = transactionResult; // Assign the result from the transaction
           responsePayload.ride = updatedRideData;
-          responsePayload.message = `Ride cancelled. A fee of ${cancellationFee} INR has been deducted from your wallet.`; // Update message
+          responsePayload.message = `Ride cancelled. A fee of ${cancellationFee} INR will be added to your next ride. Driver has been compensated.`; // Update message
           console.log(
-            `[handleRideCancellation] User ${ride.userId} fee deducted from wallet.`
+            `[handleRideCancellation] User ${ride.userId} fee added to outstanding and driver compensated.`
           );
         } catch (error) {
           console.error(
-            `[handleRideCancellation] Error processing user fee transaction for ride ${ride.id}:`,
+            `[handleRideCancellation] Error processing user cancellation and driver compensation for ride ${ride.id}:`,
             error
           );
           return res.status(500).json({
             error:
-              "Failed to process cancellation fee deduction. Ride not cancelled.",
+              "Failed to process cancellation fee and compensation. Ride not cancelled.",
           });
         }
       } else {
@@ -2102,15 +2177,17 @@ const handleRideCancellation = async (
           console.error(
             `[handleRideCancellation] Critical error: Fee applies but driverId is null for ride ${ride.id}`
           );
-          // Handle this unlikely case - maybe just cancel without fee deduction?
           return res.status(500).json({
             error:
               "Internal server error: Cannot apply driver fee without driver ID.",
           });
         }
         try {
+          // Ensure driver wallet exists
+          await ensureDriverWallet(ride.driverId);
+
           const transactionResult = await prisma.$transaction(async (tx) => {
-            // 1. Deduct from wallet
+            // 1. Deduct from wallet (allow negative balance)
             const wallet = await tx.wallet.update({
               where: { userId: ride.driverId! },
               data: {
@@ -2131,38 +2208,42 @@ const handleRideCancellation = async (
                 type: TransactionType.DRIVER_CANCELLATION_FEE, // Use specific type
                 status: TransactionStatus.COMPLETED,
                 senderId: ride.driverId, // Driver is the 'sender' of the fee
-                receiverId: null, // Or a system/admin ID if you have one
+                receiverId: null, // Company receives the fee
                 rideId: ride.id,
-                description: `Cancellation fee (driver) for ride ${ride.id}`,
+                description: `Driver cancellation penalty for ride ${ride.id}`,
               },
             });
             console.log(
               `[handleRideCancellation] Driver cancellation fee transaction created for ride ${ride.id}.`
             );
 
-            // 3. Update Ride status
+            // 3. Update driver's insufficient balance flag if needed
+            await tx.driverDetails.update({
+              where: { userId: ride.driverId! },
+              data: { hasInsufficientBalance: wallet.balance < 0 },
+            });
+
+            // 4. Update Ride status
             const updatedRide = await tx.ride.update({
               where: { id: ride.id },
               data: {
                 status: RideStatus.CANCELLED,
                 cancellationReason,
                 cancellationFee,
-                cancelledBy: CancelledBy.DRIVER, // Use the enum
+                cancelledBy: CancelledBy.DRIVER,
               },
               include: { user: true, driver: true },
             });
-            return updatedRide; // Return the updated ride from the transaction
+            return updatedRide;
           });
-          updatedRideData = transactionResult; // Assign the result from the transaction
+          updatedRideData = transactionResult;
           responsePayload.ride = updatedRideData;
-          responsePayload.message = `Ride cancelled. A fee of ${cancellationFee} INR has been deducted from your wallet.`;
+          responsePayload.message = `Ride cancelled. A penalty fee of ${cancellationFee} INR has been deducted from your wallet.`;
         } catch (error) {
           console.error(
             `[handleRideCancellation] Error processing driver fee transaction for ride ${ride.id}:`,
             error
           );
-          // Don't cancel the ride if the transaction fails? Or cancel without fee? Decide policy.
-          // For now, respond with error and don't cancel.
           return res.status(500).json({
             error:
               "Failed to process cancellation fee deduction. Ride not cancelled.",
