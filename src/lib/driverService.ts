@@ -52,6 +52,16 @@ export const searchAvailableDrivers = async (
 ) => {
   const { lat, lng } = await geocodeAddress(pickupLocation);
 
+  // Construct driverDetails filter to ensure clarity and avoid key overwrites
+  const driverDetailsFilter: any = {
+    approved: true,
+    hasInsufficientBalance: false, // Exclude drivers whose balance is <= -200
+  };
+
+  if (filterOptions?.hasCarrier) {
+    driverDetailsFilter.hasCarrier = true;
+  }
+
   // Find online drivers within the radius, including details needed for filtering
   const drivers = await prisma.driverStatus.findMany({
     where: {
@@ -64,27 +74,33 @@ export const searchAvailableDrivers = async (
         gte: lng - radius / (111 * Math.cos((lat * Math.PI) / 180)),
         lte: lng + radius / (111 * Math.cos((lat * Math.PI) / 180)),
       },
-      // Only filter by carrier in the DB query if specified
-      ...(filterOptions?.hasCarrier && {
-        driver: {
-          driverDetails: {
-            hasCarrier: true,
-          },
-        },
-      }),
-      // Only show approved drivers
       driver: {
-        driverDetails: {
-          approved: true,
-        },
+        // Exclude drivers whose wallet balance is <= -200. Drivers without a wallet record are allowed.
+        OR: [
+          {
+            wallet: {
+              is: null, // Driver doesn't have a wallet yet
+            },
+          },
+          {
+            wallet: {
+              is: {
+                balance: {
+                  gt: -200,
+                },
+              },
+            },
+          },
+        ],
+        driverDetails: driverDetailsFilter,
       },
-      // We will filter by carCategory in the application code below
     },
     include: {
       driver: {
-        // Ensure driverDetails is included to access vehicleCategory
+        // Ensure driverDetails & wallet are included to access vehicleCategory and balance
         include: {
           driverDetails: true,
+          wallet: true,
         },
       },
     },
