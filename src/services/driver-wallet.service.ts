@@ -5,16 +5,16 @@ interface WalletBalanceStatus {
   currentBalance: number;
   balanceThresholds: {
     isNegative: boolean; // balance < 0
-    isAtWarningLevel: boolean; // balance <= -25
-    isAtCriticalLevel: boolean; // balance <= -75
-    isBlocked: boolean; // balance <= -100
+    isAtWarningLevel: boolean; // balance <= -50
+    isAtCriticalLevel: boolean; // balance <= -150
+    isBlocked: boolean; // balance <= -200
   };
   message: string;
 }
 
 /**
  * Updates the `hasInsufficientBalance` flag for a driver based on their wallet balance.
- * If the driver's wallet balance is less than or equal to -100, the flag is set to true.
+ * If the driver's wallet balance is less than or equal to -200, the flag is set to true.
  * Otherwise, it's set to false.
  *
  * @param driverId The ID of the driver.
@@ -51,7 +51,7 @@ export const updateInsufficientBalanceStatus = async (
     driver.wallet = updatedDriver.wallet;
   }
 
-  const hasInsufficientBalance = driver.wallet.balance <= -100;
+  const hasInsufficientBalance = driver.wallet.balance <= -200;
 
   if (driver.driverDetails) {
     await prisma.driverDetails.update({
@@ -89,9 +89,9 @@ export const checkWalletBalanceStatus = async (
 
   const balance = driver.wallet.balance;
   const isNegative = balance < 0;
-  const isAtWarningLevel = balance <= -25;
-  const isAtCriticalLevel = balance <= -75;
-  const isBlocked = balance <= -100;
+  const isAtWarningLevel = balance <= -50;
+  const isAtCriticalLevel = balance <= -150;
+  const isBlocked = balance <= -200;
 
   let message = "Your wallet balance is healthy.";
   if (isBlocked) {
@@ -99,7 +99,7 @@ export const checkWalletBalanceStatus = async (
       "Your account has been blocked. Please clear your dues to continue accepting rides.";
   } else if (isAtCriticalLevel) {
     message =
-      "Critical: Your account will be blocked at -100. Please add funds immediately.";
+      "Critical: Your account will be blocked at -200. Please add funds immediately.";
   } else if (isAtWarningLevel) {
     message = "Warning: Your balance is getting low. Please add funds soon.";
   } else if (isNegative) {
