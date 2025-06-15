@@ -413,24 +413,34 @@ async function initializeRide(
     carrierRequested
   );
 
+  // Fetch user's outstanding amount from the User model
+  let outstandingAmount = 0;
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { localOutstandingFee: true },
+  });
+  if (user?.localOutstandingFee) {
+    outstandingAmount = user.localOutstandingFee;
+  }
+
+  const otp = generateOTP();
+
   return prisma.ride.create({
     data: {
-      userId,
       pickupLocation,
       dropLocation,
-      carCategory,
-      fare: fareDetails.totalFare,
       distance,
       duration,
       status: RideStatus.SEARCHING,
+      carCategory,
       paymentMode: paymentMode || PaymentMode.CASH,
-      otp: generateOTP().toString(),
-      waitingStartTime: null,
-      waitingMinutes: 0,
-      waitingCharges: 0,
-      extraCharges: 0,
-      carrierRequested: carrierRequested,
-      carrierCharge: carrierRequested ? CARRIER_CHARGE : 0,
+      fare: fareDetails.totalFare + outstandingAmount,
+      carrierRequested,
+      otp: otp.toString(),
+      rideType: RideType.LOCAL,
+      user: {
+        connect: { id: userId },
+      },
     },
     include: {
       user: {
@@ -1192,7 +1202,7 @@ export const createRide = async (req: Request, res: Response) => {
         ...rideData,
         distance,
         duration,
-        fare: baseFare, // Keep original fare
+        fare: totalAmountWithFee, // Keep original fare
         totalAmount: totalAmountWithFee, // Include outstanding fee
         dropLocation: dropLocation,
         metadata: Object.keys(rideMetadata).length > 0 ? rideMetadata : null,
