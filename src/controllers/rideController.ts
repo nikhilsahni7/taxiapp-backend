@@ -1,27 +1,27 @@
 // ride-controller.ts
 import {
-    CancelledBy,
-    PaymentMode,
-    PrismaClient,
-    RideStatus,
-    RideType,
-    TransactionStatus,
-    TransactionType,
-    UserType
+  CancelledBy,
+  PaymentMode,
+  PrismaClient,
+  RideStatus,
+  RideType,
+  TransactionStatus,
+  TransactionType,
+  UserType
 } from "@prisma/client";
 import type { Request, Response } from "express";
 import { searchAvailableDrivers } from "../lib/driverService";
 import { fareService } from "../services/fareService";
 
 import {
-    sendTaxiSureBookingNotification,
-    sendTaxiSureCancellationNotification,
-    sendTaxiSureRegularNotification,
-    validateFcmToken,
+  sendTaxiSureBookingNotification,
+  sendTaxiSureCancellationNotification,
+  sendTaxiSureRegularNotification,
+  validateFcmToken,
 } from "../utils/sendFcmNotification";
 import {
-    calculateFinalAmount,
-    initiateRazorpayPayment,
+  calculateFinalAmount,
+  initiateRazorpayPayment,
 } from "./paymentController";
 
 import axios from "axios";
@@ -310,15 +310,27 @@ export const getFareEstimation = async (req: Request, res: Response) => {
   }
 
   try {
+    // Fetch user's local outstanding fee
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { localOutstandingFee: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    const localOutstandingFee = user.localOutstandingFee || 0;
+    console.log(`[getFareEstimation] User ${userId} has local outstanding fee: ₹${localOutstandingFee}`);
+
     const distance = await calculateDistance(pickupLocation, dropLocation);
     const duration = await calculateDuration(pickupLocation, dropLocation);
 
     // Calculate fares for all categories with taxes and charges
     const categories: CarCategory[] = ["mini", "sedan", "suv"];
     const estimates: Record<CarCategory, FareEstimate> = {} as Record<
-      // <-- Removed outstanding fee from type
       CarCategory,
-      FareEstimate // <-- Removed outstanding fee from type
+      FareEstimate
     >;
 
     for (const category of categories) {
@@ -330,12 +342,15 @@ export const getFareEstimation = async (req: Request, res: Response) => {
         carrierRequested
       );
 
+      // Include outstanding fee in the totalFare so frontend shows correct amount
+      const totalFareWithOutstanding = fareDetails.totalFare + localOutstandingFee;
+
       estimates[category] = {
         ...fareDetails,
         distance,
         duration,
         currency: "INR",
-        totalFare: fareDetails.totalFare, // <-- Use the original totalFare without the fee
+        totalFare: totalFareWithOutstanding, // Frontend will see the final amount including outstanding fee
         carrierCharge: fareDetails.carrierCharge,
       };
     }
